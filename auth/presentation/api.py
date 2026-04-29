@@ -45,7 +45,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Auth", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Auth",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+
 def _auth_cors_origins() -> list[str]:
     s = get_settings()
     origins: list[str] = []

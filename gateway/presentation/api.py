@@ -52,7 +52,14 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Gateway", version="1.0.0", lifespan=_lifespan)
+app = FastAPI(
+    title="Gateway",
+    version="1.0.0",
+    lifespan=_lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 register_exception_handlers(app)
 
 def _cors_origins() -> list[str]:

@@ -4,7 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from presentation.routes import health
 
-app = FastAPI(title="Kosta Telegram Bot", version="1.0.0")
+app = FastAPI(
+    title="Kosta Telegram Bot",
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

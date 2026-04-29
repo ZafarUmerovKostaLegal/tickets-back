@@ -103,7 +103,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Kosta Inventory", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Kosta Inventory",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

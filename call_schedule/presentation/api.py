@@ -16,6 +16,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     description="Календари и события общего ящика (Microsoft Graph, без БД).",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 app.add_middleware(
     CORSMiddleware,

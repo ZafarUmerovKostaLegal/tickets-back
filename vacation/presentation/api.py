@@ -91,6 +91,9 @@ app = FastAPI(
     version="0.1.0",
     description="График отсутствий (импорт из Excel).",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 app.add_middleware(
     CORSMiddleware,

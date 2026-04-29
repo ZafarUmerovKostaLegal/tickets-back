@@ -21,7 +21,11 @@ def _clear_oauth_cookies(resp: RedirectResponse) -> None:
 @router.get(
     "/login",
     summary="Azure Login",
-    description="Редирект на вход через Microsoft. target=admin — после входа редирект на админ-панель (state=admin устарел).",
+    description=(
+        "Редирект на вход через Microsoft. target=admin — после входа редирект на админ-панель (state=admin устарел). "
+        "**Не вызывайте из Swagger «Try it out» / fetch / XHR:** ответ — цепочка 302 на другой хост, браузер заблокирует как CORS и покажет «Failed to fetch». "
+        "Откройте URL вручную в новой вкладке или используйте кнопку входа во фронтенде."
+    ),
 )
 async def azure_login(
     target: str = Query("main"),
@@ -87,7 +91,9 @@ async def session_logout(request: Request):
 @router.get(
     "/logout",
     summary="Logout",
-    description="Редирект на выход из Microsoft.",
+    description=(
+        "Редирект на выход из Microsoft. Так же, как /login, не предназначен для вызова через fetch/Swagger — только переход по ссылке в браузере."
+    ),
 )
 async def azure_logout():
     settings = get_settings()
