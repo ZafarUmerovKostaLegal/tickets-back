@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hikvision Users</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-dot"></div>
+      <div>
+        <h1>Kosta Admin Dashboard</h1>
+        <p>Пользователи с камер Hikvision</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a href="#" id="btn-logout">Выход</a>
+    </div>
+  </header>
+
+  <main class="container app-shell">
+    <aside class="sidebar">
+      <h3>Навигация</h3>
+      <nav id="sidebar-nav"></nav>
+    </aside>
+
+    <section class="content">
+      <section class="overview">
+        <article class="metric-card">
+          <p class="metric-title">Пользователей с камер</p>
+          <p class="metric-value" id="metric-cameras-users">0</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-title">Подключенных камер</p>
+          <p class="metric-value" id="metric-cameras-total">0</p>
+        </article>
+      </section>
+      <div id="hikvision-users-error" class="error-msg" style="display:none"></div>
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Список пользователей с камер</h2>
+            <p class="card-subtitle">Дубли объединяются по employeeNo, fallback — по имени.</p>
+          </div>
+          <div class="toolbar">
+            <input id="hikvision-users-q" class="input" type="text" placeholder="Поиск по имени...">
+            <button type="button" class="btn btn-primary" id="btn-hikvision-users-refresh">Обновить</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="users-table">
+            <thead>
+              <tr>
+                <th>Камера</th>
+                <th>employeeNo</th>
+                <th>Имя</th>
+                <th>Отдел</th>
+                <th>Пользователь приложения</th>
+                <th>Действие</th>
+              </tr>
+            </thead>
+            <tbody id="hikvision-users-tbody">
+              <tr><td colspan="6" class="loading">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="hikvision.js"></script>
+</body>
+</html>

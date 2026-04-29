@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>База расходов</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-dot"></div>
+      <div>
+        <h1>Kosta Admin Dashboard</h1>
+        <p>Сброс базы данных модуля расходов</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a href="#" id="btn-logout">Выход</a>
+    </div>
+  </header>
+
+  <main class="container app-shell">
+    <aside class="sidebar">
+      <h3>Навигация</h3>
+      <nav id="sidebar-nav"></nav>
+    </aside>
+
+    <section class="content">
+      <div id="page-error" class="error-msg" style="display:none"></div>
+      <div id="page-info" class="error-msg" style="display:none;background:#eff6ff;color:#1e40af;border-color:#bfdbfe"></div>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">База данных расходов</h2>
+            <p class="card-subtitle">
+              Операция удаляет все заявки, вложения, историю статусов, аудит и справочники модуля, затем пересоздаёт таблицы и заполняет справочники заново.
+              Файлы вложений на диске сервера не удаляются.
+            </p>
+          </div>
+        </div>
+
+        <div class="danger-zone">
+          <h3>Кому доступно</h3>
+          <p style="margin:0;font-size:0.88rem;color:#78350f;">Только роль «Главный администратор».</p>
+        </div>
+
+        <div class="danger-zone" style="margin-top:1rem;">
+          <h3>Опасная зона</h3>
+          <ul>
+            <li>Будут удалены все заявки на расход и связанные данные.</li>
+            <li>Справочники (типы расходов, подразделения, проекты, курсы) будут пересозданы из seed.</li>
+            <li>Действие необратимо. Перед сбросом сделайте резервную копию БД при необходимости.</li>
+          </ul>
+          <p style="margin:1rem 0 0;font-size:0.84rem;color:#64748b;">
+            После нажатия потребуется подтверждение в диалоге и ввод фразы <code>RESET_EXPENSES_DB</code>.
+          </p>
+          <button type="button" class="btn btn-danger" id="btn-reset-db" style="margin-top:0.9rem;" disabled>
+            Сбросить базу данных расходов
+          </button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="expenses-db.js"></script>
+</body>
+</html>

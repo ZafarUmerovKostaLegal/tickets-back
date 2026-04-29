@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-dot"></div>
+      <div>
+        <h1>Kosta Admin Dashboard</h1>
+        <p>Главная сводка</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a href="#" id="btn-logout">Выход</a>
+    </div>
+  </header>
+
+  <main class="container app-shell">
+    <aside class="sidebar">
+      <h3>Навигация</h3>
+      <nav id="sidebar-nav"></nav>
+    </aside>
+
+    <section class="content">
+      <section class="overview">
+        <article class="metric-card">
+          <p class="metric-title">Пользователей в системе</p>
+          <p class="metric-value" id="metric-users-total">0</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-title">Пользователей с камер</p>
+          <p class="metric-value" id="metric-cameras-users">0</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-title">Подключенных камер</p>
+          <p class="metric-value" id="metric-cameras-total">0</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-title">Доступных ролей</p>
+          <p class="metric-value" id="metric-roles-total">0</p>
+        </article>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Разделы админ-панели</h2>
+            <p class="card-subtitle">Перейдите в нужный раздел для работы с пользователями или камерами.</p>
+          </div>
+        </div>
+        <div class="quick-links">
+          <a class="quick-link" href="users.html">Управление пользователями</a>
+          <a class="quick-link" href="expenses-db.html">База расходов (сброс БД)</a>
+          <a class="quick-link" href="hikvision.html">Пользователи с камер Hikvision</a>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

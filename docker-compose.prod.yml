@@ -1,0 +1,6 @@
+
+services:
+  gateway:
+    environment:
+      - ENVIRONMENT=production
+      - CORS_ALLOW_PRIVATE_NETWORK=false
