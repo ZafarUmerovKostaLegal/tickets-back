@@ -170,7 +170,7 @@ services:
       - AZURE_TENANT_ID=${AZURE_TENANT_ID}
       - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
       - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
-      - AUTH_REDIRECT_URI=${AZURE_REDIRECT_URI}
+      - AUTH_REDIRECT_URI=${AUTH_REDIRECT_URI:-${AZURE_REDIRECT_URI:-${GATEWAY_BASE_URL:-http://localhost:1234}/api/v1/auth/azure/callback}}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-1440}
@@ -338,8 +338,8 @@ services:
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-http://localhost:1234/api/v1/todos/calendar/callback}
-      - CALENDAR_CONNECTED_REDIRECT_URL=${CALENDAR_CONNECTED_REDIRECT_URL:-http://localhost:5173}
+      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-${GATEWAY_BASE_URL:-http://localhost:1234}/api/v1/todos/calendar/callback}
+      - CALENDAR_CONNECTED_REDIRECT_URL=${CALENDAR_CONNECTED_REDIRECT_URL:-${FRONTEND_URL:-http://localhost:5173}}
     healthcheck:
       test:
         [

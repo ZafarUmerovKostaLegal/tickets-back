@@ -1,7 +1,7 @@
 import logging
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,14 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("AUTH_REDIRECT_URI", "AZURE_REDIRECT_URI"),
     )
+
+    @field_validator("auth_redirect_uri", mode="before")
+    @classmethod
+    def _strip_auth_redirect_uri(cls, v: object) -> str:
+        s = (str(v) if v is not None else "").strip().replace("\n", "").replace("\r", "")
+        if not s:
+            return ""
+        return s.rstrip("/")
     jwt_secret: str = Field(
         default="",
         validation_alias=AliasChoices("JWT_SECRET", "jwt_secret"),

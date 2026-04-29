@@ -100,7 +100,10 @@ class SqlInjectionGuardMiddleware(BaseHTTPMiddleware):
 
         raw_path = request.url.path or ""
 
-        if raw_path == "/api/v1/auth/azure/callback":
+        if raw_path in (
+            "/api/v1/auth/azure/callback",
+            "/api/v1/todos/calendar/callback",
+        ):
             return await call_next(request)
         try:
             path_decoded = unquote(raw_path)
