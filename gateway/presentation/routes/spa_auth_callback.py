@@ -57,6 +57,12 @@ async def spa_auth_callback_bridge(request: Request) -> HTMLResponse:
     return null;
   }}
 
+  var qs = new URLSearchParams((s || '').replace(/^\?/, ''));
+  if (qs.get('set_session') === '1') {{
+    window.location.replace(home);
+    return;
+  }}
+
   if (feHost && reqHost && feHost !== reqHost) {{
     window.location.replace(feBase + '/auth/callback' + s + h);
     return;

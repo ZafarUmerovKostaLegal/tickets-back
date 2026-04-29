@@ -17,11 +17,13 @@
       var params = new URLSearchParams(hash);
       token = params.get('access_token');
     }
+    var searchParams = new URLSearchParams(window.location.search);
     if (!token) {
-      var searchParams = new URLSearchParams(window.location.search);
       token = searchParams.get('access_token');
     }
-    if (token) {
+    if (!token && searchParams.get('set_session') === '1') {
+      window.location.replace('../index.html');
+    } else if (token) {
       window.adminApp.setToken(token);
       window.location.replace('../index.html');
     } else {

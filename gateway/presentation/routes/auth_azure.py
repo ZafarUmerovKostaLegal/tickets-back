@@ -173,7 +173,7 @@ async def azure_callback(
             callback_path = "/auth/callback"
         s = settings
         if s.auth_set_session_cookie and access_token:
-            redirect_url = f"{base}{callback_path}"
+            redirect_url = f"{base}{callback_path}?set_session=1"
         else:
             redirect_url = f"{base}{callback_path}#access_token={access_token}"
         resp = RedirectResponse(

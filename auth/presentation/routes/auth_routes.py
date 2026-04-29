@@ -205,7 +205,7 @@ async def callback(
         redirect_base = _frontend_base(settings, "main")
         callback_path = "/auth/callback"
     if settings.auth_set_session_cookie:
-        redirect_url = f"{redirect_base}{callback_path}"
+        redirect_url = f"{redirect_base}{callback_path}?set_session=1"
     else:
         redirect_url = f"{redirect_base}{callback_path}#access_token={access_token}"
     resp = RedirectResponse(
