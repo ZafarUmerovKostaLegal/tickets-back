@@ -100,10 +100,10 @@ async def require_main_admin_or_administrator(
 
     user = await _get_current_user_optional(request, authorization)
     role = (user.get("role") or "").strip()
-    if role not in (MAIN_ADMIN_ROLE, ADMIN_ROLE):
+    if role not in (MAIN_ADMIN_ROLE, ADMIN_ROLE, PARTNER_ROLE):
         raise HTTPException(
             status_code=403,
-            detail="Only Main Administrator or Administrator can assign user roles",
+            detail="Only Main Administrator, Administrator or Partner can assign user roles",
         )
     return user
 

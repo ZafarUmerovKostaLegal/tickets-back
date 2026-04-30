@@ -106,10 +106,10 @@ def require_main_admin(current_user: User = Depends(get_current_user)) -> User:
 def require_assign_user_role(current_user: User = Depends(get_current_user)) -> User:
 
     role = (current_user.role or "").strip()
-    if role not in (Role.MAIN_ADMIN.value, Role.ADMIN.value):
+    if role not in (Role.MAIN_ADMIN.value, Role.ADMIN.value, Role.PARTNER.value):
         raise HTTPException(
             status_code=403,
-            detail="Only Main Administrator or Administrator can assign user roles",
+            detail="Only Main Administrator, Administrator or Partner can assign user roles",
         )
     return current_user
 
@@ -117,8 +117,11 @@ def require_assign_user_role(current_user: User = Depends(get_current_user)) -> 
 def require_main_admin_or_admin(current_user: User = Depends(get_current_user)) -> User:
 
     role = (current_user.role or "").strip()
-    if role not in (Role.MAIN_ADMIN.value, Role.ADMIN.value):
-        raise HTTPException(status_code=403, detail="Only Main Administrator or Administrator can manage time tracking access")
+    if role not in (Role.MAIN_ADMIN.value, Role.ADMIN.value, Role.PARTNER.value):
+        raise HTTPException(
+            status_code=403,
+            detail="Only Main Administrator, Administrator or Partner can manage time tracking access",
+        )
     return current_user
 
 

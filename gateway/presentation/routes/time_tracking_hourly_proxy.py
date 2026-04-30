@@ -18,7 +18,7 @@ from infrastructure.upstream_http import (
 
 ROLES_CAN_VIEW = {"Главный администратор", "Администратор", "Партнер", "IT отдел", "Офис менеджер"}
 ROLES_CAN_MANAGE = {"Главный администратор", "Администратор", "Партнер"}
-ROLES_ADMIN_ONLY = {"Главный администратор", "Администратор"}
+ROLES_ADMIN_ONLY = {"Главный администратор", "Администратор", "Партнер"}
 
 
 async def get_current_user(
@@ -44,7 +44,7 @@ def _ensure_cost_rates_view(user: dict) -> None:
     if _role(user) not in ROLES_ADMIN_ONLY:
         raise HTTPException(
             status_code=403,
-            detail="Ставки себестоимости доступны только администраторам",
+            detail="Ставки себестоимости доступны администраторам и партнёрам",
         )
 
 
@@ -60,7 +60,7 @@ def _ensure_manage_cost_rates(user: dict) -> None:
     if _role(user) not in ROLES_ADMIN_ONLY:
         raise HTTPException(
             status_code=403,
-            detail="Ставки себестоимости может менять только администратор",
+            detail="Ставки себестоимости могут менять администратор или партнёр",
         )
 
 

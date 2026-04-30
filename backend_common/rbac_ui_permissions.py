@@ -29,13 +29,14 @@ USERS_VIEW_DIRECTORY: frozenset[str] = frozenset(
 USERS_MANAGE_BLOCK_ARCHIVE: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
 
-USERS_ASSIGN_ORG_ROLES: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN})
+USERS_ASSIGN_ORG_ROLES: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
 TICKETS_CROSS_USER: frozenset[str] = frozenset(
     {
         IT,
         ADMIN,
         MAIN_ADMIN,
+        PARTNER,
         OFFICE_MGR_SPACE,
         OFFICE_MGR_HYPHEN,
     }
@@ -109,7 +110,7 @@ EXPENSES_VIEW: frozenset[str] = frozenset(
 
 EXPENSES_MODERATE: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
-EXPENSES_ADMIN_EDIT: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN})
+EXPENSES_ADMIN_EDIT: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
 TIME_TRACKING_VIEW_DIRECTORY: frozenset[str] = frozenset(
     {
@@ -152,7 +153,7 @@ HOURLY_VIEW: frozenset[str] = frozenset(
 
 HOURLY_MANAGE: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
-HOURLY_ADMIN_RATES: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN})
+HOURLY_ADMIN_RATES: frozenset[str] = frozenset({MAIN_ADMIN, ADMIN, PARTNER})
 
 
 def normalize_role_key(role: str) -> str:
