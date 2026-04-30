@@ -48,6 +48,61 @@ def bearer_for_upstream(request: Request, authorization: Optional[str]) -> Optio
     return f"Bearer {tok}" if tok else None
 
 
+async def _sync_time_tracking_user(user_payload: dict, authorization_header: Optional[str]) -> None:
+    base = (get_settings().time_tracking_service_url or "").strip().rstrip("/")
+    if not base:
+        return
+    uid = user_payload.get("id")
+    if uid is None:
+        return
+    tt_role = ((user_payload.get("time_tracking_role") or "") or "").strip()
+    auth_headers = {"Authorization": authorization_header} if authorization_header else {}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        if tt_role in ("user", "manager"):
+            pos = user_payload.get("position")
+            pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
+            if not pos_s:
+                return
+            r = await client.post(
+                f"{base}/users",
+                json={
+                    "auth_user_id": int(uid),
+                    "email": user_payload.get("email"),
+                    "display_name": user_payload.get("display_name"),
+                    "picture": user_payload.get("picture"),
+                    "position": pos_s,
+                    "role": tt_role,
+                    "is_blocked": bool(user_payload.get("is_blocked", False)),
+                    "is_archived": bool(user_payload.get("is_archived", False)),
+                },
+                headers=auth_headers,
+            )
+            if r.status_code >= 400:
+                detail = (r.text or "").strip()
+                if len(detail) > 500:
+                    detail = detail[:500]
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Не удалось синхронизировать пользователя с Time Tracking: "
+                        f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
+                    ),
+                )
+            return
+        r = await client.delete(f"{base}/users/{int(uid)}", headers=auth_headers)
+        if r.status_code not in (200, 404):
+            detail = (r.text or "").strip()
+            if len(detail) > 500:
+                detail = detail[:500]
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Не удалось удалить пользователя из Time Tracking: "
+                    f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
+                ),
+            )
+
+
 async def _get_current_user_optional(
     request: Request,
     authorization: Optional[str] = Header(None, alias="Authorization"),
@@ -474,7 +529,9 @@ async def set_time_tracking_role(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    user_payload = r.json()
+    await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
+    return user_payload
 
 
 @router.patch("/{user_id}/position", response_model=UserDetailResponse)
@@ -498,4 +555,6 @@ async def set_position(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    user_payload = r.json()
+    await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
+    return user_payload
