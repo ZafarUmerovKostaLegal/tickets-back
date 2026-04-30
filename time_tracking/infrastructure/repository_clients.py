@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from infrastructure.models import (
     TimeManagerClientProjectModel,
     TimeManagerClientTaskModel,
 )
+from infrastructure.models_invoices import InvoiceModel
 from infrastructure.repository_shared import (
     _PROJECT_TYPES,
     _REPORT_VISIBILITY,
@@ -171,6 +172,29 @@ class ClientRepository:
         row = await self.get_by_id(client_id)
         if not row:
             return False
+        rp = await self._session.execute(
+            select(TimeManagerClientProjectModel.id).where(
+                TimeManagerClientProjectModel.client_id == client_id
+            )
+        )
+        project_ids = [x[0] for x in rp.all()]
+        rt = await self._session.execute(
+            select(TimeManagerClientTaskModel.id).where(
+                TimeManagerClientTaskModel.client_id == client_id
+            )
+        )
+        task_ids = [x[0] for x in rt.all()]
+
+        await self._session.execute(delete(InvoiceModel).where(InvoiceModel.client_id == client_id))
+
+        entry_conds = []
+        if project_ids:
+            entry_conds.append(TimeEntryModel.project_id.in_(project_ids))
+        if task_ids:
+            entry_conds.append(TimeEntryModel.task_id.in_(task_ids))
+        if entry_conds:
+            await self._session.execute(delete(TimeEntryModel).where(or_(*entry_conds)))
+
         await self._session.execute(delete(TimeManagerClientModel).where(TimeManagerClientModel.id == client_id))
         return True
 
@@ -797,6 +821,7 @@ class ClientProjectRepository:
         row = await self.get_by_id(client_id, project_id)
         if not row:
             return False
+        await self._session.execute(delete(TimeEntryModel).where(TimeEntryModel.project_id == project_id))
         await self._session.execute(
             delete(TimeManagerClientProjectModel).where(
                 TimeManagerClientProjectModel.client_id == client_id,
