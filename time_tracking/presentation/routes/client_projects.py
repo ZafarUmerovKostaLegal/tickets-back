@@ -206,6 +206,7 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         project_billable_rate_amount=row.project_billable_rate_amount,
         budget_type=row.budget_type,
         budget_amount=row.budget_amount,
+        progress_budget_amount=row.progress_budget_amount,
         budget_hours=row.budget_hours,
         budget_resets_every_month=row.budget_resets_every_month,
         budget_includes_expenses=row.budget_includes_expenses,
@@ -454,7 +455,15 @@ async def create_client_project(
                 status_code=400,
                 detail="Для фикс-проекта задайте сумму в поле бюджета (budgetAmount); при пакете «сумма + часы» добавьте лимит часов (budgetHours).",
             )
-    _bt_persist = normalize_budget_type_for_persist(body.budget_hours, budget_amount)
+    money_for_type = budget_amount
+    if body.project_type in (ProjectType.time_and_materials, ProjectType.non_billable):
+        if not _positive_budget_amount(money_for_type) and body.progress_budget_amount is not None:
+            if _d(body.progress_budget_amount) > 0:
+                money_for_type = body.progress_budget_amount
+    _bt_persist = normalize_budget_type_for_persist(
+        body.budget_hours,
+        money_for_type if _positive_budget_amount(money_for_type) else None,
+    )
     _budget_type_create = _bt_persist if _bt_persist is not None else body.budget_type
     fixed_fee_stored = (
         budget_amount
@@ -476,6 +485,7 @@ async def create_client_project(
             project_billable_rate_amount=body.project_billable_rate_amount,
             budget_type=_budget_type_create,
             budget_amount=budget_amount,
+            progress_budget_amount=body.progress_budget_amount,
             budget_hours=body.budget_hours,
             budget_resets_every_month=body.budget_resets_every_month,
             budget_includes_expenses=body.budget_includes_expenses,
@@ -578,6 +588,7 @@ async def patch_client_project(
         for k in (
             "budget_hours",
             "budget_amount",
+            "progress_budget_amount",
             "budget_type",
             "project_type",
             "fixed_fee_amount",
@@ -585,6 +596,11 @@ async def patch_client_project(
     ):
         m_h = patch["budget_hours"] if "budget_hours" in patch else row.budget_hours
         m_a = patch["budget_amount"] if "budget_amount" in patch else row.budget_amount
+        m_pb = (
+            patch["progress_budget_amount"]
+            if "progress_budget_amount" in patch
+            else row.progress_budget_amount
+        )
         eff_pt = patch["project_type"] if "project_type" in patch else row.project_type
         if eff_pt == "fixed_fee":
             if "fixed_fee_amount" in patch and patch["fixed_fee_amount"] is not None:
@@ -603,7 +619,21 @@ async def patch_client_project(
                     detail="Для фикс-проекта укажите сумму в budgetAmount (бюджет).",
                 )
             patch["fixed_fee_amount"] = m_a
-        nt = normalize_budget_type_for_persist(m_h, m_a)
+            nt = normalize_budget_type_for_persist(
+                m_h,
+                m_a if _positive_budget_amount(m_a) else None,
+            )
+        else:
+            money_for_type = m_a
+            if eff_pt in ("time_and_materials", "non_billable") and not _positive_budget_amount(
+                money_for_type
+            ):
+                if m_pb is not None and _d(m_pb) > 0:
+                    money_for_type = m_pb
+            nt = normalize_budget_type_for_persist(
+                m_h,
+                money_for_type if _positive_budget_amount(money_for_type) else None,
+            )
         patch["budget_type"] = nt
 
     try:

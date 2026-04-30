@@ -18,6 +18,7 @@ _PROJECT_BILLING_COLUMN_DEFINITIONS = (
     "billable_rate_type VARCHAR(64)",
     "budget_type VARCHAR(64)",
     "budget_amount NUMERIC(18, 4)",
+    "progress_budget_amount NUMERIC(18, 4)",
     "budget_hours NUMERIC(12, 2)",
     "budget_resets_every_month BOOLEAN NOT NULL DEFAULT FALSE",
     "budget_includes_expenses BOOLEAN NOT NULL DEFAULT FALSE",

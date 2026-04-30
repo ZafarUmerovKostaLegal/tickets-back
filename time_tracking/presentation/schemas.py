@@ -501,7 +501,7 @@ class ProjectCurrency(str, Enum):
 class TimeManagerClientProjectOut(BaseModel):
 
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     client_id: str
@@ -521,6 +521,11 @@ class TimeManagerClientProjectOut(BaseModel):
     )
     budget_type: Optional[str] = None
     budget_amount: Optional[Decimal] = None
+    progress_budget_amount: Optional[Decimal] = Field(
+        None,
+        alias="progressBudgetAmount",
+        description="Бюджет в валюте проекта для контроля прогресса (T&M, non_billable), если не задан budgetAmount.",
+    )
     budget_hours: Optional[Decimal] = None
     budget_resets_every_month: bool = False
     budget_includes_expenses: bool = False
@@ -561,6 +566,15 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="budgetAmount",
         description="Лимит по деньгам в валюте проекта; для fixed_fee — сумма контракта. С budgetHours — пакет «сумма + часы».",
+    )
+    progress_budget_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="progressBudgetAmount",
+        description=(
+            "Для time_and_materials и non_billable: плановый бюджет для отслеживания хода проекта. "
+            "Учитывается на дашборде, если не задано поле budgetAmount."
+        ),
     )
     budget_hours: Optional[Decimal] = Field(
         None,
@@ -622,6 +636,12 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="budgetAmount",
         description="Лимит по деньгам; для fixed_fee — сумма контракта. С budgetHours — пакет «сумма + часы».",
+    )
+    progress_budget_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="progressBudgetAmount",
+        description="Для T&M и non_billable: бюджет для контроля прогресса, если не задан budgetAmount.",
     )
     budget_hours: Optional[Decimal] = Field(
         None,

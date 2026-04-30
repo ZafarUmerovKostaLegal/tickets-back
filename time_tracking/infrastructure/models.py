@@ -245,6 +245,7 @@ class TimeManagerClientProjectModel(Base):
     )
     budget_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    progress_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     budget_hours: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     budget_resets_every_month: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     budget_includes_expenses: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

@@ -13,7 +13,12 @@ def effective_budget_amount(p: Any) -> Decimal:
     v = getattr(p, "budget_amount", None)
     if v is not None and _d(v) > 0:
         return _d(v)
-    if getattr(p, "project_type", None) == "fixed_fee":
+    pt = getattr(p, "project_type", None) or ""
+    if pt in ("time_and_materials", "non_billable"):
+        pb = getattr(p, "progress_budget_amount", None)
+        if pb is not None and _d(pb) > 0:
+            return _d(pb)
+    if pt == "fixed_fee":
         f = getattr(p, "fixed_fee_amount", None)
         if f is not None and _d(f) > 0:
             return _d(f)

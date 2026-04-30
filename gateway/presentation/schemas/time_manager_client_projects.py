@@ -36,6 +36,12 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         alias="budgetAmount",
         description="Бюджет в валюте; для fixed_fee — сумма контракта. С budgetHours — пакет сумма+часы.",
     )
+    progress_budget_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="progressBudgetAmount",
+        description="Для T&M и non_billable: бюджет для контроля прогресса, если не задан budgetAmount.",
+    )
     budget_hours: Optional[Decimal] = Field(
         None,
         ge=0,
@@ -94,6 +100,12 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="budgetAmount",
         description="Бюджет в валюте; с budgetHours — пакет сумма+часы.",
+    )
+    progress_budget_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="progressBudgetAmount",
+        description="Для T&M и non_billable: бюджет для контроля прогресса, если не задан budgetAmount.",
     )
     budget_hours: Optional[Decimal] = Field(
         None,

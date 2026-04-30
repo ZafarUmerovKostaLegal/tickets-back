@@ -644,6 +644,7 @@ class ClientProjectRepository:
             project_billable_rate_amount=src.project_billable_rate_amount,
             budget_type=src.budget_type,
             budget_amount=src.budget_amount,
+            progress_budget_amount=src.progress_budget_amount,
             budget_hours=src.budget_hours,
             budget_resets_every_month=src.budget_resets_every_month,
             budget_includes_expenses=src.budget_includes_expenses,
@@ -695,6 +696,7 @@ class ClientProjectRepository:
         project_billable_rate_amount: Decimal | None = None,
         budget_type: str | None = None,
         budget_amount: Decimal | None = None,
+        progress_budget_amount: Decimal | None = None,
         budget_hours: Decimal | None = None,
         budget_resets_every_month: bool = False,
         budget_includes_expenses: bool = False,
@@ -721,6 +723,7 @@ class ClientProjectRepository:
             project_billable_rate_amount=project_billable_rate_amount,
             budget_type=_strip_opt(budget_type),
             budget_amount=budget_amount,
+            progress_budget_amount=progress_budget_amount,
             budget_hours=budget_hours,
             budget_resets_every_month=budget_resets_every_month,
             budget_includes_expenses=budget_includes_expenses,
@@ -767,6 +770,8 @@ class ClientProjectRepository:
             row.budget_type = _strip_opt(patch["budget_type"])
         if "budget_amount" in patch:
             row.budget_amount = _decimal_none(patch["budget_amount"])
+        if "progress_budget_amount" in patch:
+            row.progress_budget_amount = _decimal_none(patch["progress_budget_amount"])
         if "budget_hours" in patch:
             row.budget_hours = _decimal_none(patch["budget_hours"])
         if "budget_resets_every_month" in patch:
