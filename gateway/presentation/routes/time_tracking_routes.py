@@ -51,6 +51,7 @@ from presentation.routes.time_tracking_te_proxy import (
     ProjectAccessPutBody,
     TimeEntryCreateBody,
     TimeEntryDeleteBody,
+    TimeEntryEditUnlockBody,
     TimeEntryPatchBody,
     project_access_get_gateway,
     project_access_put_gateway,
@@ -58,6 +59,7 @@ from presentation.routes.time_tracking_te_proxy import (
     time_entries_delete_gateway,
     time_entries_list_gateway,
     time_entries_patch_gateway,
+    time_entry_edit_unlock_gateway,
 )
 
 router = APIRouter(prefix="/api/v1/time-tracking", tags=["time_tracking"])
@@ -309,6 +311,21 @@ async def require_time_entry_write(
     )
 
 
+async def require_grant_time_entry_unlock(
+    auth_user_id: int,
+    user: dict = Depends(get_current_user),
+):
+
+    rid = _current_auth_user_id(user)
+    role = (user.get("role") or "").strip()
+    if rid == auth_user_id and role not in _MANAGE_ROLES_TIME_ENTRIES:
+        raise HTTPException(
+            status_code=403,
+            detail="Разблокировку может выдать только менеджер или администратор",
+        )
+    return await require_time_entry_write(auth_user_id, user)
+
+
 class UserUpsertBody(BaseModel):
 
 
@@ -487,6 +504,15 @@ async def proxy_delete_time_entry(
     if out is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     return out
+
+
+@router.post("/users/{auth_user_id}/time-entry-edit-unlock")
+async def proxy_time_entry_edit_unlock(
+    auth_user_id: int,
+    body: TimeEntryEditUnlockBody,
+    _: dict = Depends(require_grant_time_entry_unlock),
+):
+    return await time_entry_edit_unlock_gateway(auth_user_id, body)
 
 
 @router.get("/users/{auth_user_id}/project-access")

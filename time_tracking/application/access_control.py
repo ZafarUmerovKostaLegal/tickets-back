@@ -92,6 +92,38 @@ async def ensure_time_entry_subject_allowed(
     )
 
 
+async def ensure_can_grant_time_entry_edit_unlock(
+    session: AsyncSession,
+    viewer: dict,
+    target_auth_user_id: int,
+) -> None:
+
+    vid = _viewer_id(viewer)
+    role = _org_role(viewer)
+    if vid == target_auth_user_id and role not in _MANAGE_ROLES_TIME_ENTRIES:
+        raise HTTPException(
+            status_code=403,
+            detail="Разблокировку может выдать только менеджер или администратор",
+        )
+    if role in _MANAGE_ROLES_TIME_ENTRIES:
+        return
+    ur = TimeTrackingUserRepository(session)
+    row = await ur.get_by_auth_user_id(vid)
+    tt_role = (row.role or "").strip() if row else ""
+    if tt_role != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Разблокировку могут выдать администратор или менеджер учёта времени",
+        )
+    par = UserProjectAccessRepository(session)
+    scope = set(await par.list_peer_auth_user_ids_for_manager(vid))
+    if target_auth_user_id not in scope:
+        raise HTTPException(
+            status_code=403,
+            detail="Менеджер может выдать разблокировку только сотрудникам с общими проектами доступа",
+        )
+
+
 async def ensure_can_read_tt_user_row(
     session: AsyncSession,
     viewer: dict,

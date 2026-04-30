@@ -13,6 +13,7 @@ from application.weekly_period import (
     local_today,
     previous_closed_saturday_fri_for_anchor,
 )
+from infrastructure.repository_time_entry_unlocks import TimeEntryEditUnlockRepository
 from infrastructure.repository_users import TimeTrackingUserRepository
 from infrastructure.repository_weekly_submissions import WeeklySubmissionRepository
 
@@ -26,6 +27,9 @@ def _submit_tz() -> str:
 async def is_work_date_locked_for_user(
     session: AsyncSession, auth_user_id: int, work_date: date
 ) -> bool:
+    unlock_repo = TimeEntryEditUnlockRepository(session)
+    if await unlock_repo.is_active_unlock(auth_user_id, work_date):
+        return False
     if is_work_week_edit_deadline_passed(work_date, submit_tz=_submit_tz()):
         return True
     repo = WeeklySubmissionRepository(session)

@@ -666,6 +666,30 @@ async def apply_weekly_submissions_schema_patch(conn: AsyncConnection) -> None:
             """
         )
     )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_time_entry_edit_unlocks (
+                id VARCHAR(36) PRIMARY KEY,
+                auth_user_id INTEGER NOT NULL
+                    REFERENCES time_tracking_users (auth_user_id) ON DELETE CASCADE,
+                work_date DATE NOT NULL,
+                granted_by_auth_user_id INTEGER NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                CONSTRAINT uq_tt_te_unlock_user_day UNIQUE (auth_user_id, work_date)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_te_unlock_exp
+                ON time_tracking_time_entry_edit_unlocks (expires_at)
+            """
+        )
+    )
 
 
 async def apply_client_projects_project_billable_amount_patch(conn: AsyncConnection) -> None:

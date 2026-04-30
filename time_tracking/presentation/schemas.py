@@ -239,6 +239,26 @@ class TimeEntryDeleteBody(BaseModel):
     )
 
 
+class TimeEntryEditUnlockBody(BaseModel):
+
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    work_date: date = Field(..., alias="workDate")
+
+
+class TimeEntryEditUnlockOut(BaseModel):
+
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    auth_user_id: int = Field(..., alias="authUserId")
+    work_date: date = Field(..., alias="workDate")
+    granted_by_auth_user_id: int = Field(..., alias="grantedByAuthUserId")
+    expires_at: datetime = Field(..., alias="expiresAt")
+    created_at: datetime = Field(..., alias="createdAt")
+
+
 class ProjectTimeTrackingAssigneeOut(BaseModel):
 
 

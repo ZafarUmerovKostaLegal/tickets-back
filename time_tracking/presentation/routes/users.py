@@ -16,6 +16,7 @@ from application.access_control import (
     ensure_managed_scope_allowed,
     ensure_upsert_user_allowed,
     ensure_weekly_capacity_patch_allowed,
+    ensure_can_grant_time_entry_edit_unlock,
 )
 from application.project_partner_requirement import (
     ensure_projects_have_partner_assignee,
@@ -27,8 +28,15 @@ from infrastructure.repositories import (
     TimeTrackingUserRepository,
     UserProjectAccessRepository,
 )
+from infrastructure.repository_time_entry_unlocks import TimeEntryEditUnlockRepository
 from presentation.deps import require_bearer_user
-from presentation.schemas import UserResponse, UserUpsertBody, WeeklyCapacityPatchBody
+from presentation.schemas import (
+    UserResponse,
+    UserUpsertBody,
+    WeeklyCapacityPatchBody,
+    TimeEntryEditUnlockBody,
+    TimeEntryEditUnlockOut,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -229,6 +237,34 @@ async def patch_weekly_capacity(
     else:
         pos = None
     return _user_response_directory(row, position=pos)
+
+
+@router.post(
+    "/{auth_user_id}/time-entry-edit-unlock",
+    response_model=TimeEntryEditUnlockOut,
+)
+async def grant_time_entry_edit_unlock(
+    auth_user_id: int,
+    body: TimeEntryEditUnlockBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> TimeEntryEditUnlockOut:
+    await ensure_can_grant_time_entry_edit_unlock(session, viewer, auth_user_id)
+    ur = TimeTrackingUserRepository(session)
+    if not await ur.get_by_auth_user_id(auth_user_id):
+        raise HTTPException(status_code=404, detail="User not in time tracking")
+    vid = viewer.get("id")
+    if vid is None:
+        raise HTTPException(status_code=403, detail="В токене нет id пользователя")
+    unlock_repo = TimeEntryEditUnlockRepository(session)
+    row = await unlock_repo.upsert_unlock(
+        auth_user_id=auth_user_id,
+        work_date=body.work_date,
+        granted_by_auth_user_id=int(vid),
+    )
+    await session.commit()
+    await session.refresh(row)
+    return TimeEntryEditUnlockOut.model_validate(row)
 
 
 @router.post("", status_code=200, summary="Создать/обновить пользователя (синхронизация)")

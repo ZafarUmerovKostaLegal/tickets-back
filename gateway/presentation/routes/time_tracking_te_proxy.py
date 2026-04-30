@@ -54,6 +54,29 @@ class TimeEntryDeleteBody(BaseModel):
     void_kind: Literal["rejected", "reallocated"] = Field("rejected", alias="voidKind")
 
 
+class TimeEntryEditUnlockBody(BaseModel):
+
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    work_date: date = Field(..., alias="workDate")
+
+
+async def time_entry_edit_unlock_gateway(auth_user_id: int, body: TimeEntryEditUnlockBody) -> Any:
+    base = _base()
+    r = await send_upstream_request(
+        "POST",
+        f"{base}/users/{auth_user_id}/time-entry-edit-unlock",
+        json=body.model_dump(mode="json", by_alias=False),
+        headers=merge_upstream_headers(),
+        timeout=15.0,
+        unavailable_status=503,
+        unavailable_detail="Time tracking service unavailable",
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    return r.json()
+
+
 async def time_entries_list_gateway(auth_user_id: int, request: Request) -> Any:
     base = _base()
     r = await send_upstream_request(

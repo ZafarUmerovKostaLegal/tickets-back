@@ -304,3 +304,24 @@ class WeeklyTimeSubmissionModel(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TimeEntryEditUnlockModel(Base):
+
+
+    __tablename__ = "time_tracking_time_entry_edit_unlocks"
+    __table_args__ = (
+        UniqueConstraint("auth_user_id", "work_date", name="uq_tt_te_unlock_user_day"),
+        Index("ix_tt_te_unlock_exp", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    auth_user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("time_tracking_users.auth_user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    work_date: Mapped[date] = mapped_column(Date, nullable=False)
+    granted_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

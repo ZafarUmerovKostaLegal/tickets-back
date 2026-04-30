@@ -14,6 +14,7 @@ from presentation.routes.time_tracking_hourly_proxy import (
     hourly_rates_patch_gateway,
 )
 from presentation.routes.time_tracking_routes import (
+    require_grant_time_entry_unlock,
     require_manage_project_access,
     require_manage_role,
     require_time_entry_read,
@@ -25,6 +26,7 @@ from presentation.routes.time_tracking_te_proxy import (
     ProjectAccessPutBody,
     TimeEntryCreateBody,
     TimeEntryDeleteBody,
+    TimeEntryEditUnlockBody,
     TimeEntryPatchBody,
     project_access_get_gateway,
     project_access_put_gateway,
@@ -32,6 +34,7 @@ from presentation.routes.time_tracking_te_proxy import (
     time_entries_delete_gateway,
     time_entries_list_gateway,
     time_entries_patch_gateway,
+    time_entry_edit_unlock_gateway,
 )
 
 router = APIRouter(prefix="/api/v1/users", tags=["time_tracking"])
@@ -99,6 +102,15 @@ async def create_time_entry_under_users(
     _: dict = Depends(require_time_entry_write),
 ):
     return await time_entries_create_gateway(auth_user_id, body)
+
+
+@router.post("/{auth_user_id}/time-entry-edit-unlock")
+async def grant_time_entry_edit_unlock_under_users(
+    auth_user_id: int,
+    body: TimeEntryEditUnlockBody,
+    _: dict = Depends(require_grant_time_entry_unlock),
+):
+    return await time_entry_edit_unlock_gateway(auth_user_id, body)
 
 
 @router.patch("/{auth_user_id}/time-entries/{entry_id}")
