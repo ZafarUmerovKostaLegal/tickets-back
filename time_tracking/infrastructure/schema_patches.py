@@ -405,6 +405,64 @@ async def apply_reports_schema_patch(conn: AsyncConnection) -> None:
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_tt_snap_rows_snap ON tt_report_snapshot_rows (snapshot_id)")
     )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS tt_report_partner_confirmation_requests (
+                id VARCHAR(36) PRIMARY KEY,
+                snapshot_id VARCHAR(36) NOT NULL REFERENCES tt_report_snapshots (id) ON DELETE CASCADE,
+                project_id VARCHAR(36) NOT NULL REFERENCES time_tracking_client_projects (id) ON DELETE CASCADE,
+                date_from DATE NOT NULL,
+                date_to DATE NOT NULL,
+                title VARCHAR(700) NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                submitted_by_auth_user_id INTEGER NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ,
+                CONSTRAINT uq_tt_report_partner_conf_snap_proj_period
+                    UNIQUE (snapshot_id, project_id, date_from, date_to)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_submitter
+                ON tt_report_partner_confirmation_requests (submitted_by_auth_user_id)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_project_status
+                ON tt_report_partner_confirmation_requests (project_id, status)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS tt_report_partner_confirmation_signatures (
+                id VARCHAR(36) PRIMARY KEY,
+                request_id VARCHAR(36) NOT NULL
+                    REFERENCES tt_report_partner_confirmation_requests (id) ON DELETE CASCADE,
+                partner_auth_user_id INTEGER NOT NULL,
+                confirmed_at TIMESTAMPTZ NOT NULL,
+                CONSTRAINT uq_tt_report_partner_conf_sig UNIQUE (request_id, partner_auth_user_id)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_sig_partner
+                ON tt_report_partner_confirmation_signatures (partner_auth_user_id)
+            """
+        )
+    )
 
 
 async def apply_invoices_schema_patch(conn: AsyncConnection) -> None:

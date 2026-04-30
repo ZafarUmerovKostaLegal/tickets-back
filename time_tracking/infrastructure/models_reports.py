@@ -1,8 +1,16 @@
 
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.database import Base
@@ -66,4 +74,73 @@ class ReportSnapshotRowModel(Base):
 
     snapshot: Mapped["ReportSnapshotModel"] = relationship(
         "ReportSnapshotModel", back_populates="rows"
+    )
+
+
+class ReportPartnerConfirmationRequestModel(Base):
+
+
+    __tablename__ = "tt_report_partner_confirmation_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id",
+            "project_id",
+            "date_from",
+            "date_to",
+            name="uq_tt_report_partner_conf_snap_proj_period",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tt_report_snapshots.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("time_tracking_client_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    date_from: Mapped[date] = mapped_column(Date, nullable=False)
+    date_to: Mapped[date] = mapped_column(Date, nullable=False)
+    title: Mapped[str] = mapped_column(String(700), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    submitted_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    signatures: Mapped[list["ReportPartnerConfirmationSignatureModel"]] = relationship(
+        "ReportPartnerConfirmationSignatureModel",
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReportPartnerConfirmationSignatureModel(Base):
+
+
+    __tablename__ = "tt_report_partner_confirmation_signatures"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id",
+            "partner_auth_user_id",
+            name="uq_tt_report_partner_conf_sig",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tt_report_partner_confirmation_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    partner_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    request: Mapped["ReportPartnerConfirmationRequestModel"] = relationship(
+        "ReportPartnerConfirmationRequestModel", back_populates="signatures"
     )

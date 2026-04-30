@@ -1,0 +1,226 @@
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import date
+
+from sqlalchemy import and_, delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from infrastructure.models_reports import (
+    ReportPartnerConfirmationRequestModel,
+    ReportPartnerConfirmationSignatureModel,
+    ReportSnapshotRowModel,
+)
+from infrastructure.repository_shared import _now_utc
+
+_STATUS_PENDING = "pending_partners"
+_STATUS_CONFIRMED = "fully_confirmed"
+
+
+def project_id_from_snapshot_row(row: ReportSnapshotRowModel) -> str | None:
+    try:
+        d = json.loads(row.frozen_data_json or "{}")
+        if isinstance(d, dict):
+            pid = d.get("projectId")
+            if pid is not None and str(pid).strip():
+                return str(pid).strip()
+    except (json.JSONDecodeError, TypeError):
+        pass
+    st = (row.source_type or "").strip().lower()
+    if st in ("project", "projects", "client_project"):
+        sid = (row.source_id or "").strip()
+        return sid or None
+    return None
+
+
+class PartnerReportConfirmationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def snapshot_has_project_row(self, snapshot_id: str, project_id: str) -> bool:
+        pid = (project_id or "").strip()
+        if not pid:
+            return False
+        q = select(ReportSnapshotRowModel).where(ReportSnapshotRowModel.snapshot_id == snapshot_id)
+        rows = list((await self._s.execute(q)).scalars().all())
+        for r in rows:
+            rp = project_id_from_snapshot_row(r)
+            if rp == pid:
+                return True
+        return False
+
+    async def get_request_by_id(
+        self, request_id: str, *, load_signatures: bool = False
+    ) -> ReportPartnerConfirmationRequestModel | None:
+        q = select(ReportPartnerConfirmationRequestModel).where(
+            ReportPartnerConfirmationRequestModel.id == request_id
+        )
+        if load_signatures:
+            q = q.options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+        return (await self._s.execute(q)).scalars().one_or_none()
+
+    async def upsert_submit(
+        self,
+        *,
+        snapshot_id: str,
+        project_id: str,
+        date_from: date,
+        date_to: date,
+        title: str,
+        submitted_by_auth_user_id: int,
+    ) -> ReportPartnerConfirmationRequestModel:
+        q = select(ReportPartnerConfirmationRequestModel).where(
+            and_(
+                ReportPartnerConfirmationRequestModel.snapshot_id == snapshot_id,
+                ReportPartnerConfirmationRequestModel.project_id == project_id,
+                ReportPartnerConfirmationRequestModel.date_from == date_from,
+                ReportPartnerConfirmationRequestModel.date_to == date_to,
+            )
+        )
+        row = (await self._s.execute(q)).scalars().one_or_none()
+        now = _now_utc()
+        if row:
+            await self._s.execute(
+                delete(ReportPartnerConfirmationSignatureModel).where(
+                    ReportPartnerConfirmationSignatureModel.request_id == row.id
+                )
+            )
+            row.status = _STATUS_PENDING
+            row.title = title
+            row.submitted_by_auth_user_id = submitted_by_auth_user_id
+            row.updated_at = now
+            self._s.add(row)
+            await self._s.flush()
+            return row
+        m = ReportPartnerConfirmationRequestModel(
+            id=str(uuid.uuid4()),
+            snapshot_id=snapshot_id,
+            project_id=project_id,
+            date_from=date_from,
+            date_to=date_to,
+            title=title,
+            status=_STATUS_PENDING,
+            submitted_by_auth_user_id=submitted_by_auth_user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        self._s.add(m)
+        await self._s.flush()
+        return m
+
+    async def invalidate_all_for_snapshot_project(self, snapshot_id: str, project_id: str) -> int:
+        q = select(ReportPartnerConfirmationRequestModel.id).where(
+            and_(
+                ReportPartnerConfirmationRequestModel.snapshot_id == snapshot_id,
+                ReportPartnerConfirmationRequestModel.project_id == project_id,
+            )
+        )
+        ids = [str(x) for x in (await self._s.execute(q)).scalars().all()]
+        if not ids:
+            return 0
+        await self._s.execute(
+            delete(ReportPartnerConfirmationSignatureModel).where(
+                ReportPartnerConfirmationSignatureModel.request_id.in_(ids)
+            )
+        )
+        now = _now_utc()
+        for rid in ids:
+            row = await self.get_request_by_id(rid)
+            if row:
+                row.status = _STATUS_PENDING
+                row.updated_at = now
+                self._s.add(row)
+        return len(ids)
+
+    async def add_signature(
+        self, request_id: str, partner_auth_user_id: int
+    ) -> ReportPartnerConfirmationSignatureModel:
+        now = _now_utc()
+        sig = ReportPartnerConfirmationSignatureModel(
+            id=str(uuid.uuid4()),
+            request_id=request_id,
+            partner_auth_user_id=partner_auth_user_id,
+            confirmed_at=now,
+        )
+        self._s.add(sig)
+        return sig
+
+    async def list_signature_partner_ids(self, request_id: str) -> list[int]:
+        q = select(ReportPartnerConfirmationSignatureModel.partner_auth_user_id).where(
+            ReportPartnerConfirmationSignatureModel.request_id == request_id
+        )
+        return sorted({int(x) for x in (await self._s.execute(q)).scalars().all()})
+
+    async def partner_has_signed(self, request_id: str, partner_auth_user_id: int) -> bool:
+        q = select(ReportPartnerConfirmationSignatureModel.id).where(
+            and_(
+                ReportPartnerConfirmationSignatureModel.request_id == request_id,
+                ReportPartnerConfirmationSignatureModel.partner_auth_user_id
+                == int(partner_auth_user_id),
+            )
+        )
+        return (await self._s.execute(q)).scalar_one_or_none() is not None
+
+    async def mark_fully_confirmed(self, request_id: str) -> None:
+        row = await self.get_request_by_id(request_id)
+        if not row:
+            return
+        row.status = _STATUS_CONFIRMED
+        row.updated_at = _now_utc()
+        self._s.add(row)
+
+    async def list_all_fully_confirmed(
+        self,
+    ) -> list[ReportPartnerConfirmationRequestModel]:
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED)
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
+        )
+        return list((await self._s.execute(q)).scalars().all())
+
+    async def list_pending_for_partner(
+        self, partner_auth_user_id: int
+    ) -> list[ReportPartnerConfirmationRequestModel]:
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(ReportPartnerConfirmationRequestModel.status == _STATUS_PENDING)
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
+        )
+        all_rows = list((await self._s.execute(q)).scalars().all())
+        out: list[ReportPartnerConfirmationRequestModel] = []
+        pid = int(partner_auth_user_id)
+        for m in all_rows:
+            signed = {s.partner_auth_user_id for s in (m.signatures or [])}
+            if pid not in signed:
+                out.append(m)
+        return out
+
+    async def list_confirmed_visible_for(
+        self,
+        viewer_id: int,
+        *,
+        partner_project_ids: set[str],
+    ) -> list[ReportPartnerConfirmationRequestModel]:
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED)
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
+        )
+        rows = list((await self._s.execute(q)).scalars().all())
+        vid = int(viewer_id)
+        out: list[ReportPartnerConfirmationRequestModel] = []
+        for m in rows:
+            if m.submitted_by_auth_user_id == vid:
+                out.append(m)
+                continue
+            if m.project_id in partner_project_ids:
+                out.append(m)
+                continue
+        return out

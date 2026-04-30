@@ -9,6 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.partner_report_confirmation_service import (
+    invalidate_confirmations_after_row_edit,
+)
 from application.report_snapshot_overrides import (
     merge_frozen_and_overrides,
     validate_and_normalize_overrides,
@@ -137,6 +140,7 @@ async def patch_report_snapshot_row(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Not Found")
+    await invalidate_confirmations_after_row_edit(session, snapshot_id, row_id)
     await session.commit()
     await session.refresh(row)
     return _snapshot_row_to_dict(row)

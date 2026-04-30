@@ -1022,6 +1022,46 @@ async def reports_snapshot_row_patch(
     )
 
 
+@router.post("/reports/partner-confirmations/submit")
+async def reports_partner_confirmation_submit(
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json(
+        "POST",
+        "/reports/partner-confirmations/submit",
+        json=body,
+        timeout=30.0,
+    )
+
+
+@router.post("/reports/partner-confirmations/{request_id}/confirm")
+async def reports_partner_confirmation_confirm(
+    request_id: str,
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json(
+        "POST",
+        f"/reports/partner-confirmations/{request_id}/confirm",
+        json={},
+        timeout=30.0,
+    )
+
+
+@router.get("/reports/partner-confirmations/pending")
+async def reports_partner_confirmation_pending(
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("GET", "/reports/partner-confirmations/pending", timeout=30.0)
+
+
+@router.get("/reports/partner-confirmations/confirmed")
+async def reports_partner_confirmation_confirmed(
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("GET", "/reports/partner-confirmations/confirmed", timeout=30.0)
+
+
 @router.get("/reports/time/{group_by}")
 async def reports_time(
     group_by: str,
