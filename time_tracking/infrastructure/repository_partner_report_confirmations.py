@@ -62,6 +62,29 @@ class PartnerReportConfirmationRepository:
             q = q.options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
         return (await self._s.execute(q)).scalars().one_or_none()
 
+    async def find_latest_pending_for_project_period(
+        self,
+        project_id: str,
+        date_from: date,
+        date_to: date,
+    ) -> ReportPartnerConfirmationRequestModel | None:
+        pid = (project_id or "").strip()
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(
+                and_(
+                    ReportPartnerConfirmationRequestModel.project_id == pid,
+                    ReportPartnerConfirmationRequestModel.date_from == date_from,
+                    ReportPartnerConfirmationRequestModel.date_to == date_to,
+                    ReportPartnerConfirmationRequestModel.status == _STATUS_PENDING,
+                )
+            )
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.created_at.desc())
+            .limit(1)
+        )
+        return (await self._s.execute(q)).scalars().one_or_none()
+
     async def upsert_submit(
         self,
         *,

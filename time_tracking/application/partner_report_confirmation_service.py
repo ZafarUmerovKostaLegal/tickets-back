@@ -123,6 +123,68 @@ async def submit_partner_report_confirmation(
     return _request_to_out(loaded, partners)
 
 
+async def submit_partner_report_confirmation_from_preview(
+    session: AsyncSession,
+    viewer: dict,
+    *,
+    project_id: str,
+    date_from: date,
+    date_to: date,
+    authorization: str | None,
+) -> dict:
+    """Создаёт минимальный снимок отчёта по проекту и сразу вызывает submit (для предпросмотра без отдельного POST /snapshots)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="projectId required")
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="dateTo не может быть раньше dateFrom")
+    conf_repo = PartnerReportConfirmationRepository(session)
+    existing = await conf_repo.find_latest_pending_for_project_period(pid, date_from, date_to)
+    if existing:
+        access_repo = UserProjectAccessRepository(session)
+        partners = await list_partner_auth_user_ids_for_project(
+            session, access_repo, pid, authorization=authorization
+        )
+        if not partners:
+            raise HTTPException(
+                status_code=400,
+                detail="По проекту не найдены партнёры для подтверждения (доступ и роль/должность)",
+            )
+        return _request_to_out(existing, partners)
+    vid = _viewer_id(viewer)
+    projects = ClientProjectRepository(session)
+    snap_name = await build_report_confirmation_title(session, projects, pid, date_from, date_to)
+    snap_repo = ReportSnapshotRepository(session)
+    snap = await snap_repo.create(
+        name=snap_name,
+        report_type="time",
+        group_by="projects",
+        filters={
+            "dateFrom": date_from.isoformat(),
+            "dateTo": date_to.isoformat(),
+            "projectIds": [pid],
+        },
+        created_by_user_id=vid,
+        rows_data=[
+            {
+                "source_type": "project",
+                "source_id": pid,
+                "data": {"projectId": pid},
+            }
+        ],
+    )
+    await session.flush()
+    return await submit_partner_report_confirmation(
+        session,
+        viewer,
+        snapshot_id=snap.id,
+        project_id=pid,
+        date_from=date_from,
+        date_to=date_to,
+        authorization=authorization,
+    )
+
+
 async def confirm_partner_report_confirmation(
     session: AsyncSession,
     viewer: dict,

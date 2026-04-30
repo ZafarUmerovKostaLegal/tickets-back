@@ -1022,6 +1022,19 @@ async def reports_snapshot_row_patch(
     )
 
 
+@router.post("/reports/partner-confirmations/submit-from-preview")
+async def reports_partner_confirmation_submit_from_preview(
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json(
+        "POST",
+        "/reports/partner-confirmations/submit-from-preview",
+        json=body,
+        timeout=30.0,
+    )
+
+
 @router.post("/reports/partner-confirmations/submit")
 async def reports_partner_confirmation_submit(
     body: dict = Body(...),
