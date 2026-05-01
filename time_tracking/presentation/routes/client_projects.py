@@ -523,6 +523,7 @@ async def create_client_project(
             for uid in initial:
                 await ensure_time_tracking_user_from_auth(session, authorization, uid)
                 applied_project_scoped_rate = False
+                amt = None
                 if not project_uses_shared_billable(row):
                     amt = amount_by_uid.get(uid)
                     if amt is not None and _d(amt) > 0:
@@ -536,11 +537,14 @@ async def create_client_project(
                             valid_to=row.end_date,
                         )
                         applied_project_scoped_rate = True
-                should_validate_rates = (
-                    project_uses_shared_billable(row)
-                    or applied_project_scoped_rate
-                    or has_members_payload
-                    or has_parallel_amounts_payload
+                # If we just upserted a positive project-scoped rate in this request,
+                # skip legacy validation to avoid false negatives in create flow.
+                should_validate_rates = project_uses_shared_billable(row) or (
+                    not applied_project_scoped_rate
+                    and (
+                        (has_members_payload and (amt is None or _d(amt) <= 0))
+                        or has_parallel_amounts_payload
+                    )
                 )
                 if should_validate_rates:
                     await validate_hourly_rates_for_project_access(
