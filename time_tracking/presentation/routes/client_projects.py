@@ -244,7 +244,7 @@ def _progress_percent(spent, limit) -> float:
 async def _project_budget_metrics(
     session: AsyncSession,
     rows: list,
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[str, float | bool]]:
     pids = [str(r.id) for r in rows]
     if not pids:
         return {}
@@ -293,6 +293,8 @@ async def _project_budget_metrics(
                 "budget_spent_value": _hours(sh),
                 "budget_remaining_value": _hours(rh),
                 "budget_progress_percent": _progress_percent(sh, lim_h),
+                "logged_hours_value": _hours(sh),
+                "has_budget_configured": lim_h > _ZERO,
             }
         elif mode in ("money", "hours_and_money"):
             out[pid] = {
@@ -300,6 +302,8 @@ async def _project_budget_metrics(
                 "budget_spent_value": _money(sm),
                 "budget_remaining_value": _money(rm),
                 "budget_progress_percent": _progress_percent(sm, lim_m),
+                "logged_hours_value": _hours(sh),
+                "has_budget_configured": lim_m > _ZERO or lim_h > _ZERO,
             }
         else:
             out[pid] = {
@@ -307,6 +311,8 @@ async def _project_budget_metrics(
                 "budget_spent_value": 0.0,
                 "budget_remaining_value": 0.0,
                 "budget_progress_percent": 0.0,
+                "logged_hours_value": _hours(sh),
+                "has_budget_configured": False,
             }
     return out
 
@@ -327,6 +333,8 @@ async def _client_projects_to_out(
         row_out.budget_spent_value = bm.get("budget_spent_value")
         row_out.budget_remaining_value = bm.get("budget_remaining_value")
         row_out.budget_progress_percent = bm.get("budget_progress_percent")
+        row_out.logged_hours_value = bm.get("logged_hours_value")
+        row_out.has_budget_configured = bm.get("has_budget_configured")
         out.append(row_out)
     return out
 
@@ -480,6 +488,8 @@ async def get_client_project(
     out.budget_spent_value = one.get("budget_spent_value")
     out.budget_remaining_value = one.get("budget_remaining_value")
     out.budget_progress_percent = one.get("budget_progress_percent")
+    out.logged_hours_value = one.get("logged_hours_value")
+    out.has_budget_configured = one.get("has_budget_configured")
     return out
 
 

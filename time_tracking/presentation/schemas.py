@@ -543,6 +543,8 @@ class TimeManagerClientProjectOut(BaseModel):
     budget_spent_value: Optional[float] = Field(None, alias="budgetSpentValue")
     budget_remaining_value: Optional[float] = Field(None, alias="budgetRemainingValue")
     budget_progress_percent: Optional[float] = Field(None, alias="budgetProgressPercent")
+    logged_hours_value: Optional[float] = Field(None, alias="loggedHoursValue")
+    has_budget_configured: Optional[bool] = Field(None, alias="hasBudgetConfigured")
 
 
 class InitialProjectAccessMember(BaseModel):
