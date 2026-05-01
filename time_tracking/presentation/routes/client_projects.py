@@ -505,10 +505,13 @@ async def create_client_project(
             initial = list(dict.fromkeys(int(m.auth_user_id) for m in members))
             amount_by_uid = {int(m.auth_user_id): m.billable_hourly_amount for m in members}
         else:
-            initial = list(
-                dict.fromkeys(int(x) for x in (body.initial_time_tracking_user_auth_ids or []))
-            )
+            raw_ids = [int(x) for x in (body.initial_time_tracking_user_auth_ids or [])]
+            amts = body.initial_time_tracking_user_billable_hourly_amounts or []
+            initial = list(dict.fromkeys(raw_ids))
             amount_by_uid = {}
+            if amts:
+                for i, uid in enumerate(raw_ids):
+                    amount_by_uid[uid] = amts[i]
         if initial:
             par = UserProjectAccessRepository(session)
             proj_currency = row.currency or "USD"

@@ -2,9 +2,9 @@
 
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal, Optional, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ReportVisibility = Literal["managers_only", "all_assigned"]
 ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable"]
@@ -80,6 +80,11 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         alias="initialTimeTrackingUserAuthIds",
         description="Доступ к новому проекту сразу после создания (auth_user_id в TT).",
     )
+    initial_time_tracking_user_billable_hourly_amounts: list[Optional[Decimal]] = Field(
+        default_factory=list,
+        alias="initialTimeTrackingUserBillableHourlyAmounts",
+        description="Billable за час по проекту, по порядку как в initialTimeTrackingUserAuthIds; та же длина.",
+    )
     initial_project_access_members: list[InitialProjectAccessMember] = Field(
         default_factory=list,
         alias="initialProjectAccessMembers",
@@ -90,6 +95,26 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         alias="accessGrantedByAuthUserId",
         description="Кто выдал доступ (аудит).",
     )
+
+    @model_validator(mode="after")
+    def _initial_access_billable_lists(self) -> Self:
+        ids = self.initial_time_tracking_user_auth_ids or []
+        amts = self.initial_time_tracking_user_billable_hourly_amounts or []
+        members = self.initial_project_access_members or []
+        if members and amts:
+            raise ValueError(
+                "Задайте либо initialProjectAccessMembers, либо initialTimeTrackingUserAuthIds + "
+                "initialTimeTrackingUserBillableHourlyAmounts, не оба варианта."
+            )
+        if amts and not ids:
+            raise ValueError(
+                "initialTimeTrackingUserBillableHourlyAmounts допустим только вместе с initialTimeTrackingUserAuthIds."
+            )
+        if amts and len(amts) != len(ids):
+            raise ValueError(
+                "Длина initialTimeTrackingUserBillableHourlyAmounts должна совпадать с initialTimeTrackingUserAuthIds."
+            )
+        return self
 
 
 class TimeManagerClientProjectPatchBody(BaseModel):
