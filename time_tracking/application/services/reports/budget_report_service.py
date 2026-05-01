@@ -22,6 +22,32 @@ from infrastructure.models import TimeEntryModel, TimeManagerClientProjectModel
 from application.services.reports._base import _d, _hours, _money, _ZERO, build_response
 
 
+def _progress_percent(spent: Decimal, limit: Decimal) -> float:
+    if limit <= _ZERO:
+        return 0.0
+    return round(float((spent / limit) * Decimal(100)), 2)
+
+
+def _attach_budget_compat_fields(
+    row: dict[str, Any],
+    *,
+    budget_value: float | None,
+    spent_value: float | None,
+    remaining_value: float | None,
+    progress_percent: float,
+) -> None:
+    row["budget_amount"] = budget_value
+    row["budget_spent_amount"] = spent_value
+    row["budget_remaining_amount"] = remaining_value
+    row["progress_percent"] = progress_percent
+
+    # camelCase compatibility for frontend mappers
+    row["budgetAmount"] = budget_value
+    row["budgetSpent"] = spent_value
+    row["budgetRemaining"] = remaining_value
+    row["progressPercent"] = progress_percent
+
+
 def _spent_hours_project(
     p: TimeManagerClientProjectModel,
     hours_by_project: dict[str, Decimal],
@@ -149,16 +175,37 @@ async def get_budget_report(
             row["budget"] = 0.0
             row["budget_spent"] = 0.0
             row["budget_remaining"] = 0.0
+            _attach_budget_compat_fields(
+                row,
+                budget_value=0.0,
+                spent_value=0.0,
+                remaining_value=0.0,
+                progress_percent=0.0,
+            )
         elif mode == "hours":
             row["has_budget"] = lim_h > _ZERO
             row["budget"] = _hours(lim_h)
             row["budget_spent"] = _hours(spent_h)
             row["budget_remaining"] = _hours(rem_h)
+            _attach_budget_compat_fields(
+                row,
+                budget_value=row["budget"],
+                spent_value=row["budget_spent"],
+                remaining_value=row["budget_remaining"],
+                progress_percent=_progress_percent(spent_h, lim_h),
+            )
         elif mode == "money":
             row["has_budget"] = lim_m > _ZERO
             row["budget"] = _money(lim_m)
             row["budget_spent"] = _money(spent_m)
             row["budget_remaining"] = _money(rem_m)
+            _attach_budget_compat_fields(
+                row,
+                budget_value=row["budget"],
+                spent_value=row["budget_spent"],
+                remaining_value=row["budget_remaining"],
+                progress_percent=_progress_percent(spent_m, lim_m),
+            )
         else:
             row["has_budget"] = (lim_h > _ZERO) or (lim_m > _ZERO)
             row["budget"] = None
@@ -170,6 +217,15 @@ async def get_budget_report(
             row["budget_money_limit"] = _money(lim_m)
             row["budget_money_spent"] = _money(spent_m)
             row["budget_money_remaining"] = _money(rem_m)
+            progress_h = _progress_percent(spent_h, lim_h) if lim_h > _ZERO else 0.0
+            progress_m = _progress_percent(spent_m, lim_m) if lim_m > _ZERO else 0.0
+            _attach_budget_compat_fields(
+                row,
+                budget_value=row["budget_money_limit"],
+                spent_value=row["budget_money_spent"],
+                remaining_value=row["budget_money_remaining"],
+                progress_percent=max(progress_h, progress_m),
+            )
 
         all_rows.append(row)
 
