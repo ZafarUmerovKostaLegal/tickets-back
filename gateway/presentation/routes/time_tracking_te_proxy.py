@@ -156,6 +156,10 @@ class ProjectAccessPutBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     project_ids: list[str] = Field(default_factory=list, alias="projectIds")
+    project_billable_hourly_amounts_by_project_id: dict[str, Decimal] = Field(
+        default_factory=dict,
+        alias="projectBillableHourlyAmountsByProjectId",
+    )
 
 
 async def project_access_get_gateway(auth_user_id: int) -> Any:
@@ -183,6 +187,11 @@ async def project_access_put_gateway(
         "project_ids": list(body.project_ids),
         "granted_by_auth_user_id": granted_by_auth_user_id,
     }
+    rates = body.project_billable_hourly_amounts_by_project_id or {}
+    if rates:
+        payload["project_billable_hourly_amounts_by_project_id"] = {
+            str(k): float(v) for k, v in rates.items()
+        }
     r = await send_upstream_request(
         "PUT",
         f"{base}/users/{auth_user_id}/project-access",

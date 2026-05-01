@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access_control import ensure_time_entry_subject_allowed
 from application.auth_user_directory import ensure_time_tracking_user_from_auth
-from application.project_billable_rate_sync import sync_project_billable_rates_to_assigned_users
+from application.project_billable_rate_sync import (
+    project_uses_shared_billable,
+    sync_project_billable_rates_to_assigned_users,
+    upsert_user_project_scoped_billable_rate,
+)
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from infrastructure.database import get_session
@@ -54,6 +58,26 @@ async def put_project_access(
     repo = UserProjectAccessRepository(session)
     projects = ClientProjectRepository(session)
     try:
+        raw_rates = body.project_billable_hourly_amounts_by_project_id or {}
+        rates_norm = {(k or "").strip(): v for k, v in raw_rates.items() if (k or "").strip()}
+        for pid in body.project_ids:
+            pid_key = (pid or "").strip()
+            if not pid_key:
+                continue
+            proj_row = await projects.get_by_id_global(pid_key)
+            if not proj_row or project_uses_shared_billable(proj_row):
+                continue
+            amt = rates_norm.get(pid_key)
+            if amt is not None and amt > 0:
+                await upsert_user_project_scoped_billable_rate(
+                    session,
+                    auth_user_id=auth_user_id,
+                    project_id=pid_key,
+                    amount=amt,
+                    currency=proj_row.currency or "USD",
+                    valid_from=proj_row.start_date,
+                    valid_to=proj_row.end_date,
+                )
         await validate_hourly_rates_for_project_access(
             session, auth_user_id=auth_user_id, project_ids=list(body.project_ids)
         )

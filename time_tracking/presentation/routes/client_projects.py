@@ -11,8 +11,10 @@ from application.budget_mode import normalize_budget_type_for_persist
 from application.client_task_defaults import seed_default_common_tasks_for_project
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from application.project_billable_rate_sync import (
+    project_uses_shared_billable,
     reapply_project_billable_mode,
     sync_project_billable_rates_to_assigned_users,
+    upsert_user_project_scoped_billable_rate,
 )
 from application.project_dashboard import build_client_project_dashboard
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
@@ -498,13 +500,33 @@ async def create_client_project(
         )
         await session.flush()
         await seed_default_common_tasks_for_project(session, str(row.id))
-        initial = list(
-            dict.fromkeys(int(x) for x in (body.initial_time_tracking_user_auth_ids or []))
-        )
+        members = body.initial_project_access_members or []
+        if members:
+            initial = list(dict.fromkeys(int(m.auth_user_id) for m in members))
+            amount_by_uid = {int(m.auth_user_id): m.billable_hourly_amount for m in members}
+        else:
+            initial = list(
+                dict.fromkeys(int(x) for x in (body.initial_time_tracking_user_auth_ids or []))
+            )
+            amount_by_uid = {}
         if initial:
             par = UserProjectAccessRepository(session)
+            proj_currency = row.currency or "USD"
+            pid_str = str(row.id)
             for uid in initial:
                 await ensure_time_tracking_user_from_auth(session, authorization, uid)
+                if not project_uses_shared_billable(row):
+                    amt = amount_by_uid.get(uid)
+                    if amt is not None and _d(amt) > 0:
+                        await upsert_user_project_scoped_billable_rate(
+                            session,
+                            auth_user_id=uid,
+                            project_id=pid_str,
+                            amount=_d(amt),
+                            currency=proj_currency,
+                            valid_from=row.start_date,
+                            valid_to=row.end_date,
+                        )
                 await validate_hourly_rates_for_project_access(
                     session, auth_user_id=uid, project_ids=[str(row.id)]
                 )
@@ -639,7 +661,9 @@ async def patch_client_project(
         updated = await repo.update(client_id, project_id, patch)
         if not updated:
             raise HTTPException(status_code=404, detail="Project not found")
-        await reapply_project_billable_mode(session, project_id, updated)
+        await reapply_project_billable_mode(
+            session, project_id, updated, project_row_before=row
+        )
         await session.commit()
     except IntegrityError:
         await session.rollback()

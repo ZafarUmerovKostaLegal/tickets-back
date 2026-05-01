@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -58,6 +59,46 @@ async def delete_billable_rates_scoped_to_project(session: AsyncSession, project
     )
 
 
+async def upsert_user_project_scoped_billable_rate(
+    session: AsyncSession,
+    *,
+    auth_user_id: int,
+    project_id: str,
+    amount: Decimal,
+    currency: str,
+    valid_from: date | None,
+    valid_to: date | None,
+) -> None:
+
+    pid = (project_id or "").strip()
+    if not pid or amount <= 0:
+        return
+    hr = HourlyRateRepository(session)
+    cur = normalize_currency(currency)
+    existing = [
+        r
+        for r in await hr.list_by_user_and_kind(auth_user_id, "billable")
+        if getattr(r, "applies_to_project_id", None) == pid
+    ]
+    if existing:
+        row = min(existing, key=lambda r: r.id)
+        await hr.update(
+            auth_user_id=auth_user_id,
+            rate_id=row.id,
+            patch={"amount": amount, "currency": cur, "valid_from": valid_from, "valid_to": valid_to},
+        )
+        return
+    await hr.create(
+        auth_user_id=auth_user_id,
+        rate_kind="billable",
+        amount=amount,
+        currency=cur,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        applies_to_project_id=pid,
+    )
+
+
 async def sync_project_billable_rates_to_assigned_users(
     session: AsyncSession,
     project_id: str,
@@ -68,7 +109,6 @@ async def sync_project_billable_rates_to_assigned_users(
     if not proj or not project_uses_shared_billable(proj):
         return
     par = UserProjectAccessRepository(session)
-    hr = HourlyRateRepository(session)
     uids = await par.list_auth_user_ids_for_project(project_id)
     amount = _d(proj.project_billable_rate_amount)
     if amount <= 0:
@@ -76,40 +116,31 @@ async def sync_project_billable_rates_to_assigned_users(
     cur = normalize_currency(proj.currency)
     vf, vt = proj.start_date, proj.end_date
     for uid in uids:
-        existing = [
-            r
-            for r in await hr.list_by_user_and_kind(uid, "billable")
-            if getattr(r, "applies_to_project_id", None) == project_id
-        ]
-        if existing:
-            row = min(existing, key=lambda r: r.id)
-            await hr.update(
-                auth_user_id=uid,
-                rate_id=row.id,
-                patch={"amount": amount, "currency": cur, "valid_from": vf, "valid_to": vt},
-            )
-        else:
-            await hr.create(
-                auth_user_id=uid,
-                rate_kind="billable",
-                amount=amount,
-                currency=cur,
-                valid_from=vf,
-                valid_to=vt,
-                applies_to_project_id=project_id,
-            )
+        await upsert_user_project_scoped_billable_rate(
+            session,
+            auth_user_id=uid,
+            project_id=project_id,
+            amount=amount,
+            currency=cur,
+            valid_from=vf,
+            valid_to=vt,
+        )
 
 
 async def reapply_project_billable_mode(
     session: AsyncSession,
     project_id: str,
     project_row: Any,
+    *,
+    project_row_before: Any | None = None,
 ) -> None:
 
     if not (project_id and str(project_id).strip()):
         return
     pid = str(project_id).strip()
-    if project_uses_shared_billable(project_row):
+    old_shared = project_row_before is not None and project_uses_shared_billable(project_row_before)
+    new_shared = project_uses_shared_billable(project_row)
+    if new_shared:
         await sync_project_billable_rates_to_assigned_users(session, pid)
-    else:
+    elif old_shared:
         await delete_billable_rates_scoped_to_project(session, pid)

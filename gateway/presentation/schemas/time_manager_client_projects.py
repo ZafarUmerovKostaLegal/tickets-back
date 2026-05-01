@@ -11,6 +11,17 @@ ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable"]
 ProjectCurrency = Literal["USD", "UZS", "EUR", "RUB", "GBP"]
 
 
+class InitialProjectAccessMember(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    auth_user_id: int = Field(..., alias="authUserId")
+    billable_hourly_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="billableHourlyAmount",
+    )
+
+
 class TimeManagerClientProjectCreateBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -68,6 +79,11 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         default_factory=list,
         alias="initialTimeTrackingUserAuthIds",
         description="Доступ к новому проекту сразу после создания (auth_user_id в TT).",
+    )
+    initial_project_access_members: list[InitialProjectAccessMember] = Field(
+        default_factory=list,
+        alias="initialProjectAccessMembers",
+        description="Участники с billable-ставкой по проекту; непустой список задаёт состав команды.",
     )
     access_granted_by_auth_user_id: Optional[int] = Field(
         None,

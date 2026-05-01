@@ -292,6 +292,14 @@ class ProjectAccessPutBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     project_ids: list[str] = Field(default_factory=list, alias="projectIds")
+    project_billable_hourly_amounts_by_project_id: dict[str, Decimal] = Field(
+        default_factory=dict,
+        alias="projectBillableHourlyAmountsByProjectId",
+        description=(
+            "Опционально: для проектов без режима «ставка по проекту» — billable-ставка за час, "
+            "привязанная к проекту (как при назначении). Ключ — id проекта."
+        ),
+    )
     granted_by_auth_user_id: Optional[int] = Field(
         None,
         alias="grantedByAuthUserId",
@@ -533,6 +541,22 @@ class TimeManagerClientProjectOut(BaseModel):
     deletable: bool = True
 
 
+class InitialProjectAccessMember(BaseModel):
+
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    auth_user_id: int = Field(..., alias="authUserId")
+    billable_hourly_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="billableHourlyAmount",
+        description=(
+            "Оплачиваемая ставка за час для этого участника на данном проекте; сохраняется с привязкой к проекту."
+        ),
+    )
+
+
 class TimeManagerClientProjectCreateBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -598,7 +622,16 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         description=(
             "Сразу выдать доступ к создаваемому проекту этим пользователям (auth_user_id). "
             "Если пользователя ещё нет в таблице time_tracking_users, он будет подтянут из auth по токену запроса. "
-            "Дальше действуют проверки почасовых ставок в валюте проекта и правила партнёра по команде."
+            "Дальше действуют проверки почасовых ставок в валюте проекта и правила партнёра по команде. "
+            "Если задан initialProjectAccessMembers, состав команды берётся оттуда (поле ниже может быть пустым)."
+        ),
+    )
+    initial_project_access_members: list[InitialProjectAccessMember] = Field(
+        default_factory=list,
+        alias="initialProjectAccessMembers",
+        description=(
+            "Участники при создании проекта с опциональной billable-ставкой по проекту на человека. "
+            "Непустой список заменяет собой initialTimeTrackingUserAuthIds для состава команды."
         ),
     )
     access_granted_by_auth_user_id: int | None = Field(
