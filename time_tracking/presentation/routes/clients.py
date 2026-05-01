@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from application.client_expense_category_defaults import seed_default_expense_categories_for_client
-from application.client_task_defaults import seed_default_common_tasks_for_client
 from infrastructure.database import get_session
 from infrastructure.repositories import ClientRepository
 from presentation.schemas import (
@@ -99,7 +98,6 @@ async def create_client(
         contact_email=body.contact_email,
         is_archived=body.is_archived,
     )
-    await seed_default_common_tasks_for_client(session, row.id)
     await seed_default_expense_categories_for_client(session, row.id)
     await session.commit()
     row = await repo.get_by_id_with_contacts(row.id)

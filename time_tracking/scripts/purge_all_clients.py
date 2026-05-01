@@ -45,12 +45,14 @@ async def _run(*, dry_run: bool) -> int:
         )
         project_ids = [x[0] for x in rp.all()]
 
-        rt = await session.execute(
-            select(TimeManagerClientTaskModel.id).where(
-                TimeManagerClientTaskModel.client_id.in_(client_ids)
+        task_ids: list = []
+        if project_ids:
+            rt = await session.execute(
+                select(TimeManagerClientTaskModel.id).where(
+                    TimeManagerClientTaskModel.project_id.in_(project_ids)
+                )
             )
-        )
-        task_ids = [x[0] for x in rt.all()]
+            task_ids = [x[0] for x in rt.all()]
 
         conds = []
         if project_ids:

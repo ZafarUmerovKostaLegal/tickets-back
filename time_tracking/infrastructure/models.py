@@ -176,19 +176,17 @@ class TimeManagerClientTaskModel(Base):
 
 
     __tablename__ = "time_tracking_client_tasks"
-    __table_args__ = (Index("ix_tt_client_tasks_client", "client_id"),)
+    __table_args__ = (Index("ix_tt_client_tasks_project", "project_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    client_id: Mapped[str] = mapped_column(
+    project_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("time_tracking_clients.id", ondelete="CASCADE"),
+        ForeignKey("time_tracking_client_projects.id", ondelete="CASCADE"),
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     default_billable_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     billable_by_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    common_for_future_projects: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    add_to_existing_projects: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

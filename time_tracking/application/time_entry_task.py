@@ -28,10 +28,10 @@ async def resolve_time_entry_task_for_project(
     if not proj:
         raise HTTPException(status_code=400, detail="Проект не найден")
     ctr = ClientTaskRepository(session)
-    task = await ctr.get_by_id(proj.client_id, raw)
+    task = await ctr.get_by_id(pid, raw)
     if not task:
         raise HTTPException(
             status_code=400,
-            detail="Задача не найдена или не относится к клиенту этого проекта",
+            detail="Задача не найдена или не относится к этому проекту",
         )
     return raw, bool(task.billable_by_default)

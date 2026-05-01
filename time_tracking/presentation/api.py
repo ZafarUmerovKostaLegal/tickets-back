@@ -7,7 +7,7 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from application.client_expense_category_defaults import (
     seed_default_expense_categories_for_all_clients,
 )
-from application.client_task_defaults import seed_default_common_tasks_for_all_clients
+from application.client_task_defaults import seed_default_tasks_for_all_projects_missing_tasks
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure import models_reports
@@ -15,6 +15,7 @@ from infrastructure import models_invoices
 from infrastructure.schema_patches import (
     apply_client_expense_categories_schema_patch,
     apply_client_projects_schema_patch,
+    apply_client_tasks_project_scope_migration,
     apply_client_tasks_schema_patch,
     apply_team_workload_schema_patch,
     apply_client_extra_contacts_schema_patch,
@@ -60,9 +61,10 @@ async def lifespan(app: FastAPI):
         await apply_team_workload_schema_patch(conn)
         await apply_time_manager_clients_schema_patch(conn)
         await apply_client_extra_contacts_schema_patch(conn)
-        await apply_client_tasks_schema_patch(conn)
         await apply_client_expense_categories_schema_patch(conn)
         await apply_client_projects_schema_patch(conn)
+        await apply_client_tasks_schema_patch(conn)
+        await apply_client_tasks_project_scope_migration(conn)
         await apply_user_project_access_patch(conn)
         await apply_time_entries_task_id_schema_patch(conn)
         await apply_time_entries_hours_precision_patch(conn)
@@ -76,7 +78,7 @@ async def lifespan(app: FastAPI):
         await apply_client_projects_project_billable_amount_patch(conn)
         await apply_hourly_rates_applies_to_project_patch(conn)
     async with async_session_factory() as session:
-        await seed_default_common_tasks_for_all_clients(session)
+        await seed_default_tasks_for_all_projects_missing_tasks(session)
         await seed_default_expense_categories_for_all_clients(session)
 
         await renormalize_time_entries_to_minute(session)

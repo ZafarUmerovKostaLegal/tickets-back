@@ -408,15 +408,13 @@ class TimeManagerClientContactPatchBody(BaseModel):
 class TimeManagerClientTaskOut(BaseModel):
 
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
-    client_id: str
+    project_id: str
     name: str
     default_billable_rate: Optional[Decimal] = None
     billable_by_default: bool
-    common_for_future_projects: bool
-    add_to_existing_projects: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -427,8 +425,6 @@ class TimeManagerClientTaskCreateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=500)
     default_billable_rate: Optional[Decimal] = Field(None, alias="defaultBillableRate", ge=0)
     billable_by_default: bool = Field(True, alias="billableByDefault")
-    common_for_future_projects: bool = Field(False, alias="commonForFutureProjects")
-    add_to_existing_projects: bool = Field(False, alias="addToExistingProjects")
 
 
 class TimeManagerClientTaskPatchBody(BaseModel):
@@ -437,8 +433,6 @@ class TimeManagerClientTaskPatchBody(BaseModel):
     name: Optional[str] = Field(None, max_length=500)
     default_billable_rate: Optional[Decimal] = Field(None, alias="defaultBillableRate", ge=0)
     billable_by_default: Optional[bool] = Field(None, alias="billableByDefault")
-    common_for_future_projects: Optional[bool] = Field(None, alias="commonForFutureProjects")
-    add_to_existing_projects: Optional[bool] = Field(None, alias="addToExistingProjects")
 
 
 class TimeManagerClientExpenseCategoryOut(BaseModel):
@@ -602,8 +596,9 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         default_factory=list,
         alias="initialTimeTrackingUserAuthIds",
         description=(
-            "Сразу выдать доступ к создаваемому проекту этим пользователям TT (auth_user_id). "
-            "Действуют те же проверки: почасовые ставки в валюте проекта, на проекте с командой — партнёр по position."
+            "Сразу выдать доступ к создаваемому проекту этим пользователям (auth_user_id). "
+            "Если пользователя ещё нет в таблице time_tracking_users, он будет подтянут из auth по токену запроса. "
+            "Дальше действуют проверки почасовых ставок в валюте проекта и правила партнёра по команде."
         ),
     )
     access_granted_by_auth_user_id: int | None = Field(

@@ -6,7 +6,9 @@ from datetime import date
 from io import StringIO
 from typing import Literal
 
+from application.auth_user_directory import ensure_time_tracking_user_from_auth
 from application.budget_mode import normalize_budget_type_for_persist
+from application.client_task_defaults import seed_default_common_tasks_for_project
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from application.project_billable_rate_sync import (
     reapply_project_billable_mode,
@@ -495,17 +497,14 @@ async def create_client_project(
             is_archived=body.is_archived,
         )
         await session.flush()
+        await seed_default_common_tasks_for_project(session, str(row.id))
         initial = list(
             dict.fromkeys(int(x) for x in (body.initial_time_tracking_user_auth_ids or []))
         )
         if initial:
             par = UserProjectAccessRepository(session)
-            tur = TimeTrackingUserRepository(session)
             for uid in initial:
-                if not await tur.get_by_auth_user_id(uid):
-                    raise ValueError(
-                        f"Пользователь не найден в учёте времени (auth_user_id={uid}).",
-                    )
+                await ensure_time_tracking_user_from_auth(session, authorization, uid)
                 await validate_hourly_rates_for_project_access(
                     session, auth_user_id=uid, project_ids=[str(row.id)]
                 )

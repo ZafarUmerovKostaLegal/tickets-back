@@ -178,12 +178,14 @@ class ClientRepository:
             )
         )
         project_ids = [x[0] for x in rp.all()]
-        rt = await self._session.execute(
-            select(TimeManagerClientTaskModel.id).where(
-                TimeManagerClientTaskModel.client_id == client_id
+        task_ids: list = []
+        if project_ids:
+            rt = await self._session.execute(
+                select(TimeManagerClientTaskModel.id).where(
+                    TimeManagerClientTaskModel.project_id.in_(project_ids)
+                )
             )
-        )
-        task_ids = [x[0] for x in rt.all()]
+            task_ids = [x[0] for x in rt.all()]
 
         await self._session.execute(delete(InvoiceModel).where(InvoiceModel.client_id == client_id))
 
@@ -282,19 +284,19 @@ class ClientTaskRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def list_for_client(self, client_id: str) -> list[TimeManagerClientTaskModel]:
+    async def list_for_project(self, project_id: str) -> list[TimeManagerClientTaskModel]:
         q = (
             select(TimeManagerClientTaskModel)
-            .where(TimeManagerClientTaskModel.client_id == client_id)
+            .where(TimeManagerClientTaskModel.project_id == project_id)
             .order_by(TimeManagerClientTaskModel.name.asc())
         )
         r = await self._session.execute(q)
         return list(r.scalars().all())
 
-    async def get_by_id(self, client_id: str, task_id: str) -> TimeManagerClientTaskModel | None:
+    async def get_by_id(self, project_id: str, task_id: str) -> TimeManagerClientTaskModel | None:
         r = await self._session.execute(
             select(TimeManagerClientTaskModel).where(
-                TimeManagerClientTaskModel.client_id == client_id,
+                TimeManagerClientTaskModel.project_id == project_id,
                 TimeManagerClientTaskModel.id == task_id,
             )
         )
@@ -303,29 +305,34 @@ class ClientTaskRepository:
     async def create(
         self,
         *,
-        client_id: str,
+        project_id: str,
         name: str,
         default_billable_rate: Decimal | None,
         billable_by_default: bool,
-        common_for_future_projects: bool,
-        add_to_existing_projects: bool,
     ) -> TimeManagerClientTaskModel:
         row = TimeManagerClientTaskModel(
             id=str(uuid.uuid4()),
-            client_id=client_id,
+            project_id=project_id,
             name=name.strip(),
             default_billable_rate=default_billable_rate,
             billable_by_default=billable_by_default,
-            common_for_future_projects=common_for_future_projects,
-            add_to_existing_projects=add_to_existing_projects,
             created_at=_now_utc(),
             updated_at=None,
         )
         self._session.add(row)
         return row
 
-    async def update(self, client_id: str, task_id: str, patch: dict[str, Any]) -> TimeManagerClientTaskModel | None:
-        row = await self.get_by_id(client_id, task_id)
+    async def copy_tasks_from_project(self, source_project_id: str, target_project_id: str) -> None:
+        for t in await self.list_for_project(source_project_id):
+            await self.create(
+                project_id=target_project_id,
+                name=t.name,
+                default_billable_rate=t.default_billable_rate,
+                billable_by_default=t.billable_by_default,
+            )
+
+    async def update(self, project_id: str, task_id: str, patch: dict[str, Any]) -> TimeManagerClientTaskModel | None:
+        row = await self.get_by_id(project_id, task_id)
         if not row:
             return None
         if "name" in patch and patch["name"] is not None:
@@ -335,21 +342,17 @@ class ClientTaskRepository:
             row.default_billable_rate = None if v is None else _decimal_none(v)
         if "billable_by_default" in patch:
             row.billable_by_default = bool(patch["billable_by_default"])
-        if "common_for_future_projects" in patch:
-            row.common_for_future_projects = bool(patch["common_for_future_projects"])
-        if "add_to_existing_projects" in patch:
-            row.add_to_existing_projects = bool(patch["add_to_existing_projects"])
         row.updated_at = _now_utc()
         self._session.add(row)
         return row
 
-    async def delete(self, client_id: str, task_id: str) -> bool:
-        row = await self.get_by_id(client_id, task_id)
+    async def delete(self, project_id: str, task_id: str) -> bool:
+        row = await self.get_by_id(project_id, task_id)
         if not row:
             return False
         await self._session.execute(
             delete(TimeManagerClientTaskModel).where(
-                TimeManagerClientTaskModel.client_id == client_id,
+                TimeManagerClientTaskModel.project_id == project_id,
                 TimeManagerClientTaskModel.id == task_id,
             )
         )
@@ -654,7 +657,7 @@ class ClientProjectRepository:
         if not src:
             return None
         new_code = await self.allocate_duplicate_code(client_id, src.code)
-        return await self.create(
+        new_row = await self.create(
             client_id=client_id,
             name=self._name_with_copy_suffix(src.name),
             code=new_code,
@@ -677,6 +680,19 @@ class ClientProjectRepository:
             fixed_fee_amount=src.fixed_fee_amount,
             is_archived=False,
         )
+        await self._session.flush()
+        ctr = ClientTaskRepository(self._session)
+        await ctr.copy_tasks_from_project(project_id, new_row.id)
+        qc = await self._session.execute(
+            select(func.count()).select_from(TimeManagerClientTaskModel).where(
+                TimeManagerClientTaskModel.project_id == new_row.id
+            )
+        )
+        if int(qc.scalar_one() or 0) == 0:
+            from application.client_task_defaults import seed_default_common_tasks_for_project
+
+            await seed_default_common_tasks_for_project(self._session, new_row.id)
+        return new_row
 
     async def time_entries_count(self, project_id: str) -> int:
         q = select(func.count()).select_from(TimeEntryModel).where(

@@ -160,12 +160,10 @@ async def apply_client_tasks_schema_patch(conn: AsyncConnection) -> None:
             """
             CREATE TABLE IF NOT EXISTS time_tracking_client_tasks (
                 id VARCHAR(36) PRIMARY KEY,
-                client_id VARCHAR(36) NOT NULL REFERENCES time_tracking_clients (id) ON DELETE CASCADE,
+                project_id VARCHAR(36) NOT NULL REFERENCES time_tracking_client_projects (id) ON DELETE CASCADE,
                 name VARCHAR(500) NOT NULL,
                 default_billable_rate NUMERIC(18, 4),
                 billable_by_default BOOLEAN NOT NULL DEFAULT TRUE,
-                common_for_future_projects BOOLEAN NOT NULL DEFAULT FALSE,
-                add_to_existing_projects BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ
             )
@@ -175,10 +173,89 @@ async def apply_client_tasks_schema_patch(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
             """
-            CREATE INDEX IF NOT EXISTS ix_tt_client_tasks_client
-                ON time_tracking_client_tasks (client_id)
+            CREATE INDEX IF NOT EXISTS ix_tt_client_tasks_project
+                ON time_tracking_client_tasks (project_id)
             """
         )
+    )
+
+
+async def apply_client_tasks_project_scope_migration(conn: AsyncConnection) -> None:
+
+    r = await conn.execute(
+        text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'time_tracking_client_tasks'
+            )
+            """
+        )
+    )
+    if not (r.scalar() or False):
+        return
+    cols = await conn.execute(
+        text(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'time_tracking_client_tasks'
+            """
+        )
+    )
+    colset = {row[0] for row in cols.fetchall()}
+    if "client_id" not in colset:
+        return
+
+    await conn.execute(text("ALTER TABLE time_tracking_client_tasks ADD COLUMN IF NOT EXISTS project_id VARCHAR(36)"))
+    await conn.execute(
+        text(
+            """
+            UPDATE time_tracking_client_tasks AS t
+            SET project_id = p.id
+            FROM (
+                SELECT DISTINCT ON (client_id) id, client_id
+                FROM time_tracking_client_projects
+                ORDER BY client_id, created_at ASC NULLS LAST, id ASC
+            ) AS p
+            WHERE t.project_id IS NULL AND t.client_id = p.client_id
+            """
+        )
+    )
+    await conn.execute(text("DELETE FROM time_tracking_client_tasks WHERE project_id IS NULL"))
+    await conn.execute(text("DROP INDEX IF EXISTS ix_tt_client_tasks_client"))
+    await conn.execute(text("ALTER TABLE time_tracking_client_tasks DROP COLUMN IF EXISTS client_id"))
+    await conn.execute(text("ALTER TABLE time_tracking_client_tasks ALTER COLUMN project_id SET NOT NULL"))
+    await conn.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'time_tracking_client_tasks_project_id_fkey'
+                ) THEN
+                    ALTER TABLE time_tracking_client_tasks
+                        ADD CONSTRAINT time_tracking_client_tasks_project_id_fkey
+                        FOREIGN KEY (project_id)
+                        REFERENCES time_tracking_client_projects (id) ON DELETE CASCADE;
+                END IF;
+            END $$;
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_client_tasks_project
+                ON time_tracking_client_tasks (project_id)
+            """
+        )
+    )
+    await conn.execute(
+        text("ALTER TABLE time_tracking_client_tasks DROP COLUMN IF EXISTS common_for_future_projects")
+    )
+    await conn.execute(
+        text("ALTER TABLE time_tracking_client_tasks DROP COLUMN IF EXISTS add_to_existing_projects")
     )
 
 

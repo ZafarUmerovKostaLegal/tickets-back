@@ -594,33 +594,40 @@ async def list_time_manager_clients(
     return await _tt_json("GET", "/clients", params=params)
 
 
-@router.get("/clients/{client_id}/tasks")
-async def list_client_tasks(client_id: str, _: dict = Depends(require_view_role)):
-    return await _tt_json("GET", f"/clients/{client_id}/tasks")
-
-
-@router.get("/clients/{client_id}/tasks/{task_id}")
-async def get_client_task(
+@router.get("/clients/{client_id}/projects/{project_id}/tasks")
+async def list_project_tasks(
     client_id: str,
+    project_id: str,
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("GET", f"/clients/{client_id}/projects/{project_id}/tasks")
+
+
+@router.get("/clients/{client_id}/projects/{project_id}/tasks/{task_id}")
+async def get_project_task(
+    client_id: str,
+    project_id: str,
     task_id: str,
     _: dict = Depends(require_view_role),
 ):
-    return await _tt_json("GET", f"/clients/{client_id}/tasks/{task_id}")
+    return await _tt_json("GET", f"/clients/{client_id}/projects/{project_id}/tasks/{task_id}")
 
 
-@router.post("/clients/{client_id}/tasks")
-async def create_client_task(
+@router.post("/clients/{client_id}/projects/{project_id}/tasks")
+async def create_project_task(
     client_id: str,
+    project_id: str,
     body: TimeManagerClientTaskCreateBody,
     _: dict = Depends(require_manage_role),
 ):
     payload = _alias_free_payload(body, "task")
-    return await _tt_json("POST", f"/clients/{client_id}/tasks", json=payload)
+    return await _tt_json("POST", f"/clients/{client_id}/projects/{project_id}/tasks", json=payload)
 
 
-@router.patch("/clients/{client_id}/tasks/{task_id}")
-async def patch_client_task(
+@router.patch("/clients/{client_id}/projects/{project_id}/tasks/{task_id}")
+async def patch_project_task(
     client_id: str,
+    project_id: str,
     task_id: str,
     body: TimeManagerClientTaskPatchBody,
     _: dict = Depends(require_manage_role),
@@ -628,16 +635,21 @@ async def patch_client_task(
     payload = _alias_free_payload(body, "task", exclude_unset=True)
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
-    return await _tt_json("PATCH", f"/clients/{client_id}/tasks/{task_id}", json=payload)
+    return await _tt_json(
+        "PATCH",
+        f"/clients/{client_id}/projects/{project_id}/tasks/{task_id}",
+        json=payload,
+    )
 
 
-@router.delete("/clients/{client_id}/tasks/{task_id}", status_code=204)
-async def delete_client_task(
+@router.delete("/clients/{client_id}/projects/{project_id}/tasks/{task_id}", status_code=204)
+async def delete_project_task(
     client_id: str,
+    project_id: str,
     task_id: str,
     _: dict = Depends(require_manage_role),
 ):
-    await _tt_json("DELETE", f"/clients/{client_id}/tasks/{task_id}")
+    await _tt_json("DELETE", f"/clients/{client_id}/projects/{project_id}/tasks/{task_id}")
     return None
 
 
