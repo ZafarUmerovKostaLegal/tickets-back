@@ -248,17 +248,8 @@ async def _tt_managed_scope_user_ids(manager_auth_user_id: int) -> set[int]:
 
 
 async def require_view_time_tracking_user_directory(user: dict = Depends(get_current_user)):
-
-    role = (user.get("role") or "").strip()
-    if role in _VIEW_ROLES_TIME_ENTRIES:
-        return user
-    tt_role = await _fetch_time_tracking_user_role(_current_auth_user_id(user))
-    if tt_role == "manager":
-        return user
-    raise HTTPException(
-        status_code=403,
-        detail="Only administrators and office managers can view time tracking users",
-    )
+    # Any authenticated user can open time-entry UI.
+    return user
 
 
 async def require_time_entry_read(
@@ -546,7 +537,10 @@ async def list_partner_users(user: dict = Depends(require_view_time_tracking_use
     if role in _VIEW_ROLES_TIME_ENTRIES:
         return await _tt_json("GET", "/users/partners")
     mid = _current_auth_user_id(user)
-    return await _tt_json("GET", f"/users/managed-scope/{mid}/partners")
+    tt_role = await _fetch_time_tracking_user_role(mid)
+    if tt_role == "manager":
+        return await _tt_json("GET", f"/users/managed-scope/{mid}/partners")
+    return []
 
 
 @router.get("/users")
@@ -555,7 +549,11 @@ async def list_users(user: dict = Depends(require_view_time_tracking_user_direct
     if role in _VIEW_ROLES_TIME_ENTRIES:
         return await _tt_json("GET", "/users")
     mid = _current_auth_user_id(user)
-    return await _tt_json("GET", f"/users/managed-scope/{mid}")
+    tt_role = await _fetch_time_tracking_user_role(mid)
+    if tt_role == "manager":
+        return await _tt_json("GET", f"/users/managed-scope/{mid}")
+    me = await _tt_json("GET", f"/users/{mid}")
+    return [me] if isinstance(me, dict) else []
 
 
 @router.post("/users")
