@@ -3,12 +3,19 @@
 import csv
 import json
 from datetime import date
+from decimal import Decimal
 from io import StringIO
 from typing import Literal
 
 from application.auth_user_directory import ensure_time_tracking_user_from_auth
-from application.budget_mode import normalize_budget_type_for_persist
+from application.budget_mode import (
+    budget_limit_hours,
+    budget_limit_money,
+    budget_mode,
+    normalize_budget_type_for_persist,
+)
 from application.client_task_defaults import seed_default_common_tasks_for_project
+from application.entry_pricing import _billable_amount_for_entry
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from application.project_billable_rate_sync import (
     project_uses_shared_billable,
@@ -18,15 +25,18 @@ from application.project_billable_rate_sync import (
 )
 from application.project_dashboard import build_client_project_dashboard
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
-from application.services.reports._base import _d
+from application.report_builder import _load_user_rates
+from application.services.reports._base import _ZERO, _d, _hours, _money
 from application.access_control import ensure_can_list_project_assignees
 from application.project_team_workload import compute_project_team_workload
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from infrastructure.database import get_session
+from infrastructure.models import TimeEntryModel
 from infrastructure.repositories import (
     ClientProjectRepository,
     TimeTrackingUserRepository,
@@ -225,13 +235,100 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
     )
 
 
+def _progress_percent(spent, limit) -> float:
+    if limit <= _ZERO:
+        return 0.0
+    return round(float((spent / limit) * 100), 2)
+
+
+async def _project_budget_metrics(
+    session: AsyncSession,
+    rows: list,
+) -> dict[str, dict[str, float]]:
+    pids = [str(r.id) for r in rows]
+    if not pids:
+        return {}
+    q = select(TimeEntryModel).where(
+        TimeEntryModel.project_id.in_(pids),
+        TimeEntryModel.voided_at.is_(None),
+    )
+    entries = list((await session.execute(q)).scalars().all())
+    user_ids = list({int(e.auth_user_id) for e in entries})
+    rates_map = await _load_user_rates(session, user_ids or None)
+    spent_hours: dict[str, Decimal] = {}
+    spent_money: dict[str, Decimal] = {}
+    projects_by_id = {str(r.id): r for r in rows}
+    for e in entries:
+        pid = (e.project_id or "").strip()
+        if not pid:
+            continue
+        h = _d(e.hours)
+        spent_hours[pid] = spent_hours.get(pid, _ZERO) + h
+        if not e.is_billable:
+            continue
+        p = projects_by_id.get(pid)
+        cur = (getattr(p, "currency", None) or "USD") if p else "USD"
+        amt, _ = _billable_amount_for_entry(
+            h,
+            e.is_billable,
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=cur,
+            time_entry_project_id=pid,
+        )
+        spent_money[pid] = spent_money.get(pid, _ZERO) + amt
+    out: dict[str, dict[str, float]] = {}
+    for r in rows:
+        pid = str(r.id)
+        mode = budget_mode(r)
+        lim_h = budget_limit_hours(r)
+        lim_m = budget_limit_money(r)
+        sh = spent_hours.get(pid, _ZERO)
+        sm = spent_money.get(pid, _ZERO)
+        rh = max(_ZERO, lim_h - sh) if lim_h > _ZERO else _ZERO
+        rm = max(_ZERO, lim_m - sm) if lim_m > _ZERO else _ZERO
+        if mode == "hours":
+            out[pid] = {
+                "budget_display_value": _hours(lim_h),
+                "budget_spent_value": _hours(sh),
+                "budget_remaining_value": _hours(rh),
+                "budget_progress_percent": _progress_percent(sh, lim_h),
+            }
+        elif mode in ("money", "hours_and_money"):
+            out[pid] = {
+                "budget_display_value": _money(lim_m),
+                "budget_spent_value": _money(sm),
+                "budget_remaining_value": _money(rm),
+                "budget_progress_percent": _progress_percent(sm, lim_m),
+            }
+        else:
+            out[pid] = {
+                "budget_display_value": 0.0,
+                "budget_spent_value": 0.0,
+                "budget_remaining_value": 0.0,
+                "budget_progress_percent": 0.0,
+            }
+    return out
+
+
 async def _client_projects_to_out(
+    session: AsyncSession,
     repo: ClientProjectRepository,
     rows: list,
 ) -> list[TimeManagerClientProjectOut]:
     pids = [r.id for r in rows]
     usage_map = await repo.time_entries_counts_by_project_ids(pids)
-    return [_project_out(r, usage_map.get(r.id, 0)) for r in rows]
+    budget_map = await _project_budget_metrics(session, rows)
+    out: list[TimeManagerClientProjectOut] = []
+    for r in rows:
+        row_out = _project_out(r, usage_map.get(r.id, 0))
+        bm = budget_map.get(str(r.id), {})
+        row_out.budget_display_value = bm.get("budget_display_value")
+        row_out.budget_spent_value = bm.get("budget_spent_value")
+        row_out.budget_remaining_value = bm.get("budget_remaining_value")
+        row_out.budget_progress_percent = bm.get("budget_progress_percent")
+        out.append(row_out)
+    return out
 
 
 def _validate_date_range(start: date | None, end: date | None) -> None:
@@ -355,7 +452,7 @@ async def list_client_projects(
         rows, total = await repo.list_for_client_paginated(
             client_id, include_archived=include_archived, limit=limit, offset=offset
         )
-    out = await _client_projects_to_out(repo, rows)
+    out = await _client_projects_to_out(session, repo, rows)
     if limit is None:
         return out
     return {"items": out, "total": total, "limit": limit, "offset": offset}
@@ -376,7 +473,14 @@ async def get_client_project(
     if not row:
         raise HTTPException(status_code=404, detail="Project not found")
     usage = await repo.time_entries_count(row.id)
-    return _project_out(row, usage)
+    out = _project_out(row, usage)
+    bm = await _project_budget_metrics(session, [row])
+    one = bm.get(str(row.id), {})
+    out.budget_display_value = one.get("budget_display_value")
+    out.budget_spent_value = one.get("budget_spent_value")
+    out.budget_remaining_value = one.get("budget_remaining_value")
+    out.budget_progress_percent = one.get("budget_progress_percent")
+    return out
 
 
 @router.get("/{client_id}/projects/{project_id}/dashboard")
