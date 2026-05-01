@@ -581,7 +581,7 @@ async def list_time_manager_clients(
     include_archived: bool = Query(False, alias="includeArchived"),
     limit: Optional[int] = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_view_time_tracking_user_directory),
 ):
     params: dict[str, str] = {
         "includeArchived": "true" if include_archived else "false",
@@ -596,7 +596,7 @@ async def list_time_manager_clients(
 async def list_project_tasks(
     client_id: str,
     project_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_view_time_tracking_user_directory),
 ):
     return await _tt_json("GET", f"/clients/{client_id}/projects/{project_id}/tasks")
 
@@ -606,7 +606,7 @@ async def get_project_task(
     client_id: str,
     project_id: str,
     task_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_view_time_tracking_user_directory),
 ):
     return await _tt_json("GET", f"/clients/{client_id}/projects/{project_id}/tasks/{task_id}")
 
@@ -841,7 +841,7 @@ async def list_client_projects(
     include_archived: bool = Query(False, alias="includeArchived"),
     limit: Optional[int] = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_view_time_tracking_user_directory),
 ):
     params: dict[str, str] = {
         "includeArchived": "true" if include_archived else "false",
@@ -856,7 +856,7 @@ async def list_client_projects(
 async def get_client_project(
     client_id: str,
     project_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_view_time_tracking_user_directory),
 ):
     return await _tt_json("GET", f"/clients/{client_id}/projects/{project_id}")
 
@@ -955,7 +955,10 @@ async def delete_client_project(
 
 
 @router.get("/clients/{client_id}")
-async def get_time_manager_client(client_id: str, _: dict = Depends(require_view_role)):
+async def get_time_manager_client(
+    client_id: str,
+    _: dict = Depends(require_view_time_tracking_user_directory),
+):
     return await _tt_json("GET", f"/clients/{client_id}")
 
 
