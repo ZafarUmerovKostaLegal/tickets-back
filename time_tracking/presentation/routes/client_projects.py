@@ -516,8 +516,13 @@ async def create_client_project(
             par = UserProjectAccessRepository(session)
             proj_currency = row.currency or "USD"
             pid_str = str(row.id)
+            has_members_payload = bool(members)
+            has_parallel_amounts_payload = bool(
+                body.initial_time_tracking_user_billable_hourly_amounts
+            )
             for uid in initial:
                 await ensure_time_tracking_user_from_auth(session, authorization, uid)
+                applied_project_scoped_rate = False
                 if not project_uses_shared_billable(row):
                     amt = amount_by_uid.get(uid)
                     if amt is not None and _d(amt) > 0:
@@ -530,9 +535,17 @@ async def create_client_project(
                             valid_from=row.start_date,
                             valid_to=row.end_date,
                         )
-                await validate_hourly_rates_for_project_access(
-                    session, auth_user_id=uid, project_ids=[str(row.id)]
+                        applied_project_scoped_rate = True
+                should_validate_rates = (
+                    project_uses_shared_billable(row)
+                    or applied_project_scoped_rate
+                    or has_members_payload
+                    or has_parallel_amounts_payload
                 )
+                if should_validate_rates:
+                    await validate_hourly_rates_for_project_access(
+                        session, auth_user_id=uid, project_ids=[str(row.id)]
+                    )
                 await par.grant_access_if_absent(
                     uid,
                     str(row.id),
