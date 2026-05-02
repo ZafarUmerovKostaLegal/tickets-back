@@ -13,7 +13,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from application.entry_pricing import _billable_amount_for_entry
+from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
 from application.report_builder import (
     _fetch_expense_report_data,
     _load_projects_map,
@@ -273,7 +273,16 @@ async def _append_time_line(
         time_entry_project_id=entry.project_id,
     )
     line_total = _money4(amt)
-    unit = _money4(line_total / qty) if qty > 0 else Decimal(0)
+    rate_amt, _rate_cur = _billable_rate_for_entry(
+        entry.work_date,
+        user_rates,
+        project_currency=pc,
+        time_entry_project_id=entry.project_id,
+    )
+    if rate_amt is not None:
+        unit = _money4(rate_amt)
+    else:
+        unit = _money4(line_total / qty) if qty > 0 else Decimal(0)
     desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
     repo.add_line(
         InvoiceLineItemModel(

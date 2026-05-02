@@ -48,3 +48,22 @@ def test_pick_rate_for_date() -> None:
     )
     assert pick_rate_for_date([r1, r2], date(2024, 3, 15)) is r1
     assert pick_rate_for_date([r1, r2], date(2024, 8, 1)) is r2
+
+
+def test_pick_rate_for_date_overlap_prefers_latest_valid_from() -> None:
+    """Если два интервала покрывают одну дату — должна браться более поздняя ставка."""
+    old_rate = SimpleNamespace(
+        id="rate-old",
+        valid_from=date(2023, 1, 1),
+        valid_to=None,
+        amount=100,
+    )
+    new_rate = SimpleNamespace(
+        id="rate-new",
+        valid_from=date(2025, 6, 1),
+        valid_to=None,
+        amount=250,
+    )
+    d = date(2026, 4, 1)
+    assert pick_rate_for_date([old_rate, new_rate], d) is new_rate
+    assert pick_rate_for_date([new_rate, old_rate], d) is new_rate
