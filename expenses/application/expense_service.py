@@ -53,18 +53,6 @@ ALLOWED_PAYMENT_METHODS = frozenset({"cash", "card", "transfer", "other_payment"
 REGISTRY_STATUSES = frozenset({"approved", "paid", "closed"})
 
 
-REPORT_INCLUSION_STATUSES = frozenset(
-    {
-        "pending_approval",
-        "revision_required",
-        "approved",
-        "paid",
-        "closed",
-        "not_reimbursable",
-    }
-)
-
-
 def calc_equivalent(amount_uzs: Decimal, exchange_rate: Decimal) -> Decimal:
 
     if exchange_rate <= 0:

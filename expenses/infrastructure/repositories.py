@@ -395,11 +395,7 @@ class ExpenseRepository:
         project_ids: list[str] | None = None,
     ) -> list[ExpenseRequestModel]:
 
-        from application.expense_service import REPORT_INCLUSION_STATUSES
-
-        statuses = tuple(REPORT_INCLUSION_STATUSES)
         conds = [
-            ExpenseRequestModel.status.in_(list(statuses)),
             ExpenseRequestModel.expense_date >= date_from,
             ExpenseRequestModel.expense_date <= date_to,
         ]
