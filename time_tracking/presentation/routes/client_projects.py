@@ -735,7 +735,7 @@ async def patch_client_project(
     if "project_type" in patch and patch["project_type"] is not None:
         pt = patch["project_type"]
         patch["project_type"] = pt.value if hasattr(pt, "value") else str(pt)
-    if "is_archived" in patch and patch["is_archived"] is not None:
+    if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
 
     if any(

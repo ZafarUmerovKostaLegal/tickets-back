@@ -162,7 +162,7 @@ class ClientRepository:
         if "contact_email" in patch:
             v = patch["contact_email"]
             row.contact_email = str(v).strip()[:320] if v is not None and str(v).strip() else None
-        if "is_archived" in patch and patch["is_archived"] is not None:
+        if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
         row.updated_at = _now_utc()
         self._session.add(row)
@@ -827,7 +827,7 @@ class ClientProjectRepository:
             row.currency = cur
         if "fixed_fee_amount" in patch:
             row.fixed_fee_amount = _decimal_none(patch["fixed_fee_amount"])
-        if "is_archived" in patch and patch["is_archived"] is not None:
+        if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
         row.updated_at = _now_utc()
         self._session.add(row)

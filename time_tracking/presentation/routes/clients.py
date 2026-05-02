@@ -115,7 +115,7 @@ async def patch_client(
     patch = body.model_dump(exclude_unset=True, mode="json", by_alias=False)
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
-    if "is_archived" in patch and patch["is_archived"] is not None:
+    if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
     row = await repo.update(client_id, patch)
     if not row:
