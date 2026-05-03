@@ -5,7 +5,7 @@ import json
 import uuid
 from datetime import date
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -194,6 +194,30 @@ class PartnerReportConfirmationRepository:
         row.status = _STATUS_CONFIRMED
         row.updated_at = _now_utc()
         self._s.add(row)
+
+    async def has_fully_confirmed_for_project_period(
+        self,
+        project_id: str,
+        date_from: date,
+        date_to: date,
+    ) -> bool:
+        pid = (project_id or "").strip()
+        if not pid:
+            return False
+        q = (
+            select(func.count())
+            .select_from(ReportPartnerConfirmationRequestModel)
+            .where(
+                and_(
+                    ReportPartnerConfirmationRequestModel.project_id == pid,
+                    ReportPartnerConfirmationRequestModel.date_from == date_from,
+                    ReportPartnerConfirmationRequestModel.date_to == date_to,
+                    ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED,
+                )
+            )
+        )
+        n = int((await self._s.execute(q)).scalar_one() or 0)
+        return n > 0
 
     async def list_all_fully_confirmed(
         self,

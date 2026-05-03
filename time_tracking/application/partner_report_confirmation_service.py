@@ -76,6 +76,27 @@ def _request_to_out(m, required_partners: list[int]) -> dict:
     }
 
 
+def can_bypass_partner_confirmation_gate(viewer: dict) -> bool:
+    """Для расширений (например аварийный обход владельцами); по умолчанию не используется."""
+    return _viewer_can_see_all_confirmations(viewer)
+
+
+async def ensure_fully_confirmed_partner_period_or_403(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    date_from: date,
+    date_to: date,
+) -> None:
+    repo = PartnerReportConfirmationRepository(session)
+    if not await repo.has_fully_confirmed_for_project_period(project_id, date_from, date_to):
+        raise HTTPException(
+            status_code=403,
+            detail="Нет полного подтверждения партнёров за указанный период по этому проекту. "
+            "Сначала отправьте отчёт на подтверждение и дождитесь подписей всех партнёров проекта.",
+        )
+
+
 async def submit_partner_report_confirmation(
     session: AsyncSession,
     viewer: dict,

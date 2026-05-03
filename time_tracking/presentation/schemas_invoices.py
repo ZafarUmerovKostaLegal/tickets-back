@@ -37,6 +37,16 @@ class InvoiceCreateBody(BaseModel):
     lines: Optional[list[InvoiceLineCreateSpec]] = None
     time_entry_ids: Optional[list[str]] = Field(None, alias="timeEntryIds")
     expense_ids: Optional[list[str]] = Field(None, alias="expenseIds")
+    partner_billing_period_from: Optional[date] = Field(
+        None,
+        alias="partnerBillingPeriodFrom",
+        description="Начало периода биллинга; должен совпадать с ранее подтверждённым у партнёров",
+    )
+    partner_billing_period_to: Optional[date] = Field(
+        None,
+        alias="partnerBillingPeriodTo",
+        description="Конец периода биллинга; должен совпадать с подтверждением партнёров",
+    )
 
 
 class InvoicePatchBody(BaseModel):

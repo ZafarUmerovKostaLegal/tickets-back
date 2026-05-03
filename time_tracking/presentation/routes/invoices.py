@@ -23,8 +23,14 @@ from application.invoice_service import (
     register_payment,
     send_invoice,
 )
+from application.partner_report_confirmation_service import (
+    ensure_fully_confirmed_partner_period_or_403,
+)
 from infrastructure.database import get_session
 from infrastructure.repository_invoices import InvoiceRepository
+from infrastructure.repository_partner_report_confirmations import (
+    PartnerReportConfirmationRepository,
+)
 from presentation.schemas_invoices import InvoiceCreateBody, InvoicePatchBody, InvoicePaymentBody
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
@@ -45,6 +51,12 @@ async def unbilled_time(
 ):
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="dateTo < dateFrom")
+    await ensure_fully_confirmed_partner_period_or_403(
+        session,
+        project_id=project_id.strip(),
+        date_from=date_from,
+        date_to=date_to,
+    )
     return await list_unbilled_time_entries(
         session, project_id=project_id, date_from=date_from, date_to=date_to,
     )
@@ -59,6 +71,12 @@ async def unbilled_expenses(
 ):
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="dateTo < dateFrom")
+    await ensure_fully_confirmed_partner_period_or_403(
+        session,
+        project_id=project_id.strip(),
+        date_from=date_from,
+        date_to=date_to,
+    )
     return await list_unbilled_expenses(
         session, project_id=project_id, date_from=date_from, date_to=date_to,
     )
@@ -98,7 +116,34 @@ async def list_invoices(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     include_total: bool = Query(False, alias="includeTotalCount"),
+    partner_billing_project_id: Optional[str] = Query(None, alias="partnerBillingProjectId"),
+    partner_billing_period_from: Optional[date] = Query(None, alias="partnerBillingPeriodFrom"),
+    partner_billing_period_to: Optional[date] = Query(None, alias="partnerBillingPeriodTo"),
 ):
+    trio_set = (
+        partner_billing_project_id
+        and partner_billing_period_from is not None
+        and partner_billing_period_to is not None
+    )
+    if trio_set:
+        if partner_billing_period_to < partner_billing_period_from:
+            raise HTTPException(status_code=400, detail="partnerBillingPeriodTo < partnerBillingPeriodFrom")
+        conf_repo = PartnerReportConfirmationRepository(session)
+        if not await conf_repo.has_fully_confirmed_for_project_period(
+            partner_billing_project_id.strip(),
+            partner_billing_period_from,
+            partner_billing_period_to,
+        ):
+            payload: dict = {
+                "items": [],
+                "limit": limit,
+                "offset": offset,
+                "partnerConfirmationBlocked": True,
+            }
+            if include_total:
+                payload["totalCount"] = 0
+            return payload
+
     repo = InvoiceRepository(session)
     rows = await repo.list_invoices(
         client_id=client_id,
@@ -149,6 +194,8 @@ async def create_invoice_route(
         lines=lines_payload,
         time_entry_ids=body.time_entry_ids,
         expense_ids=body.expense_ids,
+        partner_billing_period_from=body.partner_billing_period_from,
+        partner_billing_period_to=body.partner_billing_period_to,
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(inv.id)

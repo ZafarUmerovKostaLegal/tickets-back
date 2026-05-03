@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
+from application.partner_report_confirmation_service import (
+    ensure_fully_confirmed_partner_period_or_403,
+)
 from application.report_builder import (
     _fetch_expense_report_data,
     _load_projects_map,
@@ -155,6 +158,8 @@ async def create_invoice(
     lines: list[dict[str, Any]] | None,
     time_entry_ids: list[str] | None,
     expense_ids: list[str] | None,
+    partner_billing_period_from: date | None = None,
+    partner_billing_period_to: date | None = None,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -165,6 +170,39 @@ async def create_invoice(
         if not proj or proj.client_id != client_id:
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
     cur = (currency or client.currency or "USD").strip()[:10] or "USD"
+
+    needs_partner_confirmation = bool(time_entry_ids) or bool(expense_ids) or (
+        bool(lines) and len(lines) > 0 and bool((project_id or "").strip())
+    )
+    if needs_partner_confirmation:
+        eff_pid = (project_id or "").strip() or None
+        if not eff_pid and time_entry_ids:
+            row = (
+                await session.execute(
+                    select(TimeEntryModel.project_id).where(TimeEntryModel.id == time_entry_ids[0])
+                )
+            ).scalar_one_or_none()
+            eff_pid = str(row).strip() if row is not None else None
+        if not eff_pid:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите projectId для счёта с временем, расходами или строками по проекту",
+            )
+        if partner_billing_period_from is None or partner_billing_period_to is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите partnerBillingPeriodFrom и partnerBillingPeriodTo "
+                "(период должен совпадать с подтверждённым у партнёров)",
+            )
+        if partner_billing_period_to < partner_billing_period_from:
+            raise HTTPException(status_code=400, detail="partnerBillingPeriodTo не может быть раньше partnerBillingPeriodFrom")
+        await ensure_fully_confirmed_partner_period_or_403(
+            session,
+            project_id=eff_pid,
+            date_from=partner_billing_period_from,
+            date_to=partner_billing_period_to,
+        )
+
     tp = tax_percent if tax_percent is not None else client.tax_percent
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
     dp = discount_percent if discount_percent is not None else client.discount_percent
