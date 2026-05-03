@@ -910,6 +910,7 @@ async def get_client_project_dashboard(
                 exp = r.json()
                 if isinstance(dashboard, dict) and isinstance(dashboard.get("totals"), dict):
                     dashboard["totals"]["expense_amount_uzs"] = exp.get("total_amount_uzs", 0)
+                    dashboard["totals"]["expense_equivalent_total"] = float(exp.get("total_equivalent_amount") or 0)
                     dashboard["totals"]["expense_count"] = exp.get("count", 0)
     except Exception:
         pass

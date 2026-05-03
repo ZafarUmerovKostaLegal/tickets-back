@@ -19,7 +19,6 @@ from application.report_builder import (
     _load_projects_map,
     _load_user_cost_rates,
     _load_user_rates,
-    filter_expense_rows_to_tt_projects,
 )
 from application.services.reports._base import _d, _money
 from application.budget_mode import budget_limit_hours, budget_limit_money, budget_mode
@@ -214,14 +213,14 @@ async def build_client_project_dashboard(
     df_eff = date_from or date(2000, 1, 1)
     dt_eff = date_to or date.today()
     raw_exp = await _fetch_expense_report_data(df_eff, dt_eff, None, [project_id])
-    _pmap = await _load_projects_map(session)
-    raw_exp = filter_expense_rows_to_tt_projects(raw_exp, _pmap)
     exp_uzs = Decimal(0)
+    exp_equiv = Decimal(0)
     exp_n = 0
     for row in raw_exp:
         if str(row.get("project_id") or "") != str(project_id):
             continue
         exp_uzs += _d(row.get("amount_uzs", 0) or 0)
+        exp_equiv += _d(row.get("equivalent_amount", 0) or 0)
         exp_n += 1
 
     inv_repo = InvoiceRepository(session)
@@ -318,6 +317,7 @@ async def build_client_project_dashboard(
             "internal_costs_complete": not cost_any_incomplete,
             "unbilled_amount": float(_money(unbilled_bill)),
             "expense_amount_uzs": float(_money(exp_uzs)),
+            "expense_equivalent_total": float(_money(exp_equiv)),
             "expense_count": exp_n,
         },
         "progress_by_week": progress_by_week,

@@ -314,8 +314,13 @@ def filter_expense_rows_to_tt_projects(
     rows: list[dict],
     projects_map: dict[str, Any],
 ) -> list[dict]:
-
-    return [r for r in rows if (str(r.get("project_id") or "")).strip() in projects_map]
+    pmap_lower = {str(k).strip().lower(): k for k in projects_map.keys()}
+    out: list[dict] = []
+    for r in rows:
+        pl = str(r.get("project_id") or "").strip().lower()
+        if pl in pmap_lower:
+            out.append(r)
+    return out
 
 
 async def _load_users_map(session: AsyncSession) -> dict[int, TimeTrackingUserModel]:

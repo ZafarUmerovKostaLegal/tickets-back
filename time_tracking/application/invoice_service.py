@@ -19,8 +19,6 @@ from application.partner_report_confirmation_service import (
 )
 from application.report_builder import (
     _fetch_expense_report_data,
-    _load_projects_map,
-    filter_expense_rows_to_tt_projects,
     _load_user_rates,
 )
 from application.report_builder import _d as dec
@@ -426,8 +424,6 @@ async def _load_expense_rows_for_project(
     df = date(2000, 1, 1)
     dt = date(2099, 12, 31)
     rows = await _fetch_expense_report_data(df, dt, None, [project_id])
-    pmap = await _load_projects_map(session)
-    rows = filter_expense_rows_to_tt_projects(rows, pmap)
     by_id = {str(r["id"]): r for r in rows if r.get("id")}
     return {eid: by_id[eid] for eid in expense_ids if eid in by_id}
 
@@ -864,8 +860,6 @@ async def list_unbilled_expenses(
 ) -> list[dict[str, Any]]:
     repo = InvoiceRepository(session)
     rows = await _fetch_expense_report_data(date_from, date_to, None, [project_id])
-    pmap = await _load_projects_map(session)
-    rows = filter_expense_rows_to_tt_projects(rows, pmap)
     candidates = [r for r in rows if r.get("is_reimbursable") and r.get("id")]
     eids = [str(r["id"]) for r in candidates]
     invoiced = await repo.invoiced_expense_ids(eids)

@@ -17,10 +17,17 @@ from application.report_builder import (
     _load_user_rates,
     _load_users_map,
     _fetch_expense_report_data,
-    filter_expense_rows_to_tt_projects,
 )
 from infrastructure.models import TimeEntryModel
-from application.services.reports._base import _d, _hours, _money, _ZERO, build_response
+from application.services.reports._base import (
+    _d,
+    _hours,
+    _money,
+    _ZERO,
+    build_response,
+    canonical_tt_project_id,
+    project_ids_for_clients_norm,
+)
 
 
 async def get_uninvoiced_report(
@@ -70,12 +77,11 @@ async def get_uninvoiced_report(
 
 
     raw_expenses = await _fetch_expense_report_data(date_from, date_to, user_ids, project_ids)
-    raw_expenses = filter_expense_rows_to_tt_projects(raw_expenses, projects_map)
     if client_ids:
-        client_ids_set = set(client_ids)
+        allowed_pids = project_ids_for_clients_norm(projects_map, client_ids)
         raw_expenses = [
             e for e in raw_expenses
-            if _get_expense_client_id(e, projects_map) in client_ids_set
+            if str(e.get("project_id") or "").strip().lower() in allowed_pids
         ]
 
 
@@ -127,7 +133,7 @@ async def get_uninvoiced_report(
 
     uninv_expenses_by_project: dict[str | None, Decimal] = {}
     for e in raw_expenses:
-        pid = e.get("project_id")
+        pid = canonical_tt_project_id(e.get("project_id"), projects_map)
         amt = _d(e.get("equivalent_amount", 0) or e.get("amount_uzs", 0))
         uninv_expenses_by_project[pid] = uninv_expenses_by_project.get(pid, _ZERO) + amt
 
@@ -203,8 +209,3 @@ def _build_users_list(user_buckets: dict, users_map: dict) -> list[dict[str, Any
         })
     result.sort(key=lambda r: r["uninvoiced_hours"], reverse=True)
     return result
-
-
-def _get_expense_client_id(e: dict, projects_map: dict) -> str | None:
-    p = projects_map.get(e.get("project_id")) if e.get("project_id") else None
-    return p.client_id if p else None

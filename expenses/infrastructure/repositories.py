@@ -369,8 +369,9 @@ class ExpenseRepository:
         statuses = tuple(REGISTRY_STATUSES)
         from sqlalchemy import and_
 
+        pid_norm = (project_id or "").strip().lower()
         conds = [
-            ExpenseRequestModel.project_id == project_id,
+            func.lower(ExpenseRequestModel.project_id) == pid_norm,
             ExpenseRequestModel.status.in_(list(statuses)),
         ]
         if date_from is not None:
@@ -380,11 +381,16 @@ class ExpenseRepository:
 
         stmt = select(
             func.coalesce(func.sum(ExpenseRequestModel.amount_uzs), 0),
+            func.coalesce(func.sum(ExpenseRequestModel.equivalent_amount), 0),
             func.count(),
         ).where(and_(*conds))
         r = await self._session.execute(stmt)
-        total_uzs, count = r.one()
-        return {"total_amount_uzs": float(total_uzs), "count": int(count)}
+        total_uzs, total_equiv, count = r.one()
+        return {
+            "total_amount_uzs": float(total_uzs),
+            "total_equivalent_amount": float(total_equiv),
+            "count": int(count),
+        }
 
     async def list_for_report(
         self,
@@ -402,7 +408,9 @@ class ExpenseRepository:
         if user_ids:
             conds.append(ExpenseRequestModel.created_by_user_id.in_(user_ids))
         if project_ids:
-            conds.append(ExpenseRequestModel.project_id.in_(project_ids))
+            norms = [str(p).strip().lower() for p in project_ids if str(p).strip()]
+            if norms:
+                conds.append(func.lower(ExpenseRequestModel.project_id).in_(norms))
 
         conds.append(ExpenseRequestModel.project_id.isnot(None))
         conds.append(ExpenseRequestModel.project_id != "")

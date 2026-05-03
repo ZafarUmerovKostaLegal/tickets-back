@@ -16,7 +16,14 @@ from application.report_builder import (
     _load_users_map,
 )
 from infrastructure.models import TimeManagerClientExpenseCategoryModel
-from application.services.reports._base import _d, _money, _ZERO, build_response
+from application.services.reports._base import (
+    _d,
+    _money,
+    _ZERO,
+    build_response,
+    canonical_tt_project_id,
+    project_ids_for_clients_norm,
+)
 
 EXPENSE_GROUP_OPTIONS = frozenset({"clients", "projects", "categories", "team"})
 
@@ -50,10 +57,10 @@ async def get_expense_report(
     categories_map = await _load_expense_categories_map(session)
 
     if client_ids:
-        client_ids_set = set(client_ids)
+        allowed_pids = project_ids_for_clients_norm(projects_map, client_ids)
         raw_expenses = [
             e for e in raw_expenses
-            if _get_client_id_for_expense(e, projects_map) in client_ids_set
+            if str(e.get("project_id") or "").strip().lower() in allowed_pids
         ]
 
 
@@ -112,13 +119,16 @@ async def get_expense_report_all_rows(
 
 
 def _get_client_id_for_expense(e: dict, projects_map: dict) -> str | None:
-    p = projects_map.get(e.get("project_id")) if e.get("project_id") else None
+    pid = canonical_tt_project_id(e.get("project_id"), projects_map)
+    if not pid:
+        return None
+    p = projects_map.get(pid)
     return p.client_id if p else None
 
 
 def _get_group_id(e: dict, group_by: str, projects_map: dict) -> Any:
     if group_by == "projects":
-        return e.get("project_id")
+        return canonical_tt_project_id(e.get("project_id"), projects_map)
     elif group_by == "clients":
         return _get_client_id_for_expense(e, projects_map)
     elif group_by == "categories":

@@ -11,6 +11,30 @@ _Q6 = Decimal("0.000001")
 _ZERO = Decimal(0)
 
 
+def project_ids_for_clients_norm(projects_map: dict[str, Any], client_ids: list[str]) -> set[str]:
+    norm_clients = {str(c).strip().lower() for c in client_ids if str(c).strip()}
+    return {
+        str(pid).strip().lower()
+        for pid, p in projects_map.items()
+        if getattr(p, "client_id", None) is not None
+        and str(p.client_id).strip().lower() in norm_clients
+    }
+
+
+def canonical_tt_project_id(raw_pid: Any, projects_map: dict[str, Any]) -> Any:
+
+    if raw_pid is None:
+        return None
+    s = str(raw_pid).strip()
+    if not s:
+        return None
+    sl = s.lower()
+    for k in projects_map.keys():
+        if str(k).strip().lower() == sl:
+            return k
+    return s
+
+
 def _d(v: Any) -> Decimal:
     if isinstance(v, Decimal):
         return v
