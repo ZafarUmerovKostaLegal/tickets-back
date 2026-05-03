@@ -92,6 +92,20 @@ async def time_entries_list_gateway(auth_user_id: int, request: Request) -> Any:
     return r.json()
 
 
+async def time_entries_get_gateway(auth_user_id: int, entry_id: str) -> Any:
+    base = _base()
+    r = await send_upstream_request(
+        "GET",
+        f"{base}/users/{auth_user_id}/time-entries/{entry_id}",
+        headers=merge_upstream_headers(),
+        timeout=15.0,
+        unavailable_status=503,
+        unavailable_detail="Time tracking service unavailable",
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    return r.json()
+
+
 async def time_entries_create_gateway(auth_user_id: int, body: TimeEntryCreateBody) -> Any:
     base = _base()
     r = await send_upstream_request(

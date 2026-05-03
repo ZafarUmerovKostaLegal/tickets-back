@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import and_, select
@@ -566,7 +566,51 @@ async def delete_draft_invoice(
     await session.delete(inv)
 
 
-def invoice_to_dict(inv: InvoiceModel, *, include_lines: bool = True, include_payments: bool = False) -> dict:
+async def load_time_entry_hints_for_invoice_lines(
+    session: AsyncSession,
+    line_items: Iterable[InvoiceLineItemModel],
+) -> dict[str, tuple[date, int]]:
+    """Дата работы и автор записи времени для строк счёта (§3 BACKEND_SPEC_INVOICE_DOCUMENTS)."""
+    ids = [
+        str(li.time_entry_id)
+        for li in line_items
+        if li.line_kind == "time" and li.time_entry_id
+    ]
+    uniq = list(dict.fromkeys(ids))
+    if not uniq:
+        return {}
+    q = select(TimeEntryModel.id, TimeEntryModel.work_date, TimeEntryModel.auth_user_id).where(
+        TimeEntryModel.id.in_(uniq)
+    )
+    rows = (await session.execute(q)).all()
+    return {str(tid): (wd, int(uid)) for tid, wd, uid in rows}
+
+
+async def invoice_to_dict_async(
+    session: AsyncSession,
+    inv: InvoiceModel,
+    *,
+    include_lines: bool = True,
+    include_payments: bool = False,
+) -> dict[str, Any]:
+    hints: dict[str, tuple[date, int]] = {}
+    if include_lines and inv.line_items:
+        hints = await load_time_entry_hints_for_invoice_lines(session, inv.line_items)
+    return invoice_to_dict(
+        inv,
+        include_lines=include_lines,
+        include_payments=include_payments,
+        time_entry_hints=hints,
+    )
+
+
+def invoice_to_dict(
+    inv: InvoiceModel,
+    *,
+    include_lines: bool = True,
+    include_payments: bool = False,
+    time_entry_hints: dict[str, tuple[date, int]] | None = None,
+) -> dict[str, Any]:
     eff = effective_invoice_status(inv)
     out: dict[str, Any] = {
         "id": inv.id,
@@ -598,9 +642,11 @@ def invoice_to_dict(inv: InvoiceModel, *, include_lines: bool = True, include_pa
         "updatedAt": inv.updated_at.isoformat() if inv.updated_at else None,
     }
     if include_lines:
+        hints = time_entry_hints or {}
         lines = sorted(inv.line_items, key=lambda x: (x.sort_order, x.id))
-        out["lines"] = [
-            {
+        built: list[dict[str, Any]] = []
+        for li in lines:
+            row: dict[str, Any] = {
                 "id": li.id,
                 "sortOrder": li.sort_order,
                 "lineKind": li.line_kind,
@@ -611,8 +657,23 @@ def invoice_to_dict(inv: InvoiceModel, *, include_lines: bool = True, include_pa
                 "timeEntryId": li.time_entry_id,
                 "expenseRequestId": li.expense_request_id,
             }
-            for li in lines
-        ]
+            row["sort_order"] = row["sortOrder"]
+            row["line_kind"] = row["lineKind"]
+            row["unit_amount"] = row["unitAmount"]
+            row["line_total"] = row["lineTotal"]
+            row["time_entry_id"] = row["timeEntryId"]
+            row["expense_request_id"] = row["expenseRequestId"]
+            if li.line_kind == "time" and li.time_entry_id:
+                hint = hints.get(str(li.time_entry_id))
+                if hint:
+                    wd, auth_uid = hint
+                    row["timeEntryWorkDate"] = wd.isoformat()
+                    row["timeAuthorAuthUserId"] = auth_uid
+                    row["time_entry_work_date"] = row["timeEntryWorkDate"]
+                    row["time_author_auth_user_id"] = auth_uid
+            built.append(row)
+        out["lines"] = built
+        out["line_items"] = built
     if include_payments:
         pays = sorted(inv.payments, key=lambda x: x.paid_at)
         out["payments"] = [

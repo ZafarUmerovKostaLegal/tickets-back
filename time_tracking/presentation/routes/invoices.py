@@ -15,6 +15,7 @@ from application.invoice_service import (
     delete_draft_invoice,
     get_invoices_aggregated_stats,
     invoice_to_dict,
+    invoice_to_dict_async,
     list_unbilled_expenses,
     list_unbilled_time_entries,
     mark_viewed,
@@ -152,7 +153,7 @@ async def create_invoice_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(inv.id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.get("/{invoice_id}/audit")
@@ -187,7 +188,7 @@ async def get_invoice(
     if not inv:
         raise HTTPException(status_code=404, detail="Счёт не найден")
     await repo.reconcile_paid_fields(inv)
-    return invoice_to_dict(inv, include_lines=True, include_payments=include_payments)
+    return await invoice_to_dict_async(session, inv, include_lines=True, include_payments=include_payments)
 
 
 @router.patch("/{invoice_id}")
@@ -217,7 +218,7 @@ async def patch_invoice_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.post("/{invoice_id}/send")
@@ -233,7 +234,7 @@ async def send_invoice_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.post("/{invoice_id}/mark-viewed")
@@ -249,7 +250,7 @@ async def mark_viewed_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.post("/{invoice_id}/payments")
@@ -285,7 +286,7 @@ async def add_payment_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.post("/{invoice_id}/cancel")
@@ -301,7 +302,7 @@ async def cancel_invoice_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return invoice_to_dict(inv2, include_lines=True, include_payments=True)
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.delete("/{invoice_id}", status_code=204)

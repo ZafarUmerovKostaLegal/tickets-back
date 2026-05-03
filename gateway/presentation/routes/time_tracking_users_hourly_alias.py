@@ -32,6 +32,7 @@ from presentation.routes.time_tracking_te_proxy import (
     project_access_put_gateway,
     time_entries_create_gateway,
     time_entries_delete_gateway,
+    time_entries_get_gateway,
     time_entries_list_gateway,
     time_entries_patch_gateway,
     time_entry_edit_unlock_gateway,
@@ -93,6 +94,15 @@ async def list_time_entries_under_users(
     _: dict = Depends(require_time_entry_read),
 ):
     return await time_entries_list_gateway(auth_user_id, request)
+
+
+@router.get("/{auth_user_id}/time-entries/{entry_id}")
+async def get_time_entry_under_users(
+    auth_user_id: int,
+    entry_id: str,
+    _: dict = Depends(require_time_entry_read),
+):
+    return await time_entries_get_gateway(auth_user_id, entry_id)
 
 
 @router.post("/{auth_user_id}/time-entries")

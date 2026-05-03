@@ -111,6 +111,22 @@ async def list_time_entries(
     return [TimeEntryOut.model_validate(r) for r in rows]
 
 
+@router.get("/{auth_user_id}/time-entries/{entry_id}", response_model=TimeEntryOut)
+async def get_time_entry(
+    auth_user_id: int,
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> TimeEntryOut:
+    await ensure_time_entry_subject_allowed(session, viewer, auth_user_id, write=False)
+    await _ensure_user(session, auth_user_id)
+    repo = TimeEntryRepository(session)
+    row = await repo.get_by_id(auth_user_id, entry_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    return TimeEntryOut.model_validate(row)
+
+
 @router.post("/{auth_user_id}/time-entries", response_model=TimeEntryOut)
 async def create_time_entry(
     auth_user_id: int,
