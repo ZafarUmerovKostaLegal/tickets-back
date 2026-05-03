@@ -7,7 +7,9 @@ from datetime import date
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import JSONResponse
 
 from application.invoice_service import (
     cancel_invoice,
@@ -38,6 +40,15 @@ from presentation.schemas_invoices import (
 )
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
+
+_INVOICE_NO_STORE_HEADERS = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
+
+
+def _invoice_json_response(payload: dict[str, Any]) -> JSONResponse:
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers=_INVOICE_NO_STORE_HEADERS,
+    )
 
 
 @router.get("/unbilled-time")
@@ -221,7 +232,12 @@ async def get_invoice(
     if not inv:
         raise HTTPException(status_code=404, detail="Счёт не найден")
     await repo.reconcile_paid_fields(inv)
-    return await invoice_to_dict_async(session, inv, include_lines=True, include_payments=include_payments)
+    await session.commit()
+    inv = await repo.get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    payload = await invoice_to_dict_async(session, inv, include_lines=True, include_payments=include_payments)
+    return _invoice_json_response(payload)
 
 
 @router.patch("/{invoice_id}")
@@ -319,7 +335,8 @@ async def add_payment_route(
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
-    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+    payload = await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+    return _invoice_json_response(payload)
 
 
 @router.post("/{invoice_id}/payment-confirmation")
@@ -343,7 +360,8 @@ async def record_payment_confirmation_route(
     await session.commit()
     inv2 = await repo.get_with_children(invoice_id)
     assert inv2
-    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+    payload = await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+    return _invoice_json_response(payload)
 
 
 @router.post("/{invoice_id}/cancel")
