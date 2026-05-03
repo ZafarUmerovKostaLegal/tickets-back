@@ -201,8 +201,13 @@ class PartnerReportConfirmationRepository:
         date_from: date,
         date_to: date,
     ) -> bool:
+        """Есть ли полное подтверждение партнёров, период которого **целиком охватывает** [date_from, date_to].
+
+        Раньше требовалось точное совпадение дат с записью подтверждения — из‑за этого счёт/unbilled
+        блокировались, если UI передавал более узкий диапазон внутри уже подтверждённого месяца.
+        """
         pid = (project_id or "").strip()
-        if not pid:
+        if not pid or date_to < date_from:
             return False
         q = (
             select(func.count())
@@ -210,9 +215,9 @@ class PartnerReportConfirmationRepository:
             .where(
                 and_(
                     ReportPartnerConfirmationRequestModel.project_id == pid,
-                    ReportPartnerConfirmationRequestModel.date_from == date_from,
-                    ReportPartnerConfirmationRequestModel.date_to == date_to,
                     ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED,
+                    ReportPartnerConfirmationRequestModel.date_from <= date_from,
+                    ReportPartnerConfirmationRequestModel.date_to >= date_to,
                 )
             )
         )

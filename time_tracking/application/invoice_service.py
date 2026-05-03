@@ -192,7 +192,7 @@ async def create_invoice(
             raise HTTPException(
                 status_code=400,
                 detail="Укажите partnerBillingPeriodFrom и partnerBillingPeriodTo "
-                "(период должен совпадать с подтверждённым у партнёров)",
+                "(интервал биллинга должен полностью входить в уже подтверждённый партнёрами период по проекту)",
             )
         if partner_billing_period_to < partner_billing_period_from:
             raise HTTPException(status_code=400, detail="partnerBillingPeriodTo не может быть раньше partnerBillingPeriodFrom")

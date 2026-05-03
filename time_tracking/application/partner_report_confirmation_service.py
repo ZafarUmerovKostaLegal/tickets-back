@@ -92,7 +92,8 @@ async def ensure_fully_confirmed_partner_period_or_403(
     if not await repo.has_fully_confirmed_for_project_period(project_id, date_from, date_to):
         raise HTTPException(
             status_code=403,
-            detail="Нет полного подтверждения партнёров за указанный период по этому проекту. "
+            detail="Нет полного подтверждения партнёров, охватывающего указанный период по этому проекту "
+            "(интервал должен полностью входить в даты подтверждённого отчёта). "
             "Сначала отправьте отчёт на подтверждение и дождитесь подписей всех партнёров проекта.",
         )
 

@@ -40,12 +40,12 @@ class InvoiceCreateBody(BaseModel):
     partner_billing_period_from: Optional[date] = Field(
         None,
         alias="partnerBillingPeriodFrom",
-        description="Начало периода биллинга; должен совпадать с ранее подтверждённым у партнёров",
+        description="Начало периода биллинга; весь интервал [from, to] должен входить в подтверждённый период",
     )
     partner_billing_period_to: Optional[date] = Field(
         None,
         alias="partnerBillingPeriodTo",
-        description="Конец периода биллинга; должен совпадать с подтверждением партнёров",
+        description="Конец периода биллинга; вместе с from — подмножество подтверждённых дат по проекту",
     )
 
 
