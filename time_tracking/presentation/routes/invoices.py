@@ -20,7 +20,8 @@ from application.invoice_service import (
     list_unbilled_time_entries,
     mark_viewed,
     patch_invoice_draft,
-    register_payment,
+    record_payment,
+    record_payment_confirmation_document,
     send_invoice,
 )
 from infrastructure.database import get_session
@@ -28,15 +29,15 @@ from infrastructure.repository_invoices import InvoiceRepository
 from infrastructure.repository_partner_report_confirmations import (
     PartnerReportConfirmationRepository,
 )
-from presentation.schemas_invoices import InvoiceCreateBody, InvoicePatchBody, InvoicePaymentBody
+from presentation.deps import invoice_actor_auth_user_id
+from presentation.schemas_invoices import (
+    InvoiceCreateBody,
+    InvoicePatchBody,
+    InvoicePaymentBody,
+    InvoicePaymentConfirmationBody,
+)
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
-
-
-def _actor(actor_auth_user_id: int = Query(..., alias="actorAuthUserId")) -> int:
-    if actor_auth_user_id < 0:
-        raise HTTPException(status_code=400, detail="actorAuthUserId")
-    return actor_auth_user_id
 
 
 @router.get("/unbilled-time")
@@ -158,7 +159,7 @@ async def list_invoices(
 async def create_invoice_route(
     body: InvoiceCreateBody,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     lines_payload: list[dict[str, Any]] | None = None
     if body.lines:
@@ -228,7 +229,7 @@ async def patch_invoice_route(
     invoice_id: str,
     body: InvoicePatchBody,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     inv = await InvoiceRepository(session).get_with_children(invoice_id)
     if not inv:
@@ -257,7 +258,7 @@ async def patch_invoice_route(
 async def send_invoice_route(
     invoice_id: str,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     inv = await InvoiceRepository(session).get_with_children(invoice_id)
     if not inv:
@@ -273,7 +274,7 @@ async def send_invoice_route(
 async def mark_viewed_route(
     invoice_id: str,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     inv = await InvoiceRepository(session).get_with_children(invoice_id)
     if not inv:
@@ -290,7 +291,7 @@ async def add_payment_route(
     invoice_id: str,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     raw = await request.body()
     if not raw.strip():
@@ -321,11 +322,35 @@ async def add_payment_route(
     return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
+@router.post("/{invoice_id}/payment-confirmation")
+async def record_payment_confirmation_route(
+    invoice_id: str,
+    body: InvoicePaymentConfirmationBody,
+    session: AsyncSession = Depends(get_session),
+    actor: int = Depends(invoice_actor_auth_user_id),
+):
+    repo = InvoiceRepository(session)
+    inv = await repo.get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    await repo.reconcile_paid_fields(inv)
+    inv = await record_payment_confirmation_document(
+        session,
+        inv,
+        actor_auth_user_id=actor,
+        document_url=body.document_url,
+    )
+    await session.commit()
+    inv2 = await repo.get_with_children(invoice_id)
+    assert inv2
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+
+
 @router.post("/{invoice_id}/cancel")
 async def cancel_invoice_route(
     invoice_id: str,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     inv = await InvoiceRepository(session).get_with_children(invoice_id)
     if not inv:
@@ -341,7 +366,7 @@ async def cancel_invoice_route(
 async def delete_draft_route(
     invoice_id: str,
     session: AsyncSession = Depends(get_session),
-    actor: int = Depends(_actor),
+    actor: int = Depends(invoice_actor_auth_user_id),
 ):
     inv = await InvoiceRepository(session).get(invoice_id)
     if not inv:

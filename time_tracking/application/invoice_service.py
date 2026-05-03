@@ -537,6 +537,8 @@ async def register_payment(
         raise HTTPException(status_code=400, detail="Нельзя принять оплату по отменённому счёту")
     if inv.status == "draft":
         raise HTTPException(status_code=400, detail="Сначала отправьте счёт")
+    repo = InvoiceRepository(session)
+    inv.amount_paid = _money4(await repo.sum_payments(inv.id))
     remaining = _money4(inv.total_amount - inv.amount_paid)
     if amount is None:
         amt = remaining
@@ -547,7 +549,6 @@ async def register_payment(
             raise HTTPException(status_code=400, detail="Счёт уже полностью оплачен")
         raise HTTPException(status_code=400, detail="Сумма оплаты должна быть больше нуля")
     when = paid_at if paid_at is not None else _now_utc()
-    repo = InvoiceRepository(session)
     pid = str(uuid.uuid4())
     repo.add_payment(
         InvoicePaymentModel(
@@ -567,13 +568,51 @@ async def register_payment(
     flag_modified(inv, "amount_paid")
     flag_modified(inv, "status")
     inv.updated_at = _now_utc()
+    detail: dict[str, Any] = {"amount": str(amt), "paymentId": pid}
+    bal_after = _money4(inv.total_amount - inv.amount_paid)
+    doc_url = getattr(inv, "payment_confirmation_document_url", None) or ""
+    if inv.total_amount > 0 and bal_after <= 0 and not str(doc_url).strip():
+        detail["requiresPaymentConfirmationDocument"] = True
     await _audit(
         session,
         repo,
         inv.id,
         "payment_registered",
         actor_auth_user_id,
-        {"amount": str(amt), "paymentId": pid},
+        detail,
+    )
+    return inv
+
+
+async def record_payment_confirmation_document(
+    session: AsyncSession,
+    inv: InvoiceModel,
+    *,
+    actor_auth_user_id: int,
+    document_url: str,
+) -> InvoiceModel:
+    if inv.status in ("canceled", "draft"):
+        raise HTTPException(status_code=400, detail="Недопустимый статус счёта")
+    eff = effective_invoice_status(inv)
+    if eff != "paid":
+        raise HTTPException(
+            status_code=400,
+            detail="Документ оплаты можно прикрепить только к полностью оплаченному счёту",
+        )
+    url = document_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Укажите ссылку или путь к документу")
+    inv.payment_confirmation_document_url = url[:4096]
+    inv.payment_confirmation_recorded_at = _now_utc()
+    inv.updated_at = _now_utc()
+    repo = InvoiceRepository(session)
+    await _audit(
+        session,
+        repo,
+        inv.id,
+        "payment_confirmation_recorded",
+        actor_auth_user_id,
+        {"documentUrl": url[:500]},
     )
     return inv
 
@@ -675,6 +714,19 @@ def invoice_to_dict(
         "createdAt": inv.created_at.isoformat(),
         "updatedAt": inv.updated_at.isoformat() if inv.updated_at else None,
     }
+    doc_url_raw = getattr(inv, "payment_confirmation_document_url", None) or ""
+    doc_url = doc_url_raw.strip() or None
+    doc_at = getattr(inv, "payment_confirmation_recorded_at", None)
+    out["paymentConfirmationDocumentUrl"] = doc_url
+    out["payment_confirmation_document_url"] = doc_url
+    out["paymentConfirmationRecordedAt"] = doc_at.isoformat() if doc_at else None
+    out["payment_confirmation_recorded_at"] = out["paymentConfirmationRecordedAt"]
+    out["requiresPaymentConfirmationDocument"] = bool(
+        eff == "paid"
+        and inv.status not in ("canceled", "draft")
+        and not doc_url
+    )
+    out["requires_payment_confirmation_document"] = out["requiresPaymentConfirmationDocument"]
     if include_lines:
         hints = time_entry_hints or {}
         lines = sorted(inv.line_items, key=lambda x: (x.sort_order, x.id))

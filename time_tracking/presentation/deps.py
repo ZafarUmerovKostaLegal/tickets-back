@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query
 
 from infrastructure.config import get_settings
 
@@ -39,3 +39,21 @@ async def require_bearer_user(
     if not isinstance(data, dict) or data.get("id") is None:
         raise HTTPException(status_code=401, detail="Invalid user payload")
     return data
+
+
+async def invoice_actor_auth_user_id(
+    user: dict = Depends(require_bearer_user),
+    actor_auth_user_id: int | None = Query(None, alias="actorAuthUserId"),
+) -> int:
+    """Исполнитель действия со счётом: явный query-параметр или id из JWT (без query не будет 422)."""
+    if actor_auth_user_id is not None:
+        if actor_auth_user_id < 0:
+            raise HTTPException(status_code=400, detail="actorAuthUserId")
+        return actor_auth_user_id
+    uid = user.get("id")
+    if uid is None:
+        raise HTTPException(status_code=400, detail="Не удалось определить пользователя (actorAuthUserId)")
+    try:
+        return int(uid)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Некорректный id пользователя") from exc

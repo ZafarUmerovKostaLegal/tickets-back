@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class InvoiceLineCreateSpec(BaseModel):
@@ -63,6 +63,26 @@ class InvoicePatchBody(BaseModel):
     lines: Optional[list[dict[str, Any]]] = None
 
 
+class InvoicePaymentConfirmationBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    document_url: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        validation_alias=AliasChoices("documentUrl", "document_url"),
+        description="Ссылка или идентификатор документа, подтверждающего оплату",
+    )
+
+    @field_validator("document_url", mode="after")
+    @classmethod
+    def _strip_document_url(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("document_url")
+        return s
+
+
 class InvoicePaymentBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -70,6 +90,45 @@ class InvoicePaymentBody(BaseModel):
     paid_at: Optional[datetime] = Field(None, alias="paidAt")
     payment_method: Optional[str] = Field(None, alias="paymentMethod")
     note: Optional[str] = None
+
+    @field_validator("paid_at", mode="before")
+    @classmethod
+    def _normalize_paid_at(cls, v: Any) -> Any:
+        """Дата из UI часто приходит как DD.MM.YYYY HH:MM — без этого Pydantic отклоняет тело (422)."""
+        if v is None or isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return None
+            naive_formats = (
+                "%d.%m.%Y %H:%M",
+                "%d.%m.%Y %H:%M:%S",
+                "%d.%m.%Y",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+            )
+            for fmt in naive_formats:
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+                except ValueError:
+                    continue
+            try:
+                raw = s.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(raw)
+                return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+            except ValueError:
+                pass
+        return v
+
+    @field_validator("payment_method", "note", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @field_validator("amount", mode="before")
     @classmethod

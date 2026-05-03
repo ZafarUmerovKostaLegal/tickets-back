@@ -688,6 +688,14 @@ async def apply_invoices_schema_patch(conn: AsyncConnection) -> None:
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_tt_inv_audit_invoice ON time_tracking_invoice_audit_logs (invoice_id)")
     )
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_invoices",
+        (
+            "payment_confirmation_document_url TEXT",
+            "payment_confirmation_recorded_at TIMESTAMPTZ",
+        ),
+    )
 
 
 async def apply_time_entries_hours_precision_patch(conn: AsyncConnection) -> None:

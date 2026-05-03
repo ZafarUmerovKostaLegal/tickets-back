@@ -1333,6 +1333,22 @@ async def invoices_add_payment(
     )
 
 
+@router.post("/invoices/{invoice_id}/payment-confirmation")
+async def invoices_record_payment_confirmation(
+    invoice_id: str,
+    request: Request,
+    user: dict = Depends(require_view_role),
+):
+    body = await request.json()
+    return await _tt_json(
+        "POST",
+        f"/invoices/{invoice_id}/payment-confirmation",
+        json=body,
+        params=_invoice_actor_qs(user),
+        timeout=30.0,
+    )
+
+
 @router.post("/invoices/{invoice_id}/cancel")
 async def invoices_cancel(
     invoice_id: str,
