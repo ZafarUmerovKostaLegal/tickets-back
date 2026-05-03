@@ -216,8 +216,9 @@ async def build_client_project_dashboard(
     exp_uzs = Decimal(0)
     exp_equiv = Decimal(0)
     exp_n = 0
+    pid_needle = str(project_id).strip().lower()
     for row in raw_exp:
-        if str(row.get("project_id") or "") != str(project_id):
+        if str(row.get("project_id") or "").strip().lower() != pid_needle:
             continue
         exp_uzs += _d(row.get("amount_uzs", 0) or 0)
         exp_equiv += _d(row.get("equivalent_amount", 0) or 0)

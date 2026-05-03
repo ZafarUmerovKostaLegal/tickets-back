@@ -23,9 +23,6 @@ from application.invoice_service import (
     register_payment,
     send_invoice,
 )
-from application.partner_report_confirmation_service import (
-    ensure_fully_confirmed_partner_period_or_403,
-)
 from infrastructure.database import get_session
 from infrastructure.repository_invoices import InvoiceRepository
 from infrastructure.repository_partner_report_confirmations import (
@@ -51,12 +48,6 @@ async def unbilled_time(
 ):
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="dateTo < dateFrom")
-    await ensure_fully_confirmed_partner_period_or_403(
-        session,
-        project_id=project_id.strip(),
-        date_from=date_from,
-        date_to=date_to,
-    )
     return await list_unbilled_time_entries(
         session, project_id=project_id, date_from=date_from, date_to=date_to,
     )
@@ -71,12 +62,6 @@ async def unbilled_expenses(
 ):
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="dateTo < dateFrom")
-    await ensure_fully_confirmed_partner_period_or_403(
-        session,
-        project_id=project_id.strip(),
-        date_from=date_from,
-        date_to=date_to,
-    )
     return await list_unbilled_expenses(
         session, project_id=project_id, date_from=date_from, date_to=date_to,
     )

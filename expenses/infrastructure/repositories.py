@@ -364,15 +364,11 @@ class ExpenseRepository:
         date_to: date | None = None,
     ) -> dict:
 
-        from application.expense_service import REGISTRY_STATUSES
-
-        statuses = tuple(REGISTRY_STATUSES)
         from sqlalchemy import and_
 
         pid_norm = (project_id or "").strip().lower()
         conds = [
             func.lower(ExpenseRequestModel.project_id) == pid_norm,
-            ExpenseRequestModel.status.in_(list(statuses)),
         ]
         if date_from is not None:
             conds.append(ExpenseRequestModel.expense_date >= date_from)

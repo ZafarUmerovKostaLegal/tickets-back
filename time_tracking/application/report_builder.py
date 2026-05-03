@@ -290,7 +290,7 @@ async def _fetch_expense_report_data(
     if user_ids:
         params["userIds"] = ",".join(str(u) for u in user_ids)
     if project_ids:
-        params["projectIds"] = ",".join(project_ids)
+        params["projectIds"] = ",".join(str(p).strip() for p in project_ids if str(p).strip())
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.get(f"{base}/expenses/report-data", params=params)
