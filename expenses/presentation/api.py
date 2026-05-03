@@ -112,6 +112,8 @@ app.add_middleware(
 app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(health.router)
 app.include_router(admin_db.router)
+# Статические пути /expenses/report-data, /expenses/project-totals/… должны быть до /expenses/{expense_id},
+# иначе «report-data» воспринимается как id заявки и требуется Authorization → 401 для TT.
+app.include_router(reference.router)
 app.include_router(expenses.router)
 app.include_router(expense_email_action.router)
-app.include_router(reference.router)
