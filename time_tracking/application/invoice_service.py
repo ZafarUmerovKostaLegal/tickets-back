@@ -704,6 +704,12 @@ def invoice_to_dict(
         "totalAmount": float(inv.total_amount),
         "amountPaid": float(inv.amount_paid),
         "balanceDue": float(_money4(inv.total_amount - inv.amount_paid)),
+        # Дубликаты snake_case и effective_status — контракт фронта (BACKEND_INVOICE_PAYMENTS.md)
+        "total_amount": float(inv.total_amount),
+        "amount_paid": float(inv.amount_paid),
+        "balance_due": float(_money4(inv.total_amount - inv.amount_paid)),
+        "effective_status": eff,
+        "stored_status": inv.status,
         "clientNote": inv.client_note,
         "internalNote": inv.internal_note,
         "sentAt": inv.sent_at.isoformat() if inv.sent_at else None,
@@ -762,18 +768,26 @@ def invoice_to_dict(
         out["line_items"] = built
     if include_payments:
         pays = sorted(inv.payments, key=lambda x: x.paid_at)
-        out["payments"] = [
-            {
-                "id": p.id,
-                "amount": float(p.amount),
-                "paymentMethod": p.payment_method,
-                "note": p.note,
-                "recordedByAuthUserId": p.recorded_by_auth_user_id,
-                "paidAt": p.paid_at.isoformat(),
-                "createdAt": p.created_at.isoformat(),
-            }
-            for p in pays
-        ]
+        built_pays: list[dict[str, Any]] = []
+        for p in pays:
+            paid_iso = p.paid_at.isoformat()
+            created_iso = p.created_at.isoformat()
+            built_pays.append(
+                {
+                    "id": p.id,
+                    "amount": float(p.amount),
+                    "paymentMethod": p.payment_method,
+                    "payment_method": p.payment_method,
+                    "note": p.note,
+                    "recordedByAuthUserId": p.recorded_by_auth_user_id,
+                    "recorded_by_auth_user_id": p.recorded_by_auth_user_id,
+                    "paidAt": paid_iso,
+                    "paid_at": paid_iso,
+                    "createdAt": created_iso,
+                    "created_at": created_iso,
+                }
+            )
+        out["payments"] = built_pays
     return out
 
 
