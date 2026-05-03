@@ -20,7 +20,7 @@ from application.invoice_service import (
     list_unbilled_time_entries,
     mark_viewed,
     patch_invoice_draft,
-    record_payment,
+    register_payment,
     record_payment_confirmation_document,
     send_invoice,
 )
