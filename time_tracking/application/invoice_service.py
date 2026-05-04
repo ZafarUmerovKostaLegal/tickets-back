@@ -9,10 +9,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterable
 
 from fastapi import HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, inspect as orm_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
-from sqlalchemy.orm import inspect as orm_inspect
 
 from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
 from application.partner_report_confirmation_service import (
