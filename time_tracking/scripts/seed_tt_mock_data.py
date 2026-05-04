@@ -2,33 +2,34 @@
 
 Создаёт:
   • пользователей TT с синтетическими auth_user_id (нет записей в auth — только для локальных проверок UI);
-  • ставки billable/cost;
-  • клиентов с префиксом имени (по умолчанию «[mock]» — удаление: scripts/delete_mock_clients.py);
-  • у каждого клиента случайное число проектов (диапазон задаётся флагами);
+  • ставки billable/cost во всех валютах из MOCK_CURRENCIES (по умолчанию UZS, USD, EUR — как в отчётных схемах TT);
+  • клиентов/проекты с вращением по этим валютам;
   • задачи по умолчанию на проект + категории расходов на клиента;
   • доступ всех мок-пользователей ко всем мок-проектам;
   • записи времени за несколько месяцев (будни, случайная длительность);
   • недельные сдачи (status submitted);
-  • сохранённое представление отчёта и несколько снимков отчётов;
-  • запросы партнёрского подтверждения: часть в pending, часть fully_confirmed (подписи всех партнёров).
+  • счета (draft / sent / viewed) со строками времени по проектам (через create + patch draft — без вызова API);
+  • сохранённые представления и снимки отчётов (time и detailed-expense);
+  • запросы партнёрского подтверждения: часть в pending, часть fully_confirmed.
 
-Расходы (expense requests) в таблицах TT не живут — отчёт «расходы» строится по HTTP из сервиса expenses.
-Для полного контура расходов нужен отдельный сид/данные в expenses.
+Расходы для отчёта TT загружаются по HTTP из сервиса expenses (/expenses/report-data).
+Флаг --with-expenses и переменная EXPENSES_DATABASE_URL создают заявки в БД expenses с привязкой project_id к UUID проектов TT.
 
-Запуск из каталога time_tracking (или из корня репо с PYTHONPATH=time_tracking):
+Запуск:
 
   python scripts/seed_tt_mock_data.py --dry-run
-  python scripts/seed_tt_mock_data.py --execute
+  python scripts/seed_tt_mock_data.py --execute --with-expenses
 
-Docker (рабочая директория /app):
+Docker:
 
-  python scripts/seed_tt_mock_data.py --execute --lite
+  EXPENSES_DATABASE_URL=postgresql://... python scripts/seed_tt_mock_data.py --execute --lite --with-expenses
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import random
 import sys
 import uuid
@@ -38,7 +39,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import func, select
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+MOCK_CURRENCIES: tuple[str, ...] = ("UZS", "USD", "EUR")
+
+from sqlalchemy import and_, func, select
 
 from application.client_expense_category_defaults import seed_default_expense_categories_for_all_clients
 from application.client_task_defaults import seed_default_common_tasks_for_project
@@ -51,7 +56,6 @@ from infrastructure.models import (
     TimeManagerClientProjectModel,
     TimeManagerClientTaskModel,
     TimeTrackingUserModel,
-    TimeTrackingUserProjectAccessModel,
 )
 from infrastructure.repository_access import UserProjectAccessRepository
 from infrastructure.repository_clients import ClientProjectRepository
@@ -61,6 +65,39 @@ from infrastructure.repository_rates import HourlyRateRepository
 from infrastructure.repository_reports import ReportSavedViewRepository, ReportSnapshotRepository
 from infrastructure.repository_shared import _now_utc
 from infrastructure.repository_weekly_submissions import WeeklySubmissionRepository
+
+
+def _billable_rate_amount_for_currency(cur: str, rnd: random.Random) -> Decimal:
+    u = cur.upper().strip()[:10]
+    if u == "UZS":
+        return Decimal(str(rnd.randint(1_800_000, 4_500_000)))
+    if u == "EUR":
+        return Decimal(str(115 + rnd.randint(0, 55)))
+    return Decimal(str(130 + rnd.randint(0, 70)))
+
+
+def _cost_rate_amount_for_currency(billable: Decimal) -> Decimal:
+    return (billable * Decimal("0.38")).quantize(Decimal("0.0001"))
+
+
+async def _pick_sample_projects_one_per_currency(
+    session,
+    project_ids: list[str],
+) -> list[str]:
+    """По одному проекту на каждую валюту из MOCK_CURRENCIES (если есть)."""
+    picked: list[str] = []
+    need = set(MOCK_CURRENCIES)
+    for pid in project_ids:
+        if not need:
+            break
+        row = await session.get(TimeManagerClientProjectModel, pid)
+        if not row:
+            continue
+        c = (row.currency or "USD").strip().upper()[:10]
+        if c in need:
+            picked.append(pid)
+            need.remove(c)
+    return picked
 
 
 def _week_starts_in_range(d0: date, d1: date) -> list[date]:
@@ -101,6 +138,198 @@ async def _preflight(session, *, prefix: str, auth_ids: list[int]) -> tuple[int,
     return occ_i, int(existing_clients or 0)
 
 
+def _async_pg(url: str) -> str:
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+async def _seed_mock_invoices(
+    session,
+    *,
+    rnd: random.Random,
+    actor: int,
+    prefix: str,
+    project_ids: list[str],
+    date_from: date,
+    date_to: date,
+    lite: bool,
+) -> int:
+    """Черновик счёта без project_id и строки только времени через patch — без проверки партнёрского периода."""
+    from fastapi import HTTPException
+
+    from application.invoice_service import create_invoice, mark_viewed, patch_invoice_draft, send_invoice
+
+    target = min(len(project_ids) // 3, 8 if lite else 55)
+    if target < 1:
+        return 0
+
+    shuffled = list(project_ids)
+    rnd.shuffle(shuffled)
+    used_entries: set[str] = set()
+    created = 0
+    status_cycle = 0
+
+    for pid in shuffled:
+        if created >= target:
+            break
+        proj_row = await session.get(TimeManagerClientProjectModel, pid)
+        if not proj_row:
+            continue
+        conds = [
+            TimeEntryModel.project_id == pid,
+            TimeEntryModel.voided_at.is_(None),
+            TimeEntryModel.is_billable.is_(True),
+        ]
+        if used_entries:
+            conds.append(TimeEntryModel.id.not_in(used_entries))
+        q = (
+            select(TimeEntryModel.id)
+            .where(and_(*conds))
+            .order_by(TimeEntryModel.work_date.asc())
+            .limit(5)
+        )
+        entry_ids = [str(x) for x in (await session.execute(q)).scalars().all()]
+        if len(entry_ids) < 2:
+            continue
+        cid = str(proj_row.client_id)
+        issue_d = max(date_from, date_to - timedelta(days=45))
+        due_d = date_to + timedelta(days=30)
+        try:
+            inv = await create_invoice(
+                session,
+                actor_auth_user_id=actor,
+                client_id=cid,
+                project_id=None,
+                issue_date=issue_d,
+                due_date=due_d,
+                currency=str(proj_row.currency or "USD").strip().upper()[:10],
+                tax_percent=None,
+                tax2_percent=None,
+                discount_percent=None,
+                client_note=f"{prefix} mock invoice",
+                internal_note=None,
+                lines=[
+                    {
+                        "description": "[mock] placeholder — будет заменён строками времени",
+                        "quantity": "1",
+                        "unitAmount": "0.01",
+                    }
+                ],
+                time_entry_ids=None,
+                expense_ids=None,
+                partner_billing_period_from=None,
+                partner_billing_period_to=None,
+            )
+            await session.flush()
+            replace_lines = [
+                {"lineKind": "time", "timeEntryId": eid, "time_entry_id": eid} for eid in entry_ids
+            ]
+            inv = await patch_invoice_draft(
+                session,
+                inv,
+                actor_auth_user_id=actor,
+                project_id=pid,
+                replace_lines=replace_lines,
+            )
+            used_entries.update(entry_ids)
+            status_cycle += 1
+            rem = status_cycle % 4
+            if rem != 0:
+                await send_invoice(session, inv, actor_auth_user_id=actor)
+            if rem in (2, 3):
+                await mark_viewed(session, inv, actor_auth_user_id=actor)
+            created += 1
+        except HTTPException as exc:
+            print(f"[invoices] пропуск проекта {pid[:8]}…: {exc.detail!r}", file=sys.stderr)
+
+    return created
+
+
+async def _seed_expenses_database(
+    *,
+    expenses_db_url: str,
+    project_ids: list[str],
+    creator_uid: int,
+    date_from: date,
+    date_to: date,
+    rnd: random.Random,
+    per_project: int,
+    lite: bool,
+) -> int:
+    """Прямая вставка в БД сервиса expenses (TT потом читает через EXPENSES_SERVICE_URL)."""
+    exp_root = _REPO_ROOT / "expenses"
+    if not exp_root.is_dir():
+        print("[expenses] каталог expenses/ не найден — пропуск.", file=sys.stderr)
+        return 0
+
+    sys.path.insert(0, str(exp_root))
+    try:
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+        from infrastructure.repositories import ExpenseRepository  # noqa: PLC0415
+    except ImportError as exc:
+        print(f"[expenses] не удалось импортировать модуль expenses: {exc}", file=sys.stderr)
+        return 0
+
+    n_proj_sample = min(len(project_ids), 25 if lite else len(project_ids))
+    picked = rnd.sample(project_ids, k=n_proj_sample) if len(project_ids) > n_proj_sample else list(project_ids)
+    pp = max(1, min(12, per_project))
+    if lite:
+        pp = min(pp, 2)
+
+    engine = create_async_engine(_async_pg(expenses_db_url), echo=False)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    inserted = 0
+    try:
+        async with factory() as esession:
+            repo = ExpenseRepository(esession)
+            span = max(1, (date_to - date_from).days)
+            for pid in picked:
+                for _ in range(pp):
+                    exp_day = date_from + timedelta(days=rnd.randint(0, span - 1))
+                    amt_uzs = Decimal(str(rnd.randint(80_000, 950_000)))
+                    if rnd.random() < 0.45:
+                        eq = amt_uzs
+                        xr = Decimal("1")
+                    else:
+                        fx = Decimal(str(11000 + rnd.randint(-800, 800)))
+                        eq = (amt_uzs / fx).quantize(Decimal("0.01"))
+                        xr = (amt_uzs / eq).quantize(Decimal("0.000001")) if eq else Decimal("1")
+                    eid = "m" + uuid.uuid4().hex[:12]
+                    await repo.create(
+                        id_=eid,
+                        description=f"[mock] расход для отчёта (проект {pid[:8]}…)",
+                        expense_date=exp_day,
+                        payment_deadline=None,
+                        amount_uzs=amt_uzs,
+                        exchange_rate=xr,
+                        equivalent_amount=eq,
+                        expense_type=rnd.choice(["transport", "services", "client_expense", "purchase"]),
+                        expense_subtype=None,
+                        is_reimbursable=True,
+                        payment_method="card",
+                        department_id=None,
+                        project_id=pid,
+                        expense_category_id=None,
+                        vendor=f"Mock vendor {rnd.randint(1, 200)}",
+                        business_purpose="Данные для отчёта TT",
+                        comment=None,
+                        status="approved",
+                        created_by_user_id=creator_uid,
+                        updated_by_user_id=creator_uid,
+                    )
+                    inserted += 1
+            await esession.commit()
+    finally:
+        await engine.dispose()
+        try:
+            sys.path.remove(str(exp_root))
+        except ValueError:
+            pass
+    return inserted
+
+
 async def _task_ids_for_projects(session, project_ids: list[str]) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {pid: [] for pid in project_ids}
     if not project_ids:
@@ -129,6 +358,9 @@ async def _run(
     entry_probability: float,
     seed: int,
     skip_confirmations: bool,
+    with_expenses: bool,
+    expenses_database_url: str | None,
+    expenses_per_project: int,
 ) -> int:
     rnd = random.Random(seed)
     prefix = client_prefix.strip() or "[mock]"
@@ -156,14 +388,27 @@ async def _run(
     est_entries = int(weekdays_n * n_users * entry_probability)
 
     print(
-        f"План (seed={seed}): пользователей TT={n_users}, auth_user_id с {auth_ids[0]} по {auth_ids[-1]}, "
+        f"План (seed={seed}): валюты клиентов/проектов={','.join(MOCK_CURRENCIES)}; "
+        f"пользователей TT={n_users}, auth_user_id с {auth_ids[0]} по {auth_ids[-1]}, "
         f"клиентов≈{n_clients}, проектов≈{est_projects}, доступов≈{est_access}, "
         f"записей времени≈{est_entries}, период {date_from} … {date_to}."
     )
 
     if dry_run:
         print("\n[dry-run] БД не изменена. Для записи: --execute [--force если уже есть мок-клиенты].")
+        if with_expenses:
+            eu = (expenses_database_url or "").strip()
+            if eu:
+                print(f"  --with-expenses: будет использован EXPENSES_DATABASE_URL ({eu[:48]}…)")
+            else:
+                print(
+                    "  --with-expenses: задайте EXPENSES_DATABASE_URL или --expenses-database-url "
+                    "(иначе расходы для отчёта TT не создаются).",
+                    file=sys.stderr,
+                )
         return 0
+
+    bundle: dict[str, object] = {}
 
     async with async_session_factory() as session:
         occ_users, n_exist_clients = await _preflight(session, prefix=prefix, auth_ids=auth_ids)
@@ -206,24 +451,26 @@ async def _run(
 
         rate_repo = HourlyRateRepository(session)
         for uid in auth_ids:
-            await rate_repo.create(
-                auth_user_id=uid,
-                rate_kind="billable",
-                amount=Decimal(str(120 + rnd.randint(0, 80))),
-                currency="USD",
-                valid_from=None,
-                valid_to=None,
-                applies_to_project_id=None,
-            )
-            await rate_repo.create(
-                auth_user_id=uid,
-                rate_kind="cost",
-                amount=Decimal(str(40 + rnd.randint(0, 30))),
-                currency="USD",
-                valid_from=None,
-                valid_to=None,
-                applies_to_project_id=None,
-            )
+            for cur in MOCK_CURRENCIES:
+                bill = _billable_rate_amount_for_currency(cur, rnd)
+                await rate_repo.create(
+                    auth_user_id=uid,
+                    rate_kind="billable",
+                    amount=bill,
+                    currency=cur,
+                    valid_from=None,
+                    valid_to=None,
+                    applies_to_project_id=None,
+                )
+                await rate_repo.create(
+                    auth_user_id=uid,
+                    rate_kind="cost",
+                    amount=_cost_rate_amount_for_currency(bill),
+                    currency=cur,
+                    valid_from=None,
+                    valid_to=None,
+                    applies_to_project_id=None,
+                )
 
         await session.flush()
 
@@ -233,13 +480,14 @@ async def _run(
 
         for ci in range(n_clients):
             cid = str(uuid.uuid4())
+            client_currency = MOCK_CURRENCIES[ci % len(MOCK_CURRENCIES)]
             client_ids.append(cid)
             session.add(
                 TimeManagerClientModel(
                     id=cid,
                     name=f"{prefix} Client {ci + 1:02d}",
                     address=None,
-                    currency="USD",
+                    currency=client_currency,
                     invoice_due_mode="custom",
                     invoice_due_days_after_issue=30,
                     tax_percent=None,
@@ -272,9 +520,9 @@ async def _run(
                         notes="Mock project",
                         report_visibility="all_assigned",
                         project_type="time_and_materials",
-                        currency="USD",
+                        currency=client_currency,
                         billable_rate_type=None,
-                        project_billable_rate_amount=Decimal("150"),
+                        project_billable_rate_amount=_billable_rate_amount_for_currency(client_currency, rnd),
                         budget_type=None,
                         budget_amount=None,
                         progress_budget_amount=None,
@@ -347,6 +595,17 @@ async def _run(
                 )
 
         actor = auth_ids[0]
+        n_invoices = await _seed_mock_invoices(
+            session,
+            rnd=rnd,
+            actor=actor,
+            prefix=prefix,
+            project_ids=project_ids,
+            date_from=date_from,
+            date_to=date_to,
+            lite=lite,
+        )
+
         saved_repo = ReportSavedViewRepository(session)
         await saved_repo.create(
             name=f"{prefix} saved view",
@@ -357,9 +616,18 @@ async def _run(
                 "reportType": "time",
             },
         )
+        await saved_repo.create(
+            name=f"{prefix} expense report view",
+            owner_user_id=actor,
+            filters={
+                "dateFrom": date_from.isoformat(),
+                "dateTo": date_to.isoformat(),
+                "reportType": "detailed-expense",
+            },
+        )
 
         snap_repo = ReportSnapshotRepository(session)
-        snap_ids: list[str] = []
+        time_snap_ids: list[str] = []
 
         chunk = max(1, len(project_ids) // 4)
         sample_projects = (
@@ -391,16 +659,34 @@ async def _run(
                 created_by_user_id=actor,
                 rows_data=rows_data,
             )
-            snap_ids.append(snap.id)
+            time_snap_ids.append(snap.id)
 
-        if not skip_confirmations and project_ids and snap_ids:
+        exp_proj_pick = await _pick_sample_projects_one_per_currency(session, project_ids)
+        if exp_proj_pick:
+            rows_exp = [
+                {"source_type": "project", "source_id": p, "data": {"projectId": p}} for p in exp_proj_pick
+            ]
+            await snap_repo.create(
+                name=f"{prefix} expense snapshot (mock)",
+                report_type="detailed-expense",
+                group_by="projects",
+                filters={
+                    "dateFrom": date_from.isoformat(),
+                    "dateTo": date_to.isoformat(),
+                    "projectIds": exp_proj_pick,
+                },
+                created_by_user_id=actor,
+                rows_data=rows_exp,
+            )
+
+        if not skip_confirmations and project_ids and time_snap_ids:
             conf_repo = PartnerReportConfirmationRepository(session)
             p0 = project_ids[0]
             p1 = project_ids[min(5, len(project_ids) - 1)]
 
             df0, dt0 = work_week_start_end_inclusive(date_from + timedelta(days=10))
             pend = await conf_repo.upsert_submit(
-                snapshot_id=snap_ids[0],
+                snapshot_id=time_snap_ids[0],
                 project_id=p0,
                 date_from=df0,
                 date_to=dt0,
@@ -410,7 +696,7 @@ async def _run(
 
             df1, dt1 = work_week_start_end_inclusive(date_from + timedelta(days=24))
             req_row = await conf_repo.upsert_submit(
-                snapshot_id=snap_ids[-1],
+                snapshot_id=time_snap_ids[-1],
                 project_id=p1,
                 date_from=df1,
                 date_to=dt1,
@@ -440,11 +726,42 @@ async def _run(
                 f"(партнёров: {len(partners)})."
             )
 
+        bundle.update(
+            project_ids=list(project_ids),
+            client_count=len(client_ids),
+            project_count=len(project_ids),
+            invoice_count=n_invoices,
+        )
+
         await session.commit()
 
+    exp_n = 0
+    exp_url_eff = (expenses_database_url or "").strip()
+    if with_expenses and exp_url_eff and bundle.get("project_ids"):
+        exp_n = await _seed_expenses_database(
+            expenses_db_url=exp_url_eff,
+            project_ids=list(bundle["project_ids"]),  # type: ignore[arg-type]
+            creator_uid=first_auth_user_id,
+            date_from=date_from,
+            date_to=date_to,
+            rnd=rnd,
+            per_project=expenses_per_project,
+            lite=lite,
+        )
+
+    if with_expenses and not exp_url_eff:
+        print(
+            "[expenses] указан --with-expenses, но нет URL БД (EXPENSES_DATABASE_URL или --expenses-database-url).",
+            file=sys.stderr,
+        )
+
+    cc = int(bundle.get("client_count", 0) or 0)
+    pc = int(bundle.get("project_count", 0) or 0)
+    invc = int(bundle.get("invoice_count", 0) or 0)
     print(
-        f"\nГотово: {n_users} пользователей, {len(client_ids)} клиентов, "
-        f"{len(project_ids)} проектов, записи времени и отчёты созданы."
+        f"\nГотово: {n_users} пользователей TT, {cc} клиентов ({','.join(MOCK_CURRENCIES)} по очереди), "
+        f"{pc} проектов, счетов≈{invc}, строк расходов в expenses={exp_n} "
+        f"(отчёт TT их видит при EXPENSES_SERVICE_URL на сервис expenses)."
     )
     print(f"Удаление мок-клиентов: python scripts/delete_mock_clients.py --prefix {prefix!r} --execute")
     return 0
@@ -474,10 +791,31 @@ def main() -> int:
         action="store_true",
         help="Не создавать партнёрские подтверждения отчётов.",
     )
+    p.add_argument(
+        "--with-expenses",
+        action="store_true",
+        help="После TT записать расходы в БД сервиса expenses (нужен EXPENSES_DATABASE_URL или флаг URL ниже).",
+    )
+    p.add_argument(
+        "--expenses-database-url",
+        type=str,
+        default="",
+        metavar="URL",
+        help="Строка PostgreSQL для БД expenses; если пусто — берётся из переменной окружения EXPENSES_DATABASE_URL.",
+    )
+    p.add_argument(
+        "--expenses-per-project",
+        type=int,
+        default=4,
+        help="Число строк расходов на каждый выбранный проект (выбирается подвыборка проектов).",
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--execute", action="store_true")
     args = p.parse_args()
+    exp_url_merged = (args.expenses_database_url or "").strip() or os.environ.get(
+        "EXPENSES_DATABASE_URL", ""
+    ).strip()
 
     return asyncio.run(
         _run(
@@ -494,6 +832,9 @@ def main() -> int:
             entry_probability=max(0.0, min(1.0, float(args.entry_probability))),
             seed=int(args.seed),
             skip_confirmations=bool(args.skip_confirmations),
+            with_expenses=bool(args.with_expenses),
+            expenses_database_url=exp_url_merged or None,
+            expenses_per_project=max(1, min(30, int(args.expenses_per_project))),
         )
     )
 
