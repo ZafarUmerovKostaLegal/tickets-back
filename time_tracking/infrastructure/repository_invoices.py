@@ -66,6 +66,7 @@ class InvoiceRepository:
                 selectinload(InvoiceModel.payments),
                 selectinload(InvoiceModel.audit_logs),
             )
+            .execution_options(populate_existing=True)
         )
         return (await self._s.execute(q)).scalar_one_or_none()
 

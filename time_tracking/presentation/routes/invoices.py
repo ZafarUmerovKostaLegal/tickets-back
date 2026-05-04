@@ -233,6 +233,7 @@ async def get_invoice(
         raise HTTPException(status_code=404, detail="Счёт не найден")
     await repo.reconcile_paid_fields(inv)
     await session.commit()
+    session.expire_all()
     inv = await repo.get_with_children(invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Счёт не найден")
@@ -333,6 +334,7 @@ async def add_payment_route(
         note=body.note,
     )
     await session.commit()
+    session.expire_all()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
     payload = await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
@@ -358,6 +360,7 @@ async def record_payment_confirmation_route(
         document_url=body.document_url,
     )
     await session.commit()
+    session.expire_all()
     inv2 = await repo.get_with_children(invoice_id)
     assert inv2
     payload = await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)

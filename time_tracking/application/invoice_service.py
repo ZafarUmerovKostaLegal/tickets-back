@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm import inspect as orm_inspect
 
 from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
 from application.partner_report_confirmation_service import (
@@ -64,17 +65,23 @@ def _compute_totals(
     return disc, tax_amt, total
 
 
-def effective_invoice_status(inv: InvoiceModel, *, today: date | None = None) -> str:
+def effective_invoice_status(
+    inv: InvoiceModel,
+    *,
+    today: date | None = None,
+    amount_paid_override: Decimal | None = None,
+) -> str:
 
     today = today or date.today()
+    paid = _money4(amount_paid_override) if amount_paid_override is not None else _money4(inv.amount_paid)
     if inv.status == "canceled":
         return "canceled"
-    bal = _money4(inv.total_amount - inv.amount_paid)
+    bal = _money4(inv.total_amount - paid)
     if inv.total_amount > 0 and bal <= 0:
         return "paid"
     if inv.status == "paid":
         return "paid"
-    if _money4(inv.amount_paid) > 0 and bal > 0:
+    if paid > 0 and bal > 0:
         base = "partial_paid"
     else:
         base = inv.status
@@ -593,7 +600,9 @@ async def record_payment_confirmation_document(
 ) -> InvoiceModel:
     if inv.status in ("canceled", "draft"):
         raise HTTPException(status_code=400, detail="Недопустимый статус счёта")
-    eff = effective_invoice_status(inv)
+    repo = InvoiceRepository(session)
+    paid_sum = _money4(await repo.sum_payments(inv.id))
+    eff = effective_invoice_status(inv, amount_paid_override=paid_sum)
     if eff != "paid":
         raise HTTPException(
             status_code=400,
@@ -605,7 +614,6 @@ async def record_payment_confirmation_document(
     inv.payment_confirmation_document_url = url[:4096]
     inv.payment_confirmation_recorded_at = _now_utc()
     inv.updated_at = _now_utc()
-    repo = InvoiceRepository(session)
     await _audit(
         session,
         repo,
@@ -684,7 +692,21 @@ def invoice_to_dict(
     include_payments: bool = False,
     time_entry_hints: dict[str, tuple[date, int]] | None = None,
 ) -> dict[str, Any]:
-    eff = effective_invoice_status(inv)
+    amount_paid_override: Decimal | None = None
+    if include_payments:
+        try:
+            if "payments" not in orm_inspect(inv).unloaded:
+                plist = list(inv.payments or [])
+                amount_paid_override = _money4(sum(_money4(p.amount) for p in plist))
+        except Exception:
+            amount_paid_override = None
+    paid_display = (
+        _money4(amount_paid_override)
+        if amount_paid_override is not None
+        else _money4(inv.amount_paid)
+    )
+    eff = effective_invoice_status(inv, amount_paid_override=amount_paid_override)
+    balance_due_val = _money4(inv.total_amount - paid_display)
     out: dict[str, Any] = {
         "id": inv.id,
         "clientId": inv.client_id,
@@ -702,12 +724,12 @@ def invoice_to_dict(
         "discountAmount": float(inv.discount_amount),
         "taxAmount": float(inv.tax_amount),
         "totalAmount": float(inv.total_amount),
-        "amountPaid": float(inv.amount_paid),
-        "balanceDue": float(_money4(inv.total_amount - inv.amount_paid)),
+        "amountPaid": float(paid_display),
+        "balanceDue": float(balance_due_val),
         # Дубликаты snake_case и effective_status — контракт фронта (BACKEND_INVOICE_PAYMENTS.md)
         "total_amount": float(inv.total_amount),
-        "amount_paid": float(inv.amount_paid),
-        "balance_due": float(_money4(inv.total_amount - inv.amount_paid)),
+        "amount_paid": float(paid_display),
+        "balance_due": float(balance_due_val),
         "effective_status": eff,
         "stored_status": inv.status,
         "clientNote": inv.client_note,
