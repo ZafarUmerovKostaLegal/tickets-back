@@ -569,7 +569,7 @@ async def register_payment(
         )
     )
     await session.flush()
-    inv.amount_paid = await repo.sum_payments(inv.id)
+    inv.amount_paid = _money4(await repo.sum_payments(inv.id))
     _sync_payment_status(inv)
     flag_modified(inv, "amount_paid")
     flag_modified(inv, "status")

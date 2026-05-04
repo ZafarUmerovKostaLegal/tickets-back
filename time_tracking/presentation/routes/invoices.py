@@ -92,7 +92,7 @@ async def invoices_stats(
     date_to: Optional[date] = Query(None, alias="dateTo"),
 ):
 
-    return await get_invoices_aggregated_stats(
+    stats = await get_invoices_aggregated_stats(
         session,
         client_id=client_id,
         project_id=project_id,
@@ -100,6 +100,7 @@ async def invoices_stats(
         date_from=date_from,
         date_to=date_to,
     )
+    return _invoice_json_response(stats)
 
 
 @router.get("")
@@ -139,7 +140,7 @@ async def list_invoices(
             }
             if include_total:
                 payload["totalCount"] = 0
-            return payload
+            return _invoice_json_response(payload)
 
     repo = InvoiceRepository(session)
     rows = await repo.list_invoices(
@@ -163,7 +164,7 @@ async def list_invoices(
             date_from=date_from,
             date_to=date_to,
         )
-    return payload
+    return _invoice_json_response(payload)
 
 
 @router.post("", status_code=201)

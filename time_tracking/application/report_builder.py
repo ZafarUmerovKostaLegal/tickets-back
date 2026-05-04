@@ -27,6 +27,7 @@ from infrastructure.models import (
     WeeklyTimeSubmissionModel,
 )
 from infrastructure.models_invoices import InvoiceLineItemModel, InvoiceModel
+from infrastructure.repository_invoices import InvoiceRepository
 
 _log = logging.getLogger(__name__)
 
@@ -36,8 +37,41 @@ REPORT_TYPES = frozenset({
 GROUP_OPTIONS = frozenset({"clients", "projects"})
 
 _Q2 = Decimal("0.01")
+_Q4 = Decimal("0.0001")
 _Q6 = Decimal("0.000001")
 _ZERO = Decimal(0)
+
+
+def _money4_report(v: Decimal) -> Decimal:
+    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+
+
+def _effective_invoice_row_status(
+    stored: str,
+    total_amount: Decimal,
+    paid_amount: Decimal,
+    due_date: date,
+    *,
+    today: date | None = None,
+) -> str:
+    """Дублирует application.invoice_service.effective_invoice_status без импорта (цикл с invoice_service)."""
+    today = today or date.today()
+    tot = _money4_report(total_amount)
+    paid = _money4_report(paid_amount)
+    if stored == "canceled":
+        return "canceled"
+    bal = _money4_report(tot - paid)
+    if tot > 0 and bal <= 0:
+        return "paid"
+    if stored == "paid":
+        return "paid"
+    if paid > 0 and bal > 0:
+        base = "partial_paid"
+    else:
+        base = stored
+    if base in ("sent", "viewed", "partial_paid") and due_date < today and bal > 0:
+        return "overdue"
+    return base
 
 
 def _d(v: Any) -> Decimal:
@@ -215,6 +249,7 @@ async def invoice_details_for_time_entries(
             InvoiceModel.status,
             InvoiceModel.amount_paid,
             InvoiceModel.total_amount,
+            InvoiceModel.due_date,
         )
         .select_from(InvoiceLineItemModel)
         .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
@@ -225,19 +260,23 @@ async def invoice_details_for_time_entries(
         )
     )
     rows = (await session.execute(q)).all()
+    iids = list({str(r[1]) for r in rows})
+    sums = await InvoiceRepository(session).sum_payments_batch(iids)
     out: dict[str, dict[str, Any]] = {}
-    for tid, iid, inum, st, ap, tot in rows:
+    for tid, iid, inum, st, _ap, tot, due_d in rows:
         if not tid:
             continue
         k = str(tid)
         if k in out:
             continue
-        apd, ttd = _d(ap), _d(tot)
-        is_paid = st == "paid" or (ttd > 0 and apd + _Q2 >= ttd)
+        paid_sum = _money4_report(sums.get(str(iid), Decimal(0)))
+        ttd = _money4_report(_d(tot))
+        is_paid = ttd > 0 and paid_sum + _Q2 >= ttd
+        eff = _effective_invoice_row_status(str(st or ""), ttd, paid_sum, due_d)
         out[k] = {
             "invoice_id": str(iid),
             "invoice_number": str(inum),
-            "invoice_status": str(st or ""),
+            "invoice_status": eff,
             "is_paid": bool(is_paid),
         }
     return out
