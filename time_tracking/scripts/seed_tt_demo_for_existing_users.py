@@ -39,6 +39,7 @@ from sqlalchemy import func, select
 
 from application.client_expense_category_defaults import seed_default_expense_categories_for_all_clients
 from application.client_task_defaults import seed_default_common_tasks_for_project
+from application.demo_seed_budget import demo_budget_fields_for_project
 from infrastructure.database import async_session_factory
 from infrastructure.models import (
     TimeManagerClientModel,
@@ -278,10 +279,7 @@ async def _run(
                         currency=client_currency,
                         billable_rate_type=None,
                         project_billable_rate_amount=_billable_rate_amount_for_currency(client_currency, rnd),
-                        budget_type=None,
-                        budget_amount=None,
-                        progress_budget_amount=None,
-                        budget_hours=None,
+                        **demo_budget_fields_for_project(client_currency, rnd, slot=ci * 100 + pj),
                         budget_resets_every_month=False,
                         budget_includes_expenses=False,
                         send_budget_alerts=False,

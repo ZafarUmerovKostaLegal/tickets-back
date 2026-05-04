@@ -1,30 +1,3 @@
-"""Насыщение БД time_tracking тестовыми данными (dev/staging).
-
-Создаёт:
-  • пользователей TT с синтетическими auth_user_id (нет записей в auth — только для локальных проверок UI);
-  • ставки billable/cost во всех валютах из MOCK_CURRENCIES (по умолчанию UZS, USD, EUR — как в отчётных схемах TT);
-  • клиентов/проекты с вращением по этим валютам;
-  • задачи по умолчанию на проект + категории расходов на клиента;
-  • доступ всех мок-пользователей ко всем мок-проектам;
-  • записи времени за несколько месяцев (будни, случайная длительность);
-  • недельные сдачи (status submitted);
-  • счета (draft / sent / viewed) со строками времени по проектам (через create + patch draft — без вызова API);
-  • сохранённые представления и снимки отчётов (time и detailed-expense);
-  • запросы партнёрского подтверждения: часть в pending, часть fully_confirmed.
-
-Расходы для отчёта TT загружаются по HTTP из сервиса expenses (/expenses/report-data).
-Флаг --with-expenses и переменная EXPENSES_DATABASE_URL создают заявки в БД expenses с привязкой project_id к UUID проектов TT.
-
-Запуск:
-
-  python scripts/seed_tt_mock_data.py --dry-run
-  python scripts/seed_tt_mock_data.py --execute --with-expenses
-
-Docker:
-
-  EXPENSES_DATABASE_URL=postgresql://... python scripts/seed_tt_mock_data.py --execute --lite --with-expenses
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -47,6 +20,7 @@ from sqlalchemy import and_, func, select
 
 from application.client_expense_category_defaults import seed_default_expense_categories_for_all_clients
 from application.client_task_defaults import seed_default_common_tasks_for_project
+from application.demo_seed_budget import demo_budget_fields_for_project
 from application.partner_report_confirmation_service import list_partner_auth_user_ids_for_project
 from application.weekly_period import saturday_start_of_reporting_week, work_week_start_end_inclusive
 from infrastructure.database import async_session_factory
@@ -523,10 +497,7 @@ async def _run(
                         currency=client_currency,
                         billable_rate_type=None,
                         project_billable_rate_amount=_billable_rate_amount_for_currency(client_currency, rnd),
-                        budget_type=None,
-                        budget_amount=None,
-                        progress_budget_amount=None,
-                        budget_hours=None,
+                        **demo_budget_fields_for_project(client_currency, rnd, slot=ci * 100 + pj),
                         budget_resets_every_month=False,
                         budget_includes_expenses=False,
                         send_budget_alerts=False,
