@@ -219,9 +219,18 @@ class InvoiceRepository:
         if not rows:
             return
         sums = await self.sum_payments_batch([r.id for r in rows])
+        changed = False
         for inv in rows:
-            inv.amount_paid = sums.get(inv.id, Decimal(0))
+            iid = str(inv.id)
+            new_paid = _m4(sums.get(iid, Decimal(0)))
+            old_paid = _m4(inv.amount_paid)
+            old_status = inv.status
+            inv.amount_paid = new_paid
             _sync_orm_payment_status(inv)
+            if old_paid != new_paid or old_status != inv.status:
+                changed = True
+        if changed:
+            await self._s.commit()
 
     async def reconcile_paid_fields(self, inv: InvoiceModel) -> None:
         inv.amount_paid = _m4(await self.sum_payments(inv.id))
