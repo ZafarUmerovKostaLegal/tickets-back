@@ -134,27 +134,17 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
             """
             DO $$
             DECLARE
-                con RECORD;
+                r RECORD;
             BEGIN
-                FOR con IN
+                FOR r IN
                     SELECT c.conname::text AS cname
                     FROM pg_constraint c
-                    JOIN pg_class rel ON rel.oid = c.conrelid
-                    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-                    WHERE nsp.nspname = 'public'
-                      AND rel.relname = 'todo_boards'
+                    WHERE c.conrelid = 'todo_boards'::regclass
                       AND c.contype = 'u'
-                      AND array_length(c.conkey, 1) = 1
-                      AND EXISTS (
-                          SELECT 1 FROM pg_attribute a
-                          WHERE a.attrelid = c.conrelid
-                            AND a.attnum = c.conkey[1]
-                            AND a.attname = 'user_id'
-                      )
                 LOOP
                     EXECUTE format(
-                        'ALTER TABLE public.todo_boards DROP CONSTRAINT IF EXISTS %I',
-                        con.cname
+                        'ALTER TABLE todo_boards DROP CONSTRAINT IF EXISTS %I',
+                        r.cname
                     );
                 END LOOP;
             END $$;
@@ -166,27 +156,17 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
             """
             DO $$
             DECLARE
-                idx RECORD;
+                r RECORD;
             BEGIN
-                FOR idx IN
-                    SELECT quote_ident(n.nspname) || '.' || quote_ident(ic.relname) AS fqname
+                FOR r IN
+                    SELECT ix.oid::regclass::text AS idx_qname
                     FROM pg_index i
-                    JOIN pg_class t ON t.oid = i.indrelid
-                    JOIN pg_class ic ON ic.oid = i.indexrelid
-                    JOIN pg_namespace n ON n.oid = t.relnamespace
-                    WHERE n.nspname = 'public'
-                      AND t.relname = 'todo_boards'
+                    JOIN pg_class ix ON ix.oid = i.indexrelid
+                    WHERE i.indrelid = 'todo_boards'::regclass
                       AND i.indisunique
                       AND NOT i.indisprimary
-                      AND array_length(i.indkey, 1) = 1
-                      AND EXISTS (
-                          SELECT 1 FROM pg_attribute a
-                          WHERE a.attrelid = i.indrelid
-                            AND a.attnum = i.indkey[1]
-                            AND a.attname = 'user_id'
-                      )
                 LOOP
-                    EXECUTE 'DROP INDEX IF EXISTS ' || idx.fqname;
+                    EXECUTE 'DROP INDEX IF EXISTS ' || r.idx_qname;
                 END LOOP;
             END $$;
             """
