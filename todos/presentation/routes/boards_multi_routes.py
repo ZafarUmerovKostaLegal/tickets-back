@@ -117,7 +117,20 @@ async def create_board(
         )
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Could not create board") from exc
+        orig = getattr(exc, "orig", None)
+        pg_hint = (str(orig).strip() if orig else "") or str(exc).strip()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Could not create board",
+                "hint": (
+                    "Частая причина: в PostgreSQL всё ещё действует UNIQUE(user_id) на таблице "
+                    "todo_boards (старая схема). Перезапустите сервис todos, чтобы применился патч "
+                    "apply_todo_boards_multi_user_patch, или вручную снимите уникальность с user_id."
+                ),
+                "postgres": pg_hint[:2000],
+            },
+        ) from exc
     await session.commit()
     return await build_board_out(session, board.id)
 

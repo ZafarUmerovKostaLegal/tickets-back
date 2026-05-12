@@ -122,8 +122,75 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
     ]
     for s in stmts:
         await conn.execute(text(s))
+
     await conn.execute(
         text("ALTER TABLE todo_boards DROP CONSTRAINT IF EXISTS todo_boards_user_id_key")
+    )
+    await conn.execute(
+        text("ALTER TABLE todo_boards DROP CONSTRAINT IF EXISTS todo_boards_user_id_uniq")
+    )
+    await conn.execute(
+        text(
+            """
+            DO $$
+            DECLARE
+                con RECORD;
+            BEGIN
+                FOR con IN
+                    SELECT c.conname::text AS cname
+                    FROM pg_constraint c
+                    JOIN pg_class rel ON rel.oid = c.conrelid
+                    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                    WHERE nsp.nspname = 'public'
+                      AND rel.relname = 'todo_boards'
+                      AND c.contype = 'u'
+                      AND array_length(c.conkey, 1) = 1
+                      AND EXISTS (
+                          SELECT 1 FROM pg_attribute a
+                          WHERE a.attrelid = c.conrelid
+                            AND a.attnum = c.conkey[1]
+                            AND a.attname = 'user_id'
+                      )
+                LOOP
+                    EXECUTE format(
+                        'ALTER TABLE public.todo_boards DROP CONSTRAINT IF EXISTS %I',
+                        con.cname
+                    );
+                END LOOP;
+            END $$;
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            DO $$
+            DECLARE
+                idx RECORD;
+            BEGIN
+                FOR idx IN
+                    SELECT quote_ident(n.nspname) || '.' || quote_ident(ic.relname) AS fqname
+                    FROM pg_index i
+                    JOIN pg_class t ON t.oid = i.indrelid
+                    JOIN pg_class ic ON ic.oid = i.indexrelid
+                    JOIN pg_namespace n ON n.oid = t.relnamespace
+                    WHERE n.nspname = 'public'
+                      AND t.relname = 'todo_boards'
+                      AND i.indisunique
+                      AND NOT i.indisprimary
+                      AND array_length(i.indkey, 1) = 1
+                      AND EXISTS (
+                          SELECT 1 FROM pg_attribute a
+                          WHERE a.attrelid = i.indrelid
+                            AND a.attnum = i.indkey[1]
+                            AND a.attname = 'user_id'
+                      )
+                LOOP
+                    EXECUTE 'DROP INDEX IF EXISTS ' || idx.fqname;
+                END LOOP;
+            END $$;
+            """
+        )
     )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_todo_boards_user_id ON todo_boards (user_id)")
