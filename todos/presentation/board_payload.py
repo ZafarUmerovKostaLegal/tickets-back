@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from infrastructure.models import TODO_BOARD_TITLE_NEW_DEFAULT, TODO_BOARD_TITLE_PRIMARY_DEFAULT
 from infrastructure.repositories import KanbanRepository
 
 
@@ -76,7 +77,7 @@ class ColumnOut(BaseModel):
 class BoardOut(BaseModel):
     id: int
     user_id: int
-    title: str = "Моя доска"
+    title: str = TODO_BOARD_TITLE_PRIMARY_DEFAULT
     visibility: str = "personal"
     color: str | None = None
     background_url: str | None
@@ -137,7 +138,12 @@ class PatchBoardBodyFull(BaseModel):
 class CreateBoardBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    title: str = Field(..., min_length=1, max_length=200)
+    title: str = Field(
+        default=TODO_BOARD_TITLE_NEW_DEFAULT,
+        min_length=1,
+        max_length=200,
+        description="Название доски. Новая доска создаётся с тремя пустыми колонками и своим фоном (background_url).",
+    )
     visibility: str = Field(default="personal")
     color: str | None = Field(None, max_length=32)
     member_user_ids: list[int] = Field(default_factory=list, alias="memberUserIds")

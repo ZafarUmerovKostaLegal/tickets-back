@@ -15,6 +15,7 @@ from infrastructure.models import (
     INVITE_PENDING,
     INVITE_REVOKED,
     OutlookCalendarTokenModel,
+    TODO_BOARD_TITLE_PRIMARY_DEFAULT,
     TodoBoardInviteModel,
     TodoBoardLabelModel,
     TodoBoardMemberModel,
@@ -97,6 +98,21 @@ class KanbanRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
+    def add_default_kanban_columns(self, board_id: int, now: datetime) -> None:
+
+        for i, (col_title, col_color) in enumerate(_DEFAULT_KANBAN_COLUMNS):
+            self._session.add(
+                TodoColumnModel(
+                    board_id=board_id,
+                    title=col_title,
+                    position=i,
+                    color=col_color,
+                    is_collapsed=False,
+                    created_at=now,
+                    updated_at=None,
+                )
+            )
+
     async def get_board_by_id(self, board_id: int) -> TodoBoardModel | None:
         r = await self._session.execute(select(TodoBoardModel).where(TodoBoardModel.id == board_id))
         return r.scalars().one_or_none()
@@ -149,7 +165,7 @@ class KanbanRepository:
         now = _utc_now()
         row = TodoBoardModel(
             user_id=user_id,
-            title="Моя доска",
+            title=TODO_BOARD_TITLE_PRIMARY_DEFAULT,
             visibility="personal",
             color=None,
             sort_order=0,
@@ -160,18 +176,7 @@ class KanbanRepository:
         )
         self._session.add(row)
         await self._session.flush()
-        for i, (title, color) in enumerate(_DEFAULT_KANBAN_COLUMNS):
-            self._session.add(
-                TodoColumnModel(
-                    board_id=row.id,
-                    title=title,
-                    position=i,
-                    color=color,
-                    is_collapsed=False,
-                    created_at=now,
-                    updated_at=None,
-                )
-            )
+        self.add_default_kanban_columns(row.id, now)
         return row
 
     async def list_board_labels_for_board(self, board_id: int) -> list[TodoBoardLabelModel]:
@@ -246,18 +251,7 @@ class KanbanRepository:
         )
         self._session.add(board)
         await self._session.flush()
-        for i, (col_title, col_color) in enumerate(_DEFAULT_KANBAN_COLUMNS):
-            self._session.add(
-                TodoColumnModel(
-                    board_id=board.id,
-                    title=col_title,
-                    position=i,
-                    color=col_color,
-                    is_collapsed=False,
-                    created_at=now,
-                    updated_at=None,
-                )
-            )
+        self.add_default_kanban_columns(board.id, now)
         uniq_members = sorted({int(x) for x in member_user_ids if int(x) != owner_user_id})
         if visibility == BOARD_VIS_SHARED and uniq_members:
             if instant_add_members:

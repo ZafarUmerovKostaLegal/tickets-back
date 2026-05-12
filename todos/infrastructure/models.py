@@ -10,6 +10,10 @@ from infrastructure.database import Base
 
 BOARD_VIS_PERSONAL = "personal"
 BOARD_VIS_SHARED = "shared"
+
+# Заголовки по умолчанию: первая автосозданная доска vs явно созданная через POST /boards
+TODO_BOARD_TITLE_PRIMARY_DEFAULT = "Моя доска"
+TODO_BOARD_TITLE_NEW_DEFAULT = "Новая доска"
 BOARD_ROLES = frozenset({"owner", "editor", "viewer"})
 INVITE_PENDING = "pending"
 INVITE_ACCEPTED = "accepted"
@@ -42,7 +46,9 @@ class TodoBoardModel(Base):
         index=True,
         doc="Владелец доски (auth_user_id)",
     )
-    title: Mapped[str] = mapped_column(String(200), nullable=False, default="Моя доска")
+    title: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=TODO_BOARD_TITLE_PRIMARY_DEFAULT
+    )
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default=BOARD_VIS_PERSONAL)
     color: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
