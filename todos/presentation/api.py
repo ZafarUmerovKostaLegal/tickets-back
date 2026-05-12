@@ -6,7 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.models import (
     OutlookCalendarTokenModel,
+    TodoBoardInviteModel,
     TodoBoardLabelModel,
+    TodoBoardMemberModel,
     TodoBoardModel,
     TodoCardAttachmentModel,
     TodoCardCommentModel,
@@ -16,10 +18,11 @@ from infrastructure.models import (
     TodoCardParticipantModel,
     TodoColumnModel,
 )
-from presentation.routes import board_routes, calendar_routes, health
+from presentation.routes import board_routes, boards_multi_routes, calendar_routes, health
 from infrastructure.database import Base, engine
 from infrastructure.schema_patches import (
     apply_todo_board_columns_collapsed_patch,
+    apply_todo_boards_multi_user_patch,
     apply_todo_kanban_extended_patch,
 )
 
@@ -31,6 +34,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         await apply_todo_board_columns_collapsed_patch(conn)
         await apply_todo_kanban_extended_patch(conn)
+        await apply_todo_boards_multi_user_patch(conn)
     yield
 
 
@@ -53,3 +57,5 @@ app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(health.router)
 app.include_router(calendar_routes.router, prefix="/api/v1/todos")
 app.include_router(board_routes.router, prefix="/api/v1/todos")
+app.include_router(boards_multi_routes.boards_router, prefix="/api/v1/todos")
+app.include_router(boards_multi_routes.invites_router, prefix="/api/v1/todos")

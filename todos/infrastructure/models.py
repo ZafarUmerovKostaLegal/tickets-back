@@ -8,6 +8,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from infrastructure.database import Base
 
 
+BOARD_VIS_PERSONAL = "personal"
+BOARD_VIS_SHARED = "shared"
+BOARD_ROLES = frozenset({"owner", "editor", "viewer"})
+INVITE_PENDING = "pending"
+INVITE_ACCEPTED = "accepted"
+INVITE_DECLINED = "declined"
+INVITE_REVOKED = "revoked"
+INVITE_EXPIRED = "expired"
+
+
 class OutlookCalendarTokenModel(Base):
 
 
@@ -26,7 +36,17 @@ class TodoBoardModel(Base):
     __tablename__ = "todo_boards"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+        doc="Владелец доски (auth_user_id)",
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="Моя доска")
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default=BOARD_VIS_PERSONAL)
+    color: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     background_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -41,6 +61,57 @@ class TodoBoardModel(Base):
         back_populates="board",
         cascade="all, delete-orphan",
     )
+    members: Mapped[list["TodoBoardMemberModel"]] = relationship(
+        "TodoBoardMemberModel",
+        back_populates="board",
+        cascade="all, delete-orphan",
+    )
+    invites: Mapped[list["TodoBoardInviteModel"]] = relationship(
+        "TodoBoardInviteModel",
+        back_populates="board",
+        cascade="all, delete-orphan",
+    )
+
+
+class TodoBoardMemberModel(Base):
+
+
+    __tablename__ = "todo_board_members"
+
+    board_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("todo_boards.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="editor")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    board: Mapped["TodoBoardModel"] = relationship("TodoBoardModel", back_populates="members")
+
+
+class TodoBoardInviteModel(Base):
+
+
+    __tablename__ = "todo_board_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    board_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("todo_boards.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    inviter_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    invitee_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    role_offered: Mapped[str] = mapped_column(String(32), nullable=False, default="editor")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=INVITE_PENDING)
+    message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    board: Mapped["TodoBoardModel"] = relationship("TodoBoardModel", back_populates="invites")
 
 
 class TodoBoardLabelModel(Base):

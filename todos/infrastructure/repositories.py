@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from collections import defaultdict
 from pathlib import Path
@@ -9,8 +9,15 @@ from application.ports import HealthRepositoryPort
 from infrastructure.config import get_settings
 from infrastructure.file_storage import save_todo_card_file
 from infrastructure.models import (
+    BOARD_VIS_SHARED,
+    INVITE_ACCEPTED,
+    INVITE_DECLINED,
+    INVITE_PENDING,
+    INVITE_REVOKED,
     OutlookCalendarTokenModel,
+    TodoBoardInviteModel,
     TodoBoardLabelModel,
+    TodoBoardMemberModel,
     TodoBoardModel,
     TodoCardAttachmentModel,
     TodoCardChecklistItemModel,
@@ -81,6 +88,8 @@ _DEFAULT_KANBAN_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Позже", "#ea580c"),
 )
 
+_INVITE_TTL_DAYS = 7
+
 
 class KanbanRepository:
 
@@ -88,19 +97,63 @@ class KanbanRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def get_board_row(self, user_id: int) -> TodoBoardModel | None:
+    async def get_board_by_id(self, board_id: int) -> TodoBoardModel | None:
+        r = await self._session.execute(select(TodoBoardModel).where(TodoBoardModel.id == board_id))
+        return r.scalars().one_or_none()
+
+    async def board_role(self, user_id: int, board_id: int) -> str | None:
+        b = await self.get_board_by_id(board_id)
+        if not b or b.archived_at is not None:
+            return None
+        if b.user_id == user_id:
+            return "owner"
         r = await self._session.execute(
-            select(TodoBoardModel).where(TodoBoardModel.user_id == user_id)
+            select(TodoBoardMemberModel).where(
+                TodoBoardMemberModel.board_id == board_id,
+                TodoBoardMemberModel.user_id == user_id,
+            )
+        )
+        m = r.scalars().one_or_none()
+        return m.role if m else None
+
+    async def require_board_read(self, user_id: int, board_id: int) -> TodoBoardModel | None:
+        if await self.board_role(user_id, board_id) is None:
+            return None
+        return await self.get_board_by_id(board_id)
+
+    async def require_board_write(self, user_id: int, board_id: int) -> TodoBoardModel | None:
+        role = await self.board_role(user_id, board_id)
+        if role not in ("owner", "editor"):
+            return None
+        return await self.get_board_by_id(board_id)
+
+    async def get_primary_owned_board(self, user_id: int) -> TodoBoardModel | None:
+        r = await self._session.execute(
+            select(TodoBoardModel)
+            .where(
+                TodoBoardModel.user_id == user_id,
+                TodoBoardModel.archived_at.is_(None),
+            )
+            .order_by(TodoBoardModel.sort_order.asc(), TodoBoardModel.id.asc())
+            .limit(1)
         )
         return r.scalars().one_or_none()
 
+    async def get_board_row(self, user_id: int) -> TodoBoardModel | None:
+        return await self.get_primary_owned_board(user_id)
+
     async def ensure_board(self, user_id: int) -> TodoBoardModel:
-        row = await self.get_board_row(user_id)
+        row = await self.get_primary_owned_board(user_id)
         if row:
             return row
         now = _utc_now()
         row = TodoBoardModel(
             user_id=user_id,
+            title="Моя доска",
+            visibility="personal",
+            color=None,
+            sort_order=0,
+            archived_at=None,
             background_url=None,
             created_at=now,
             updated_at=None,
@@ -119,6 +172,374 @@ class KanbanRepository:
                     updated_at=None,
                 )
             )
+        return row
+
+    async def list_board_labels_for_board(self, board_id: int) -> list[TodoBoardLabelModel]:
+        r = await self._session.execute(
+            select(TodoBoardLabelModel).where(TodoBoardLabelModel.board_id == board_id)
+        )
+        rows = list(r.scalars().all())
+        rows.sort(key=lambda x: (x.position, x.id))
+        return rows
+
+    async def list_accessible_boards_with_roles(
+        self,
+        user_id: int,
+    ) -> list[tuple[TodoBoardModel, str]]:
+
+        r_own = await self._session.execute(
+            select(TodoBoardModel).where(
+                TodoBoardModel.user_id == user_id,
+                TodoBoardModel.archived_at.is_(None),
+            )
+        )
+        owned = list(r_own.scalars().all())
+        out: list[tuple[TodoBoardModel, str]] = [(b, "owner") for b in owned]
+        seen = {b.id for b, _ in out}
+        r_mem = await self._session.execute(
+            select(TodoBoardModel, TodoBoardMemberModel.role)
+            .join(
+                TodoBoardMemberModel,
+                TodoBoardMemberModel.board_id == TodoBoardModel.id,
+            )
+            .where(
+                TodoBoardMemberModel.user_id == user_id,
+                TodoBoardModel.archived_at.is_(None),
+            )
+        )
+        for board, role in r_mem.all():
+            if board.id not in seen:
+                out.append((board, str(role)))
+                seen.add(board.id)
+        out.sort(key=lambda t: (t[0].sort_order, t[0].id))
+        return out
+
+    async def create_board(
+        self,
+        owner_user_id: int,
+        *,
+        title: str,
+        visibility: str,
+        color: str | None,
+        member_user_ids: list[int],
+        instant_add_members: bool,
+    ) -> TodoBoardModel:
+        now = _utc_now()
+        rmax = await self._session.execute(
+            select(TodoBoardModel.sort_order).where(
+                TodoBoardModel.user_id == owner_user_id,
+                TodoBoardModel.archived_at.is_(None),
+            )
+        )
+        orders = [x[0] for x in rmax.all()]
+        next_order = (max(orders) + 1) if orders else 0
+        board = TodoBoardModel(
+            user_id=owner_user_id,
+            title=title.strip()[:200],
+            visibility=visibility,
+            color=(color.strip()[:32] if color else None),
+            sort_order=next_order,
+            archived_at=None,
+            background_url=None,
+            created_at=now,
+            updated_at=None,
+        )
+        self._session.add(board)
+        await self._session.flush()
+        for i, (col_title, col_color) in enumerate(_DEFAULT_KANBAN_COLUMNS):
+            self._session.add(
+                TodoColumnModel(
+                    board_id=board.id,
+                    title=col_title,
+                    position=i,
+                    color=col_color,
+                    is_collapsed=False,
+                    created_at=now,
+                    updated_at=None,
+                )
+            )
+        uniq_members = sorted({int(x) for x in member_user_ids if int(x) != owner_user_id})
+        if visibility == BOARD_VIS_SHARED and uniq_members:
+            if instant_add_members:
+                for uid in uniq_members:
+                    self._session.add(
+                        TodoBoardMemberModel(
+                            board_id=board.id,
+                            user_id=uid,
+                            role="editor",
+                            joined_at=now,
+                        )
+                    )
+            else:
+                for uid in uniq_members:
+                    self._session.add(
+                        TodoBoardInviteModel(
+                            board_id=board.id,
+                            inviter_user_id=owner_user_id,
+                            invitee_user_id=uid,
+                            role_offered="editor",
+                            status=INVITE_PENDING,
+                            message=None,
+                            created_at=now,
+                            expires_at=now + timedelta(days=_INVITE_TTL_DAYS),
+                            resolved_at=None,
+                        )
+                    )
+        await self._session.flush()
+        return board
+
+    async def patch_board_meta(
+        self,
+        user_id: int,
+        board_id: int,
+        *,
+        title: str | None,
+        color: str | None,
+        visibility: str | None,
+        background_url: str | None,
+        background_url_set: bool,
+    ) -> TodoBoardModel | None:
+        b = await self.require_board_write(user_id, board_id)
+        if not b:
+            return None
+        now = _utc_now()
+        if title is not None:
+            b.title = title.strip()[:200]
+        if color is not None:
+            b.color = color.strip()[:32] if color else None
+        if visibility is not None:
+            b.visibility = visibility
+        if background_url_set:
+            b.background_url = background_url
+        b.updated_at = now
+        self._session.add(b)
+        return b
+
+    async def archive_board(self, user_id: int, board_id: int) -> bool:
+        b = await self.get_board_by_id(board_id)
+        if not b or b.archived_at is not None:
+            return False
+        if b.user_id != user_id:
+            return False
+        now = _utc_now()
+        b.archived_at = now
+        b.updated_at = now
+        self._session.add(b)
+        return True
+
+    async def list_pending_invites_for_user(
+        self,
+        user_id: int,
+    ) -> list[tuple[TodoBoardInviteModel, TodoBoardModel]]:
+        now = _utc_now()
+        r = await self._session.execute(
+            select(TodoBoardInviteModel, TodoBoardModel)
+            .join(TodoBoardModel, TodoBoardModel.id == TodoBoardInviteModel.board_id)
+            .where(
+                TodoBoardInviteModel.invitee_user_id == user_id,
+                TodoBoardInviteModel.status == INVITE_PENDING,
+                TodoBoardInviteModel.expires_at > now,
+                TodoBoardModel.archived_at.is_(None),
+            )
+            .order_by(TodoBoardInviteModel.created_at.desc())
+        )
+        return list(r.all())
+
+    async def list_pending_invites_for_board(
+        self,
+        user_id: int,
+        board_id: int,
+    ) -> list[TodoBoardInviteModel]:
+        if await self.require_board_write(user_id, board_id) is None:
+            return []
+        r = await self._session.execute(
+            select(TodoBoardInviteModel).where(
+                TodoBoardInviteModel.board_id == board_id,
+                TodoBoardInviteModel.status == INVITE_PENDING,
+            )
+        )
+        return list(r.scalars().all())
+
+    async def create_board_invites(
+        self,
+        actor_user_id: int,
+        board_id: int,
+        *,
+        invitee_ids: list[int],
+        role: str,
+        message: str | None,
+    ) -> list[TodoBoardInviteModel] | None:
+        b = await self.require_board_write(actor_user_id, board_id)
+        if not b:
+            return None
+        now = _utc_now()
+        created: list[TodoBoardInviteModel] = []
+        board_owner = b.user_id
+        for raw in sorted({int(x) for x in invitee_ids}):
+            if raw == board_owner:
+                continue
+            rm = await self._session.execute(
+                select(TodoBoardMemberModel).where(
+                    TodoBoardMemberModel.board_id == board_id,
+                    TodoBoardMemberModel.user_id == raw,
+                )
+            )
+            if rm.scalars().one_or_none():
+                continue
+            rp = await self._session.execute(
+                select(TodoBoardInviteModel).where(
+                    TodoBoardInviteModel.board_id == board_id,
+                    TodoBoardInviteModel.invitee_user_id == raw,
+                    TodoBoardInviteModel.status == INVITE_PENDING,
+                )
+            )
+            if rp.scalars().one_or_none():
+                continue
+            inv = TodoBoardInviteModel(
+                board_id=board_id,
+                inviter_user_id=actor_user_id,
+                invitee_user_id=raw,
+                role_offered=role,
+                status=INVITE_PENDING,
+                message=(message[:500] if message else None),
+                created_at=now,
+                expires_at=now + timedelta(days=_INVITE_TTL_DAYS),
+                resolved_at=None,
+            )
+            self._session.add(inv)
+            created.append(inv)
+        await self._session.flush()
+        return created
+
+    async def accept_invite(self, invite_id: int, user_id: int) -> TodoBoardInviteModel | None:
+        now = _utc_now()
+        r = await self._session.execute(
+            select(TodoBoardInviteModel).where(TodoBoardInviteModel.id == invite_id)
+        )
+        inv = r.scalars().one_or_none()
+        if (
+            not inv
+            or inv.invitee_user_id != user_id
+            or inv.status != INVITE_PENDING
+            or inv.expires_at <= now
+        ):
+            return None
+        rb = await self._session.execute(
+            select(TodoBoardMemberModel).where(
+                TodoBoardMemberModel.board_id == inv.board_id,
+                TodoBoardMemberModel.user_id == user_id,
+            )
+        )
+        if rb.scalars().one_or_none():
+            inv.status = INVITE_ACCEPTED
+            inv.resolved_at = now
+            self._session.add(inv)
+            await self._session.flush()
+            return inv
+        inv.status = INVITE_ACCEPTED
+        inv.resolved_at = now
+        self._session.add(inv)
+        self._session.add(
+            TodoBoardMemberModel(
+                board_id=inv.board_id,
+                user_id=user_id,
+                role=inv.role_offered or "editor",
+                joined_at=now,
+            )
+        )
+        await self._session.flush()
+        return inv
+
+    async def decline_invite(self, invite_id: int, user_id: int) -> bool:
+        now = _utc_now()
+        r = await self._session.execute(
+            select(TodoBoardInviteModel).where(TodoBoardInviteModel.id == invite_id)
+        )
+        inv = r.scalars().one_or_none()
+        if not inv or inv.invitee_user_id != user_id or inv.status != INVITE_PENDING:
+            return False
+        inv.status = INVITE_DECLINED
+        inv.resolved_at = now
+        self._session.add(inv)
+        return True
+
+    async def revoke_invite(self, invite_id: int, actor_user_id: int) -> bool:
+        now = _utc_now()
+        r = await self._session.execute(
+            select(TodoBoardInviteModel).where(TodoBoardInviteModel.id == invite_id)
+        )
+        inv = r.scalars().one_or_none()
+        if not inv or inv.status != INVITE_PENDING:
+            return False
+        b = await self.get_board_by_id(inv.board_id)
+        if not b:
+            return False
+        if b.user_id != actor_user_id and inv.inviter_user_id != actor_user_id:
+            return False
+        inv.status = INVITE_REVOKED
+        inv.resolved_at = now
+        self._session.add(inv)
+        return True
+
+    async def list_board_members(
+        self,
+        user_id: int,
+        board_id: int,
+    ) -> list[TodoBoardMemberModel] | None:
+        if await self.require_board_read(user_id, board_id) is None:
+            return None
+        r = await self._session.execute(
+            select(TodoBoardMemberModel).where(TodoBoardMemberModel.board_id == board_id)
+        )
+        rows = list(r.scalars().all())
+        rows.sort(key=lambda m: (m.user_id,))
+        return rows
+
+    async def remove_board_member(
+        self,
+        actor_user_id: int,
+        board_id: int,
+        member_user_id: int,
+    ) -> bool:
+        b = await self.get_board_by_id(board_id)
+        if not b or b.archived_at is not None:
+            return False
+        if b.user_id != actor_user_id:
+            return False
+        if member_user_id == b.user_id:
+            return False
+        r = await self._session.execute(
+            delete(TodoBoardMemberModel).where(
+                TodoBoardMemberModel.board_id == board_id,
+                TodoBoardMemberModel.user_id == member_user_id,
+            )
+        )
+        return r.rowcount > 0  # type: ignore[union-attr,no-any-return]
+
+    async def patch_board_member_role(
+        self,
+        actor_user_id: int,
+        board_id: int,
+        member_user_id: int,
+        *,
+        role: str,
+    ) -> TodoBoardMemberModel | None:
+        b = await self.get_board_by_id(board_id)
+        if not b or b.archived_at is not None or b.user_id != actor_user_id:
+            return None
+        if member_user_id == b.user_id:
+            return None
+        r = await self._session.execute(
+            select(TodoBoardMemberModel).where(
+                TodoBoardMemberModel.board_id == board_id,
+                TodoBoardMemberModel.user_id == member_user_id,
+            )
+        )
+        row = r.scalars().one_or_none()
+        if not row:
+            return None
+        row.role = role
+        self._session.add(row)
         return row
 
     async def _columns_for_board(self, board_id: int) -> list[TodoColumnModel]:
@@ -153,28 +574,44 @@ class KanbanRepository:
         self,
         user_id: int,
         column_id: int,
+        *,
+        need_write: bool = True,
     ) -> TodoColumnModel | None:
         r = await self._session.execute(
-            select(TodoColumnModel)
-            .join(TodoBoardModel, TodoColumnModel.board_id == TodoBoardModel.id)
-            .where(
-                TodoBoardModel.user_id == user_id,
-                TodoColumnModel.id == column_id,
-            )
+            select(TodoColumnModel).where(TodoColumnModel.id == column_id)
         )
-        return r.scalars().one_or_none()
+        col = r.scalars().one_or_none()
+        if not col:
+            return None
+        role = await self.board_role(user_id, col.board_id)
+        if role is None:
+            return None
+        if need_write and role == "viewer":
+            return None
+        return col
 
-    async def get_card_if_owned(self, user_id: int, card_id: int) -> TodoCardModel | None:
+    async def get_card_if_owned(
+        self,
+        user_id: int,
+        card_id: int,
+        *,
+        need_write: bool = True,
+    ) -> TodoCardModel | None:
         r = await self._session.execute(
-            select(TodoCardModel)
+            select(TodoCardModel, TodoColumnModel)
             .join(TodoColumnModel, TodoCardModel.column_id == TodoColumnModel.id)
-            .join(TodoBoardModel, TodoColumnModel.board_id == TodoBoardModel.id)
-            .where(
-                TodoBoardModel.user_id == user_id,
-                TodoCardModel.id == card_id,
-            )
+            .where(TodoCardModel.id == card_id)
         )
-        return r.scalars().one_or_none()
+        row = r.one_or_none()
+        if not row:
+            return None
+        card, col = row[0], row[1]
+        role = await self.board_role(user_id, col.board_id)
+        if role is None:
+            return None
+        if need_write and role == "viewer":
+            return None
+        return card
 
     async def patch_board(
         self,
@@ -192,13 +629,21 @@ class KanbanRepository:
         self,
         user_id: int,
         *,
+        board_id: int | None = None,
         title: str,
         color: str,
         insert_at: int | None,
         is_collapsed: bool = False,
-    ) -> TodoColumnModel:
-        board = await self.ensure_board(user_id)
-        cols = await self._columns_for_board(board.id)
+    ) -> TodoColumnModel | None:
+        if board_id is None:
+            board = await self.ensure_board(user_id)
+            bid = board.id
+        else:
+            b = await self.require_board_write(user_id, board_id)
+            if not b:
+                return None
+            bid = board_id
+        cols = await self._columns_for_board(bid)
         n = len(cols)
         pos = n if insert_at is None else max(0, min(int(insert_at), n))
         now = _utc_now()
@@ -208,7 +653,7 @@ class KanbanRepository:
                 c.updated_at = now
                 self._session.add(c)
         col = TodoColumnModel(
-            board_id=board.id,
+            board_id=bid,
             title=title.strip(),
             position=pos,
             color=(color or "#6b7280").strip()[:32],
@@ -222,20 +667,29 @@ class KanbanRepository:
 
     async def list_board_labels(self, user_id: int) -> list[TodoBoardLabelModel]:
         board = await self.ensure_board(user_id)
-        r = await self._session.execute(
-            select(TodoBoardLabelModel).where(TodoBoardLabelModel.board_id == board.id)
-        )
-        rows = list(r.scalars().all())
-        rows.sort(key=lambda x: (x.position, x.id))
-        return rows
+        return await self.list_board_labels_for_board(board.id)
 
-    async def add_board_label(self, user_id: int, *, title: str, color: str) -> TodoBoardLabelModel:
-        board = await self.ensure_board(user_id)
-        existing = await self.list_board_labels(user_id)
+    async def add_board_label(
+        self,
+        user_id: int,
+        *,
+        title: str,
+        color: str,
+        board_id: int | None = None,
+    ) -> TodoBoardLabelModel | None:
+        if board_id is None:
+            board = await self.ensure_board(user_id)
+            bid = board.id
+        else:
+            b = await self.require_board_write(user_id, board_id)
+            if not b:
+                return None
+            bid = board_id
+        existing = await self.list_board_labels_for_board(bid)
         n = len(existing)
         now = _utc_now()
         row = TodoBoardLabelModel(
-            board_id=board.id,
+            board_id=bid,
             title=title.strip()[:200],
             color=(color or "#6b7280").strip()[:32],
             position=n,
@@ -254,15 +708,13 @@ class KanbanRepository:
         title: str | None,
         color: str | None,
     ) -> TodoBoardLabelModel | None:
-        board = await self.ensure_board(user_id)
         r = await self._session.execute(
-            select(TodoBoardLabelModel).where(
-                TodoBoardLabelModel.id == label_id,
-                TodoBoardLabelModel.board_id == board.id,
-            )
+            select(TodoBoardLabelModel).where(TodoBoardLabelModel.id == label_id)
         )
         row = r.scalars().one_or_none()
         if not row:
+            return None
+        if await self.require_board_write(user_id, row.board_id) is None:
             return None
         now = _utc_now()
         if title is not None:
@@ -274,15 +726,13 @@ class KanbanRepository:
         return row
 
     async def delete_board_label(self, user_id: int, label_id: int) -> bool:
-        board = await self.ensure_board(user_id)
         r = await self._session.execute(
-            select(TodoBoardLabelModel).where(
-                TodoBoardLabelModel.id == label_id,
-                TodoBoardLabelModel.board_id == board.id,
-            )
+            select(TodoBoardLabelModel).where(TodoBoardLabelModel.id == label_id)
         )
         row = r.scalars().one_or_none()
         if not row:
+            return False
+        if await self.require_board_write(user_id, row.board_id) is None:
             return False
         await self._session.execute(
             delete(TodoBoardLabelModel).where(TodoBoardLabelModel.id == label_id)
@@ -701,10 +1151,18 @@ class KanbanRepository:
                 self._session.add(c)
 
     async def reorder_columns(self, user_id: int, ordered_column_ids: list[int]) -> bool:
-        board = await self.get_board_row(user_id)
-        if not board:
+        if not ordered_column_ids:
             return False
-        cols = await self._columns_for_board(board.id)
+        r0 = await self._session.execute(
+            select(TodoColumnModel).where(TodoColumnModel.id == ordered_column_ids[0])
+        )
+        col0 = r0.scalars().one_or_none()
+        if not col0:
+            return False
+        bid = col0.board_id
+        if await self.require_board_write(user_id, bid) is None:
+            return False
+        cols = await self._columns_for_board(bid)
         existing = {c.id for c in cols}
         if set(ordered_column_ids) != existing or len(ordered_column_ids) != len(existing):
             return False

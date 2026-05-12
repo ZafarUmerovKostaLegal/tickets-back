@@ -107,3 +107,79 @@ async def apply_todo_kanban_extended_patch(conn: AsyncConnection) -> None:
     )
     for sql in ddl:
         await conn.execute(text(sql))
+
+
+async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
+
+    stmts = [
+        "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS title VARCHAR(200) NOT NULL DEFAULT 'Моя доска'",
+        (
+            "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS visibility VARCHAR(32) NOT NULL DEFAULT 'personal'"
+        ),
+        "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS color VARCHAR(32)",
+        "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
+    ]
+    for s in stmts:
+        await conn.execute(text(s))
+    await conn.execute(
+        text("ALTER TABLE todo_boards DROP CONSTRAINT IF EXISTS todo_boards_user_id_key")
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_todo_boards_user_id ON todo_boards (user_id)")
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS todo_board_members (
+                board_id INTEGER NOT NULL REFERENCES todo_boards (id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL,
+                role VARCHAR(32) NOT NULL DEFAULT 'editor',
+                joined_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (board_id, user_id)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_todo_board_members_user_id ON todo_board_members (user_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS todo_board_invites (
+                id SERIAL PRIMARY KEY,
+                board_id INTEGER NOT NULL REFERENCES todo_boards (id) ON DELETE CASCADE,
+                inviter_user_id INTEGER NOT NULL,
+                invitee_user_id INTEGER NOT NULL,
+                role_offered VARCHAR(32) NOT NULL DEFAULT 'editor',
+                status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                message VARCHAR(500),
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                resolved_at TIMESTAMPTZ
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_todo_board_invites_board_id ON todo_board_invites (board_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_todo_board_invites_invitee ON todo_board_invites (invitee_user_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_todo_board_invite_pending
+                ON todo_board_invites (board_id, invitee_user_id)
+                WHERE status = 'pending'
+            """
+        )
+    )
