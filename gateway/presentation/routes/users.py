@@ -48,6 +48,24 @@ def bearer_for_upstream(request: Request, authorization: Optional[str]) -> Optio
     return f"Bearer {tok}" if tok else None
 
 
+def _normalize_desktop_background_url(user_payload: dict) -> dict:
+    """Expose desktop background through /api/v1/media so frontend never needs root /desktop_backgrounds."""
+
+    out = dict(user_payload)
+    raw = (out.get("desktop_background") or "").strip()
+    if not raw:
+        return out
+    if raw.startswith(("http://", "https://", "/api/v1/media/")):
+        out["desktop_background"] = raw
+        return out
+    out["desktop_background"] = f"/api/v1/media/{raw.lstrip('/')}"
+    return out
+
+
+def _normalize_desktop_backgrounds(users: list[dict]) -> list[dict]:
+    return [_normalize_desktop_background_url(u) for u in users]
+
+
 async def _sync_time_tracking_user(user_payload: dict, authorization_header: Optional[str]) -> None:
     base = (get_settings().time_tracking_service_url or "").strip().rstrip("/")
     if not base:
@@ -223,7 +241,8 @@ async def get_me(
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
     user = await verify_bearer_and_get_user(request, authorization)
-    return await merge_weekly_capacity_into_user(user, bearer_for_upstream(request, authorization))
+    merged = await merge_weekly_capacity_into_user(user, bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(merged)
 
 
 @router.post("/me/desktop-background", response_model=UserResponse)
@@ -282,7 +301,8 @@ async def upload_desktop_background(
     if r.status_code != 200:
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=r.status_code, detail=r.text or "Failed to save settings")
-    return await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
+    merged = await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(merged)
 
 
 @router.delete("/me/desktop-background", response_model=UserResponse)
@@ -313,7 +333,8 @@ async def delete_desktop_background(
     )
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail=r.text or "Failed to delete")
-    return await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
+    merged = await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(merged)
 
 
 @router.get("", response_model=list[UserResponse])
@@ -339,7 +360,7 @@ async def list_users(
         raise HTTPException(status_code=403, detail=d)
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    return _normalize_desktop_backgrounds(r.json())
 
 
 @router.patch("/me/weekly-capacity-hours", response_model=UserResponse)
@@ -404,7 +425,7 @@ async def patch_me_weekly_capacity(
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Time tracking service unavailable")
     user["weekly_capacity_hours"] = hours
-    return user
+    return _normalize_desktop_background_url(user)
 
 
 @router.get("/{user_id}", response_model=UserDetailResponse)
@@ -430,7 +451,7 @@ async def get_user_detail(
     detail = r.json()
     cap = await fetch_weekly_capacity_hours(user_id, bearer_for_upstream(request, authorization))
     detail["weekly_capacity_hours"] = cap
-    return detail
+    return _normalize_desktop_background_url(detail)
 
 
 @router.patch("/{user_id}/role", response_model=UserDetailResponse)
@@ -459,7 +480,7 @@ async def set_user_role(
         raise HTTPException(status_code=403, detail=detail)
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    return _normalize_desktop_background_url(r.json())
 
 
 @router.patch("/{user_id}/block", response_model=UserDetailResponse)
@@ -482,7 +503,7 @@ async def block_user(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    return _normalize_desktop_background_url(r.json())
 
 
 @router.patch("/{user_id}/archive", response_model=UserDetailResponse)
@@ -505,7 +526,7 @@ async def archive_user(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return r.json()
+    return _normalize_desktop_background_url(r.json())
 
 
 @router.patch("/{user_id}/time-tracking-role", response_model=UserDetailResponse)
@@ -531,7 +552,7 @@ async def set_time_tracking_role(
         raise HTTPException(status_code=503, detail="Auth service error")
     user_payload = r.json()
     await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
-    return user_payload
+    return _normalize_desktop_background_url(user_payload)
 
 
 @router.patch("/{user_id}/position", response_model=UserDetailResponse)
@@ -557,4 +578,4 @@ async def set_position(
         raise HTTPException(status_code=503, detail="Auth service error")
     user_payload = r.json()
     await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
-    return user_payload
+    return _normalize_desktop_background_url(user_payload)
