@@ -15,6 +15,11 @@ _DESKTOP_BG_FILENAME = re.compile(
     re.IGNORECASE,
 )
 
+_TODO_BOARD_BG_FILENAME = re.compile(
+    r"^[a-f0-9]{32}\.(jpg|jpeg|png|gif|webp)$",
+    re.IGNORECASE,
+)
+
 
 async def get_current_user(
     request: Request,
@@ -32,6 +37,24 @@ async def get_desktop_background_media(user_id: int, filename: str):
     settings = get_settings()
     base_dir = Path(settings.media_path).resolve()
     target = (base_dir / "desktop_backgrounds" / str(user_id) / filename).resolve()
+    if not str(target).startswith(str(base_dir)):
+        raise HTTPException(status_code=400, detail="Invalid media path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return FileResponse(target)
+
+
+@router.get("/todo_board_backgrounds/{owner_user_id}/{board_id}/{filename}")
+async def get_todo_board_background_media(owner_user_id: int, board_id: int, filename: str):
+    """Фон конкретной todo-доски: публично для <img>, но только из safe media path."""
+
+    if not _TODO_BOARD_BG_FILENAME.match(filename):
+        raise HTTPException(status_code=404, detail="Not found")
+    settings = get_settings()
+    base_dir = Path(settings.media_path).resolve()
+    target = (
+        base_dir / "todo_board_backgrounds" / str(owner_user_id) / str(board_id) / filename
+    ).resolve()
     if not str(target).startswith(str(base_dir)):
         raise HTTPException(status_code=400, detail="Invalid media path")
     if not target.exists() or not target.is_file():

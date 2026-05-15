@@ -17,7 +17,9 @@ router = APIRouter(prefix="/board", tags=["board"])
 
 async def _build_board_out(session: AsyncSession, user_id: int) -> BoardOut:
     repo = KanbanRepository(session)
-    board = await repo.ensure_board(user_id)
+    board = await repo.get_last_selected_board(user_id)
+    if board is None:
+        board = await repo.ensure_board(user_id)
     return await build_board_out(session, board.id)
 
 
@@ -132,7 +134,9 @@ async def get_board(
 ):
 
     repo = KanbanRepository(session)
-    await repo.ensure_board(user_id)
+    board = await repo.ensure_board(user_id)
+    if await repo.get_last_selected_board_id(user_id) is None:
+        await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
     return await _build_board_out(session, user_id)
 

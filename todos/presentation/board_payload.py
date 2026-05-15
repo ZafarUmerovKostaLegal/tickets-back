@@ -90,6 +90,7 @@ class BoardSummaryOut(BaseModel):
     title: str
     visibility: str
     color: str | None = None
+    background_url: str | None = None
     sort_order: int = 0
     is_current: bool = False
     updated_at: datetime | None = None
@@ -98,6 +99,8 @@ class BoardSummaryOut(BaseModel):
 
 class BoardsListOut(BaseModel):
     items: list[BoardSummaryOut]
+    current_board_id: int | None = None
+    last_selected_board_id: int | None = None
 
 
 class BoardMemberOut(BaseModel):
@@ -148,6 +151,12 @@ class CreateBoardBody(BaseModel):
     color: str | None = Field(None, max_length=32)
     member_user_ids: list[int] = Field(default_factory=list, alias="memberUserIds")
     instant_add_members: bool = Field(default=False, alias="instantAddMembers")
+
+
+class SelectBoardBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    board_id: int = Field(..., alias="boardId")
 
 
 class CreateBoardInvitesBody(BaseModel):

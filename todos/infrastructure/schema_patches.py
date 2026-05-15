@@ -119,6 +119,7 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
         "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS color VARCHAR(32)",
         "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
+        "ALTER TABLE todo_boards ADD COLUMN IF NOT EXISTS background_url TEXT",
     ]
     for s in stmts:
         await conn.execute(text(s))
@@ -174,6 +175,25 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
     )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_todo_boards_user_id ON todo_boards (user_id)")
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS todo_user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                last_selected_board_id INTEGER REFERENCES todo_boards (id) ON DELETE SET NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_todo_user_preferences_last_board
+                ON todo_user_preferences (last_selected_board_id)
+            """
+        )
     )
     await conn.execute(
         text(

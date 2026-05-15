@@ -34,6 +34,21 @@ class OutlookCalendarTokenModel(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TodoUserPreferenceModel(Base):
+
+
+    __tablename__ = "todo_user_preferences"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_selected_board_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("todo_boards.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class TodoBoardModel(Base):
 
 

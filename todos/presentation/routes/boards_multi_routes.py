@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -8,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
+from infrastructure.file_storage import save_todo_board_background
 from infrastructure.models import BOARD_VIS_SHARED, TodoBoardLabelModel, TodoColumnModel
 from infrastructure.repositories import KanbanRepository
 from presentation.board_payload import (
@@ -22,7 +24,9 @@ from presentation.board_payload import (
     CreateBoardInvitesBody,
     PatchBoardBodyFull,
     PatchBoardMemberBody,
+    SelectBoardBody,
     build_board_out,
+    media_url,
 )
 from presentation.dependencies import get_current_user_id
 from presentation.routes.board_routes import (
@@ -44,6 +48,27 @@ boards_router = APIRouter(prefix="/boards", tags=["boards"])
 invites_router = APIRouter(prefix="/invites", tags=["invites"])
 
 
+def _storage_key_from_media_url(value: str | None) -> str | None:
+    prefix = "/api/v1/media/"
+    if not value or not value.startswith(prefix):
+        return None
+    key = value[len(prefix) :].strip().lstrip("/")
+    if key.startswith("todo_board_backgrounds/"):
+        return key
+    return None
+
+
+def _remove_media_file_if_local(storage_key: str | None) -> None:
+    if not storage_key:
+        return
+    from infrastructure.config import get_settings
+
+    media_base = Path(get_settings().media_path).resolve()
+    target = (media_base / storage_key).resolve()
+    if str(target).startswith(str(media_base)) and target.is_file():
+        target.unlink(missing_ok=True)
+
+
 async def _require_read(session: AsyncSession, user_id: int, board_id: int) -> None:
     repo = KanbanRepository(session)
     if await repo.require_board_read(user_id, board_id) is None:
@@ -63,7 +88,9 @@ async def list_boards(
 ):
     repo = KanbanRepository(session)
     primary = await repo.get_primary_owned_board(user_id)
-    primary_id = primary.id if primary else None
+    current_id = await repo.get_last_selected_board_id(user_id)
+    if current_id is None:
+        current_id = primary.id if primary else None
     rows = await repo.list_accessible_boards_with_roles(user_id)
     items: list[BoardSummaryOut] = []
     for b, role in rows:
@@ -73,14 +100,15 @@ async def list_boards(
                 title=b.title,
                 visibility=b.visibility,
                 color=b.color,
+                background_url=b.background_url,
                 sort_order=b.sort_order,
-                is_current=(b.id == primary_id),
+                is_current=(b.id == current_id),
                 updated_at=b.updated_at,
                 my_role=role,
             )
         )
     await session.commit()
-    return BoardsListOut(items=items)
+    return BoardsListOut(items=items, current_board_id=current_id, last_selected_board_id=current_id)
 
 
 @boards_router.get("/current", response_model=BoardOut)
@@ -89,9 +117,27 @@ async def get_current_board(
     session: AsyncSession = Depends(get_session),
 ):
     repo = KanbanRepository(session)
-    board = await repo.ensure_board(user_id)
+    board = await repo.get_last_selected_board(user_id)
+    if board is None:
+        board = await repo.ensure_board(user_id)
+    await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
     return await build_board_out(session, board.id)
+
+
+@boards_router.put("/current", response_model=BoardOut)
+async def set_current_board(
+    body: SelectBoardBody,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = KanbanRepository(session)
+    try:
+        await repo.set_last_selected_board_id(user_id, body.board_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Board not found") from None
+    await session.commit()
+    return await build_board_out(session, body.board_id)
 
 
 @boards_router.post("", response_model=BoardOut)
@@ -131,6 +177,7 @@ async def create_board(
                 "postgres": pg_hint[:2000],
             },
         ) from exc
+    await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
     return await build_board_out(session, board.id)
 
@@ -142,6 +189,8 @@ async def get_board_by_id(
     session: AsyncSession = Depends(get_session),
 ):
     await _require_read(session, user_id, board_id)
+    repo = KanbanRepository(session)
+    await repo.set_last_selected_board_id(user_id, board_id)
     await session.commit()
     return await build_board_out(session, board_id)
 
@@ -179,6 +228,72 @@ async def patch_board_by_id(
     return await build_board_out(session, board_id)
 
 
+@boards_router.post("/{board_id}/background", response_model=BoardOut)
+async def upload_board_background(
+    board_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    repo = KanbanRepository(session)
+    board = await repo.require_board_write(user_id, board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+
+    content = await file.read()
+    try:
+        storage_key, _ = save_todo_board_background(
+            owner_user_id=board.user_id,
+            board_id=board.id,
+            original_filename=file.filename or "background",
+            content=content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    old_key = _storage_key_from_media_url(board.background_url)
+    await repo.patch_board_meta(
+        user_id,
+        board_id,
+        title=None,
+        color=None,
+        visibility=None,
+        background_url=media_url(storage_key),
+        background_url_set=True,
+    )
+    _remove_media_file_if_local(old_key)
+    await repo.set_last_selected_board_id(user_id, board_id)
+    await session.commit()
+    return await build_board_out(session, board_id)
+
+
+@boards_router.delete("/{board_id}/background", response_model=BoardOut)
+async def delete_board_background(
+    board_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = KanbanRepository(session)
+    board = await repo.require_board_write(user_id, board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+
+    old_key = _storage_key_from_media_url(board.background_url)
+    await repo.patch_board_meta(
+        user_id,
+        board_id,
+        title=None,
+        color=None,
+        visibility=None,
+        background_url=None,
+        background_url_set=True,
+    )
+    _remove_media_file_if_local(old_key)
+    await repo.set_last_selected_board_id(user_id, board_id)
+    await session.commit()
+    return await build_board_out(session, board_id)
+
+
 @boards_router.delete("/{board_id}")
 async def delete_board_by_id(
     board_id: int,
@@ -189,6 +304,8 @@ async def delete_board_by_id(
     ok = await repo.archive_board(user_id, board_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Board not found")
+    if await repo.get_last_selected_board_id(user_id) == board_id:
+        await repo.set_last_selected_board_id(user_id, None)
     await session.commit()
     return {"ok": True}
 

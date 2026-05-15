@@ -27,6 +27,7 @@ from infrastructure.models import (
     TodoCardModel,
     TodoCardParticipantModel,
     TodoColumnModel,
+    TodoUserPreferenceModel,
 )
 
 
@@ -154,6 +155,52 @@ class KanbanRepository:
             .limit(1)
         )
         return r.scalars().one_or_none()
+
+    async def get_last_selected_board_id(self, user_id: int) -> int | None:
+        r = await self._session.execute(
+            select(TodoUserPreferenceModel.last_selected_board_id).where(
+                TodoUserPreferenceModel.user_id == user_id
+            )
+        )
+        board_id = r.scalar_one_or_none()
+        if board_id is None:
+            return None
+        if await self.board_role(user_id, int(board_id)) is None:
+            await self.set_last_selected_board_id(user_id, None)
+            return None
+        return int(board_id)
+
+    async def get_last_selected_board(self, user_id: int) -> TodoBoardModel | None:
+        board_id = await self.get_last_selected_board_id(user_id)
+        if board_id is None:
+            return None
+        return await self.get_board_by_id(board_id)
+
+    async def set_last_selected_board_id(
+        self,
+        user_id: int,
+        board_id: int | None,
+    ) -> TodoUserPreferenceModel:
+        if board_id is not None and await self.board_role(user_id, int(board_id)) is None:
+            raise ValueError("board is not accessible")
+
+        now = _utc_now()
+        r = await self._session.execute(
+            select(TodoUserPreferenceModel).where(TodoUserPreferenceModel.user_id == user_id)
+        )
+        pref = r.scalars().one_or_none()
+        if pref is None:
+            pref = TodoUserPreferenceModel(
+                user_id=user_id,
+                last_selected_board_id=board_id,
+                updated_at=now,
+            )
+        else:
+            pref.last_selected_board_id = board_id
+            pref.updated_at = now
+        self._session.add(pref)
+        await self._session.flush()
+        return pref
 
     async def get_board_row(self, user_id: int) -> TodoBoardModel | None:
         return await self.get_primary_owned_board(user_id)
@@ -613,7 +660,9 @@ class KanbanRepository:
         *,
         background_url: str | None,
     ) -> TodoBoardModel:
-        row = await self.ensure_board(user_id)
+        row = await self.get_last_selected_board(user_id)
+        if row is None:
+            row = await self.ensure_board(user_id)
         row.background_url = background_url
         row.updated_at = _utc_now()
         self._session.add(row)
