@@ -13,6 +13,22 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend_common ./backend_common
 COPY time_tracking/ ./
 
+# Скрипт очистки БД для запуска из консоли контейнера (Portainer и т.п.):
+#   python /app/wipe_repo/scripts/wipe_all_keep_tt_users.py --dry-run
+COPY scripts/requirements-wipe.txt /app/wipe_repo/scripts/requirements-wipe.txt
+COPY scripts/wipe_all_keep_tt_users.py /app/wipe_repo/scripts/wipe_all_keep_tt_users.py
+RUN pip install --no-cache-dir -r /app/wipe_repo/scripts/requirements-wipe.txt
+
+COPY auth /app/wipe_repo/auth
+COPY tickets /app/wipe_repo/tickets
+COPY todos /app/wipe_repo/todos
+COPY notifications /app/wipe_repo/notifications
+COPY inventory /app/wipe_repo/inventory
+COPY attendance /app/wipe_repo/attendance
+COPY expenses /app/wipe_repo/expenses
+COPY vacation /app/wipe_repo/vacation
+COPY time_tracking /app/wipe_repo/time_tracking
+
 EXPOSE 1241
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1241", "--no-access-log", "--log-level", "info"]

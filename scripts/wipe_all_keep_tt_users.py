@@ -12,12 +12,29 @@
 Мок-клиенты/проекты seed_tt_mock_data после полного сброса TT уже не существуют; мок-пользователи
 удаляются из TT и из auth.
 
-Запуск с корня репозитория (или из CI), с теми же переменными, что и docker-compose:
+Контейнер time_tracking (Portainer → Console): после пересборки образа скрипт и копии модулей в /app/wipe_repo/:
+
+  python /app/wipe_repo/scripts/wipe_all_keep_tt_users.py --dry-run
+
+  Переменные AUTH_DATABASE_URL, TIME_TRACKING_DATABASE_URL (или DATABASE_URL для TT) и прочие
+  задайте в стеке / env контейнера (в docker-compose для time_tracking они проброшены по умолчанию).
+
+Запуск на сервере через venv (клон репозитория):
+
+  cd /path/to/tickets-back
+  python3 -m venv .venv-wipe && source .venv-wipe/bin/activate   # Windows: .venv-wipe\\Scripts\\activate
+  pip install -r scripts/requirements-wipe.txt
+
+  export AUTH_DATABASE_URL="postgresql://..."
+  export TIME_TRACKING_DATABASE_URL="postgresql://..."
+  # при необходимости: TICKETS_DATABASE_URL, TODOS_DATABASE_URL, …
 
   python scripts/wipe_all_keep_tt_users.py --dry-run
+  python scripts/wipe_all_keep_tt_users.py --execute --confirm WIPE_KEEP_TT_ONLY
 
-  AUTH_DATABASE_URL=... TIME_TRACKING_DATABASE_URL=... \\
-    python scripts/wipe_all_keep_tt_users.py --execute --confirm WIPE_KEEP_TT_ONLY
+Альтернатива — Docker (профиль tools), если удобнее не ставить venv на сервере:
+
+  docker compose --profile tools run --rm wipe_keep_tt --dry-run
 
 Опционально задайте: TICKETS_DATABASE_URL, TODOS_DATABASE_URL, NOTIFICATIONS_DATABASE_URL,
 INVENTORY_DATABASE_URL, ATTENDANCE_DATABASE_URL, EXPENSES_DATABASE_URL, VACATION_DATABASE_URL.
@@ -456,7 +473,7 @@ def main() -> int:
         "--time-tracking-database-url",
         type=str,
         default="",
-        help="Или переменная TIME_TRACKING_DATABASE_URL",
+        help="Или TIME_TRACKING_DATABASE_URL, либо DATABASE_URL в контейнере TT",
     )
     p.add_argument(
         "--delete-all-auth-without-tt",
@@ -475,12 +492,16 @@ def main() -> int:
 
     args = p.parse_args()
     auth_url = (args.auth_database_url or "").strip() or _env("AUTH_DATABASE_URL")
-    tt_url = (args.time_tracking_database_url or "").strip() or _env("TIME_TRACKING_DATABASE_URL")
+    tt_url = (
+        (args.time_tracking_database_url or "").strip()
+        or _env("TIME_TRACKING_DATABASE_URL")
+        or _env("DATABASE_URL")
+    )
 
     if not auth_url or not tt_url:
         print(
-            "Задайте AUTH_DATABASE_URL и TIME_TRACKING_DATABASE_URL (или флаги --auth-database-url / "
-            "--time-tracking-database-url).",
+            "Задайте AUTH_DATABASE_URL и URL БД TT: TIME_TRACKING_DATABASE_URL или DATABASE_URL "
+            "(или флаги --auth-database-url / --time-tracking-database-url).",
             file=sys.stderr,
         )
         return 1
