@@ -29,6 +29,8 @@ class CreateNotificationUseCase:
         title: str,
         description: str,
         photo_path: Optional[str] = None,
+        recipient_user_id: Optional[int] = None,
+        notification_type: str = "general",
     ) -> Notification:
         notification_uuid = str(uuid_lib.uuid4())
         return await self._repo.create(
@@ -36,6 +38,8 @@ class CreateNotificationUseCase:
             title=title,
             description=description,
             photo_path=photo_path,
+            recipient_user_id=recipient_user_id,
+            notification_type=notification_type,
         )
 
 

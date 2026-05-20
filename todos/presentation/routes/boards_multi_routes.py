@@ -12,6 +12,11 @@ from infrastructure.database import get_session
 from infrastructure.file_storage import save_todo_board_background
 from infrastructure.models import BOARD_VIS_SHARED, TodoBoardLabelModel, TodoColumnModel
 from infrastructure.repositories import KanbanRepository
+from infrastructure.system_notifications import (
+    notify_todo_board_added,
+    notify_todo_board_invited,
+    notify_todo_card_assigned,
+)
 from presentation.board_payload import (
     BoardInvitesListOut,
     BoardInviteOut,
@@ -122,6 +127,14 @@ async def get_current_board(
         board = await repo.ensure_board(user_id)
     await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
+    if vis == BOARD_VIS_SHARED and body.instant_add_members:
+        for member_user_id in sorted({int(x) for x in body.member_user_ids if int(x) != user_id}):
+            await notify_todo_board_added(
+                recipient_user_id=member_user_id,
+                actor_user_id=user_id,
+                board_id=board.id,
+                board_title=board.title,
+            )
     return await build_board_out(session, board.id)
 
 
@@ -394,6 +407,13 @@ async def post_invites(
     b = await repo.get_board_by_id(board_id)
     assert b
     await session.commit()
+    for inv in created:
+        await notify_todo_board_invited(
+            recipient_user_id=inv.invitee_user_id,
+            actor_user_id=user_id,
+            board_id=board_id,
+            board_title=b.title,
+        )
     items = [
         BoardInviteOut(
             id=inv.id,
@@ -881,7 +901,12 @@ async def patch_card_nested(
                 status_code=400,
                 detail="Invalid label_ids (must belong to this board)",
             )
+    newly_added_participant_ids: list[int] = []
     if "participant_user_ids" in patch:
+        current_map = await repo.batch_participant_ids([card_id])
+        current_ids = set(current_map.get(card_id, []))
+        next_ids = {int(x) for x in (patch["participant_user_ids"] or [])}
+        newly_added_participant_ids = sorted(next_ids - current_ids - {int(user_id)})
         await repo.replace_card_participants(
             user_id,
             card_id,
@@ -910,6 +935,14 @@ async def patch_card_nested(
     if not col or col.board_id != board_id:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
+    for recipient_user_id in newly_added_participant_ids:
+        await notify_todo_card_assigned(
+            recipient_user_id=recipient_user_id,
+            actor_user_id=user_id,
+            board_id=board_id,
+            card_id=card_id,
+            card_title=card.title,
+        )
     return await build_board_out(session, board_id)
 
 

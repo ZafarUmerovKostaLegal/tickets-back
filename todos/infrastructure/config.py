@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 15
 
     auth_service_url: str = ""
+    notification_push_url: str = ""
+    ws_internal_secret: str = ""
 
     @field_validator("auth_service_url", mode="before")
     @classmethod

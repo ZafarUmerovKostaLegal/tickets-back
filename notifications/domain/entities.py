@@ -10,6 +10,8 @@ class Notification:
     title: str
     description: str
     photo_path: Optional[str]
+    recipient_user_id: Optional[int]
+    notification_type: str
     is_archived: bool
     created_at: datetime
     updated_at: datetime

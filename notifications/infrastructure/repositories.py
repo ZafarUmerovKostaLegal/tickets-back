@@ -33,6 +33,8 @@ class NotificationRepository(NotificationRepositoryPort):
             title=m.title,
             description=m.description,
             photo_path=m.photo_path,
+            recipient_user_id=m.recipient_user_id,
+            notification_type=m.notification_type,
             is_archived=m.is_archived,
             created_at=m.created_at,
             updated_at=m.updated_at,
@@ -44,12 +46,16 @@ class NotificationRepository(NotificationRepositoryPort):
         title: str,
         description: str,
         photo_path: Optional[str] = None,
+        recipient_user_id: Optional[int] = None,
+        notification_type: str = "general",
     ) -> Notification:
         model = NotificationModel(
             uuid=uuid,
             title=title,
             description=description,
             photo_path=photo_path,
+            recipient_user_id=recipient_user_id,
+            notification_type=(notification_type or "general")[:64],
             is_archived=False,
         )
         self._session.add(model)
@@ -69,6 +75,11 @@ class NotificationRepository(NotificationRepositoryPort):
         conditions = []
         if not filters.include_archived:
             conditions.append(NotificationModel.is_archived == False)
+        if filters.recipient_user_id is not None:
+            conditions.append(
+                (NotificationModel.recipient_user_id == filters.recipient_user_id)
+                | (NotificationModel.recipient_user_id.is_(None))
+            )
         if conditions:
             q = q.where(and_(*conditions))
         q = q.offset(filters.skip).limit(filters.limit)

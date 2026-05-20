@@ -26,6 +26,8 @@ def _notification_to_dict(n):
         "title": n.title,
         "description": n.description,
         "photo_path": n.photo_path,
+        "recipient_user_id": n.recipient_user_id,
+        "notification_type": n.notification_type,
         "is_archived": n.is_archived,
         "created_at": n.created_at.isoformat() if n.created_at else None,
         "updated_at": n.updated_at.isoformat() if n.updated_at else None,
@@ -68,6 +70,7 @@ async def ws_notifications(websocket: WebSocket):
                         skip=payload.get("skip", 0),
                         limit=payload.get("limit", 50),
                         include_archived=payload.get("include_archived", False),
+                        recipient_user_id=payload.get("recipient_user_id"),
                     )
                     uc = ListNotificationsUseCase(repo)
                     items = await uc.execute(filters)
@@ -89,6 +92,8 @@ async def ws_notifications(websocket: WebSocket):
                         title=payload.get("title", ""),
                         description=payload.get("description", ""),
                         photo_path=payload.get("photo_path"),
+                        recipient_user_id=payload.get("recipient_user_id"),
+                        notification_type=payload.get("notification_type", "general"),
                     )
                     await session.commit()
                     await websocket.send_json(reply(result=_notification_to_dict(n)))

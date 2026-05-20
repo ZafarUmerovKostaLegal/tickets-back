@@ -15,6 +15,8 @@ class NotificationResponse(BaseModel):
     title: str
     description: str
     photo_path: Optional[str] = None
+    recipient_user_id: Optional[int] = None
+    notification_type: str = "general"
     is_archived: bool = False
     created_at: datetime
     updated_at: datetime
@@ -24,6 +26,8 @@ class NotificationCreate(BaseModel):
     title: str
     description: str
     photo_path: Optional[str] = None
+    recipient_user_id: Optional[int] = None
+    notification_type: str = "general"
 
 
 class NotificationUpdate(BaseModel):

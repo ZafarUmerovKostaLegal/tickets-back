@@ -12,6 +12,8 @@ class NotificationModel(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     photo_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    recipient_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    notification_type: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

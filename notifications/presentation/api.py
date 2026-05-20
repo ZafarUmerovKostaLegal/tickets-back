@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import engine, Base
-from infrastructure.models import NotificationModel
+from sqlalchemy import text
 from presentation.routes import health, ws_notifications, notifications_rest
 
 
@@ -13,6 +13,21 @@ from presentation.routes import health, ws_notifications, notifications_rest
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recipient_user_id INTEGER")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS "
+                "notification_type VARCHAR(64) NOT NULL DEFAULT 'general'"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notifications_recipient_user_id "
+                "ON notifications (recipient_user_id)"
+            )
+        )
     yield
 
 

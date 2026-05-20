@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
 from infrastructure.repositories import KanbanRepository
+from infrastructure.system_notifications import notify_todo_card_assigned
 from presentation.board_payload import BoardOut, build_board_out
 from presentation.dependencies import get_current_user_id
 
@@ -458,7 +459,12 @@ async def patch_card(
                 status_code=400,
                 detail="Invalid label_ids (must belong to this board)",
             )
+    newly_added_participant_ids: list[int] = []
     if "participant_user_ids" in patch:
+        current_map = await repo.batch_participant_ids([card_id])
+        current_ids = set(current_map.get(card_id, []))
+        next_ids = {int(x) for x in (patch["participant_user_ids"] or [])}
+        newly_added_participant_ids = sorted(next_ids - current_ids - {int(user_id)})
         await repo.replace_card_participants(
             user_id,
             card_id,
@@ -479,7 +485,18 @@ async def patch_card(
     )
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
+    col = await repo.get_column_if_owned(user_id, card.column_id, need_write=False)
+    board_id = col.board_id if col else None
     await session.commit()
+    if board_id is not None:
+        for recipient_user_id in newly_added_participant_ids:
+            await notify_todo_card_assigned(
+                recipient_user_id=recipient_user_id,
+                actor_user_id=user_id,
+                board_id=board_id,
+                card_id=card_id,
+                card_title=card.title,
+            )
     return await _build_board_out(session, user_id)
 
 

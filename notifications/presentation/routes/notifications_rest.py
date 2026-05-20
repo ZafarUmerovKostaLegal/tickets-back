@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from backend_common.ws_internal_auth import has_valid_internal_ws_key
+from infrastructure.config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from infrastructure.database import get_session
 from infrastructure.repositories import NotificationRepository
@@ -29,6 +31,8 @@ def _to_response(n):
         title=n.title,
         description=n.description,
         photo_path=n.photo_path,
+        recipient_user_id=n.recipient_user_id,
+        notification_type=n.notification_type,
         is_archived=n.is_archived,
         created_at=n.created_at,
         updated_at=n.updated_at,
@@ -44,11 +48,17 @@ async def list_notifications(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     include_archived: bool = False,
-    _: dict = Depends(require_bearer_user),
+    user: dict = Depends(require_bearer_user),
     repo: NotificationRepository = Depends(get_repo),
     session: AsyncSession = Depends(get_session),
 ):
-    filters = NotificationFilters(skip=skip, limit=limit, include_archived=include_archived)
+    uid = user.get("id")
+    filters = NotificationFilters(
+        skip=skip,
+        limit=limit,
+        include_archived=include_archived,
+        recipient_user_id=int(uid) if uid is not None else None,
+    )
     uc = ListNotificationsUseCase(repo)
     items = await uc.execute(filters)
     return [_to_response(n) for n in items]
@@ -79,6 +89,31 @@ async def create_notification(
         title=body.title,
         description=body.description,
         photo_path=body.photo_path,
+        recipient_user_id=body.recipient_user_id,
+        notification_type=body.notification_type,
+    )
+    await session.commit()
+    return _to_response(n)
+
+
+@router.post("/system", response_model=NotificationResponse, status_code=201)
+async def create_system_notification(
+    body: NotificationCreate,
+    x_internal_key: str | None = Header(None, alias="X-Internal-Key"),
+    repo: NotificationRepository = Depends(get_repo),
+    session: AsyncSession = Depends(get_session),
+):
+    if not has_valid_internal_ws_key(get_settings().ws_internal_secret, x_internal_key):
+        raise HTTPException(status_code=403, detail="Invalid internal key")
+    if body.recipient_user_id is None:
+        raise HTTPException(status_code=400, detail="recipient_user_id is required")
+    uc = CreateNotificationUseCase(repo)
+    n = await uc.execute(
+        title=body.title,
+        description=body.description,
+        photo_path=body.photo_path,
+        recipient_user_id=body.recipient_user_id,
+        notification_type=body.notification_type,
     )
     await session.commit()
     return _to_response(n)

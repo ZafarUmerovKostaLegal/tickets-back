@@ -10,10 +10,17 @@ class HealthRepositoryPort(ABC):
 
 
 class NotificationFilters:
-    def __init__(self, skip: int = 0, limit: int = 50, include_archived: bool = False):
+    def __init__(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        include_archived: bool = False,
+        recipient_user_id: Optional[int] = None,
+    ):
         self.skip = skip
         self.limit = limit
         self.include_archived = include_archived
+        self.recipient_user_id = recipient_user_id
 
 
 class NotificationRepositoryPort(ABC):
@@ -24,6 +31,8 @@ class NotificationRepositoryPort(ABC):
         title: str,
         description: str,
         photo_path: Optional[str] = None,
+        recipient_user_id: Optional[int] = None,
+        notification_type: str = "general",
     ) -> Notification:
         pass
 
