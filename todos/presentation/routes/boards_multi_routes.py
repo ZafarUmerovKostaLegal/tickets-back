@@ -127,7 +127,7 @@ async def get_current_board(
         board = await repo.ensure_board(user_id)
     await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
-    return await build_board_out(session, board.id)
+    return await build_board_out(session, board.id, viewer_user_id=user_id)
 
 
 @boards_router.put("/current", response_model=BoardOut)
@@ -142,7 +142,7 @@ async def set_current_board(
     except ValueError:
         raise HTTPException(status_code=404, detail="Board not found") from None
     await session.commit()
-    return await build_board_out(session, body.board_id)
+    return await build_board_out(session, body.board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("", response_model=BoardOut)
@@ -192,7 +192,7 @@ async def create_board(
                 board_id=board.id,
                 board_title=board.title,
             )
-    return await build_board_out(session, board.id)
+    return await build_board_out(session, board.id, viewer_user_id=user_id)
 
 
 @boards_router.get("/{board_id}", response_model=BoardOut)
@@ -205,7 +205,7 @@ async def get_board_by_id(
     repo = KanbanRepository(session)
     await repo.set_last_selected_board_id(user_id, board_id)
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.patch("/{board_id}", response_model=BoardOut)
@@ -238,7 +238,7 @@ async def patch_board_by_id(
     if not row:
         raise HTTPException(status_code=404, detail="Board not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("/{board_id}/background", response_model=BoardOut)
@@ -277,7 +277,7 @@ async def upload_board_background(
     _remove_media_file_if_local(old_key)
     await repo.set_last_selected_board_id(user_id, board_id)
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/background", response_model=BoardOut)
@@ -304,7 +304,7 @@ async def delete_board_background(
     _remove_media_file_if_local(old_key)
     await repo.set_last_selected_board_id(user_id, board_id)
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}")
@@ -497,7 +497,7 @@ async def accept_invite(
         raise HTTPException(status_code=404, detail="Invite not found")
     bid = inv.board_id
     await session.commit()
-    return await build_board_out(session, bid)
+    return await build_board_out(session, bid, viewer_user_id=user_id)
 
 
 @invites_router.post("/{invite_id}/decline")
@@ -541,7 +541,7 @@ async def create_label_nested(
     if not row:
         raise HTTPException(status_code=404, detail="Board not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.patch("/{board_id}/labels/{label_id}", response_model=BoardOut)
@@ -561,7 +561,7 @@ async def patch_label_nested(
     if not row or row.board_id != board_id:
         raise HTTPException(status_code=404, detail="Label not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/labels/{label_id}", response_model=BoardOut)
@@ -585,7 +585,7 @@ async def delete_label_nested(
     if not ok:
         raise HTTPException(status_code=404, detail="Label not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("/{board_id}/columns", response_model=BoardOut)
@@ -608,7 +608,7 @@ async def create_column_nested(
     if not col:
         raise HTTPException(status_code=404, detail="Board not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.patch("/{board_id}/columns/{column_id}", response_model=BoardOut)
@@ -634,7 +634,7 @@ async def patch_column_nested(
     if not col or col.board_id != board_id:
         raise HTTPException(status_code=404, detail="Column not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/columns/{column_id}", response_model=BoardOut)
@@ -653,7 +653,7 @@ async def delete_column_nested(
     if not ok:
         raise HTTPException(status_code=404, detail="Column not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.put("/{board_id}/columns/reorder", response_model=BoardOut)
@@ -680,7 +680,7 @@ async def reorder_columns_nested(
             detail="Invalid column id list (must match all columns on the board)",
         )
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 async def _ensure_card_on_board(
@@ -723,7 +723,7 @@ async def create_card_nested(
     if not card:
         raise HTTPException(status_code=404, detail="Column not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("/{board_id}/cards/{card_id}/checklist/items", response_model=BoardOut)
@@ -746,7 +746,7 @@ async def create_checklist_item_nested(
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.patch("/{board_id}/cards/{card_id}/checklist/items/{item_id}", response_model=BoardOut)
@@ -774,7 +774,7 @@ async def patch_checklist_item_nested(
     if not row:
         raise HTTPException(status_code=404, detail="Checklist item not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/cards/{card_id}/checklist/items/{item_id}", response_model=BoardOut)
@@ -792,7 +792,7 @@ async def delete_checklist_item_nested(
     if not ok:
         raise HTTPException(status_code=404, detail="Checklist item not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.put("/{board_id}/cards/{card_id}/checklist/reorder", response_model=BoardOut)
@@ -813,7 +813,7 @@ async def reorder_checklist_nested(
             detail="Invalid checklist item id list",
         )
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("/{board_id}/cards/{card_id}/attachments", response_model=BoardOut)
@@ -841,7 +841,7 @@ async def upload_card_attachment_nested(
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/cards/{card_id}/attachments/{attachment_id}", response_model=BoardOut)
@@ -859,7 +859,7 @@ async def delete_card_attachment_nested(
     if not ok:
         raise HTTPException(status_code=404, detail="Attachment not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.post("/{board_id}/cards/{card_id}/comments", response_model=BoardOut)
@@ -877,7 +877,7 @@ async def create_card_comment_nested(
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.patch("/{board_id}/cards/{card_id}", response_model=BoardOut)
@@ -943,7 +943,7 @@ async def patch_card_nested(
             card_id=card_id,
             card_title=card.title,
         )
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.delete("/{board_id}/cards/{card_id}", response_model=BoardOut)
@@ -960,7 +960,7 @@ async def delete_card_nested(
     if not ok:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
 
 
 @boards_router.put("/{board_id}/columns/{column_id}/cards/reorder", response_model=BoardOut)
@@ -983,4 +983,4 @@ async def reorder_cards_nested(
             detail="Invalid card id list (must match all cards in the column)",
         )
     await session.commit()
-    return await build_board_out(session, board_id)
+    return await build_board_out(session, board_id, viewer_user_id=user_id)

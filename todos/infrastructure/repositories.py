@@ -131,7 +131,19 @@ class KanbanRepository:
             )
         )
         m = r.scalars().one_or_none()
-        return m.role if m else None
+        if m:
+            return m.role
+        rp = await self._session.execute(
+            select(TodoCardParticipantModel)
+            .join(TodoCardModel, TodoCardParticipantModel.card_id == TodoCardModel.id)
+            .join(TodoColumnModel, TodoCardModel.column_id == TodoColumnModel.id)
+            .where(
+                TodoColumnModel.board_id == board_id,
+                TodoCardParticipantModel.user_id == user_id,
+            )
+            .limit(1)
+        )
+        return "participant" if rp.scalars().one_or_none() else None
 
     async def require_board_read(self, user_id: int, board_id: int) -> TodoBoardModel | None:
         if await self.board_role(user_id, board_id) is None:
@@ -262,6 +274,20 @@ class KanbanRepository:
         for board, role in r_mem.all():
             if board.id not in seen:
                 out.append((board, str(role)))
+                seen.add(board.id)
+        r_part = await self._session.execute(
+            select(TodoBoardModel)
+            .join(TodoColumnModel, TodoColumnModel.board_id == TodoBoardModel.id)
+            .join(TodoCardModel, TodoCardModel.column_id == TodoColumnModel.id)
+            .join(TodoCardParticipantModel, TodoCardParticipantModel.card_id == TodoCardModel.id)
+            .where(
+                TodoCardParticipantModel.user_id == user_id,
+                TodoBoardModel.archived_at.is_(None),
+            )
+        )
+        for board in r_part.scalars().all():
+            if board.id not in seen:
+                out.append((board, "participant"))
                 seen.add(board.id)
         out.sort(key=lambda t: (t[0].sort_order, t[0].id))
         return out

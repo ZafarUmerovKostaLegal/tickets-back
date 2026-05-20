@@ -171,11 +171,17 @@ class PatchBoardMemberBody(BaseModel):
     role: str = Field(default="editor")
 
 
-async def build_board_out(session: AsyncSession, board_id: int) -> BoardOut:
+async def build_board_out(
+    session: AsyncSession,
+    board_id: int,
+    *,
+    viewer_user_id: int | None = None,
+) -> BoardOut:
     repo = KanbanRepository(session)
     board = await repo.get_board_by_id(board_id)
     if not board:
         raise ValueError("board not found")
+    viewer_role = await repo.board_role(viewer_user_id, board_id) if viewer_user_id else None
     board_label_rows = await repo.list_board_labels_for_board(board_id)
     board_labels = [
         BoardLabelOut(id=r.id, title=r.title, color=r.color, position=r.position)
@@ -185,6 +191,13 @@ async def build_board_out(session: AsyncSession, board_id: int) -> BoardOut:
     out_cols: list[ColumnOut] = []
     for col in cols:
         cards = await repo._cards_for_column(col.id)
+        if viewer_user_id is not None and viewer_role == "participant":
+            part_map_for_filter = await repo.batch_participant_ids([c.id for c in cards])
+            cards = [
+                c
+                for c in cards
+                if int(viewer_user_id) in set(part_map_for_filter.get(c.id, []))
+            ]
         card_ids = [c.id for c in cards]
         lbl_map = await repo.batch_card_label_payload(card_ids)
         chk_map = await repo.batch_checklist_items(card_ids)

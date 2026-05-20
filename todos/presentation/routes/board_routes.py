@@ -21,7 +21,7 @@ async def _build_board_out(session: AsyncSession, user_id: int) -> BoardOut:
     board = await repo.get_last_selected_board(user_id)
     if board is None:
         board = await repo.ensure_board(user_id)
-    return await build_board_out(session, board.id)
+    return await build_board_out(session, board.id, viewer_user_id=user_id)
 
 
 class PatchBoardBody(BaseModel):
