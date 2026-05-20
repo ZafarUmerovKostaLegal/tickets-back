@@ -127,14 +127,6 @@ async def get_current_board(
         board = await repo.ensure_board(user_id)
     await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
-    if vis == BOARD_VIS_SHARED and body.instant_add_members:
-        for member_user_id in sorted({int(x) for x in body.member_user_ids if int(x) != user_id}):
-            await notify_todo_board_added(
-                recipient_user_id=member_user_id,
-                actor_user_id=user_id,
-                board_id=board.id,
-                board_title=board.title,
-            )
     return await build_board_out(session, board.id)
 
 
@@ -192,6 +184,14 @@ async def create_board(
         ) from exc
     await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
+    if vis == BOARD_VIS_SHARED and body.instant_add_members:
+        for member_user_id in sorted({int(x) for x in body.member_user_ids if int(x) != user_id}):
+            await notify_todo_board_added(
+                recipient_user_id=member_user_id,
+                actor_user_id=user_id,
+                board_id=board.id,
+                board_title=board.title,
+            )
     return await build_board_out(session, board.id)
 
 
