@@ -16,6 +16,7 @@ _DEFAULT_SERVICE_URLS: dict[str, str] = {
     "attendance_service_url": "http://attendance:1239",
     "vacation_service_url": "http://vacation:1244",
     "call_schedule_service_url": "http://call_schedule:1245",
+    "chat_service_url": "http://chat:1246",
 }
 
 
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     attendance_hikvision_allowed_ips: str = ""
     todos_service_url: str = ""
     call_schedule_service_url: str = ""
+    chat_service_url: str = ""
     frontend_url: str = ""
     admin_frontend_url: str = ""
 

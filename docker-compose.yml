@@ -24,6 +24,7 @@ services:
       - ATTENDANCE_SERVICE_URL=${ATTENDANCE_SERVICE_URL:-http://attendance:1239}
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
       - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-http://localhost:8080}
@@ -72,6 +73,8 @@ services:
       vacation:
         condition: service_started
       call_schedule:
+        condition: service_started
+      chat:
         condition: service_started
 
   # Утилита очистки БД: весь репозиторий монтируется в /work (см. scripts/wipe_all_keep_tt_users.py).
@@ -124,6 +127,48 @@ services:
     depends_on:
       auth:
         condition: service_healthy
+
+  chat:
+    build:
+      context: .
+      dockerfile: chat/Dockerfile
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1246/health\", timeout=3)"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      chat_db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+
+  chat_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: ["postgres", "-c", "log_min_messages=warning"]
+    environment:
+      POSTGRES_USER: ${CHAT_DB_USER:-chat}
+      POSTGRES_PASSWORD: ${CHAT_DB_PASSWORD:-chat}
+      POSTGRES_DB: ${CHAT_DB_NAME:-kosta_chat}
+    volumes:
+      - chat_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   users_db:
     image: postgres:16-alpine
@@ -655,3 +700,4 @@ volumes:
   expenses_db_data:
   projects_db_data:
   vacation_db_data:
+  chat_db_data:
