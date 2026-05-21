@@ -171,6 +171,17 @@ class PatchBoardMemberBody(BaseModel):
     role: str = Field(default="editor")
 
 
+class AddBoardMembersBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_ids: list[int] = Field(..., min_length=1, alias="userIds")
+    role: str = Field(default="editor")
+    instant: bool = Field(
+        default=True,
+        description="true — сразу в участники; false — приглашения (как instantAddMembers при создании доски)",
+    )
+
+
 async def build_board_out(
     session: AsyncSession,
     board_id: int,

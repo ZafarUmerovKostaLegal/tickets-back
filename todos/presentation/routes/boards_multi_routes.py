@@ -25,6 +25,7 @@ from presentation.board_payload import (
     BoardOut,
     BoardsListOut,
     BoardSummaryOut,
+    AddBoardMembersBody,
     CreateBoardBody,
     CreateBoardInvitesBody,
     PatchBoardBodyFull,
@@ -155,7 +156,10 @@ async def create_board(
     if vis not in ("personal", "shared"):
         raise HTTPException(status_code=400, detail="Invalid visibility")
     if vis == "personal" and body.member_user_ids:
-        pass
+        raise HTTPException(
+            status_code=400,
+            detail="memberUserIds allowed only for shared boards",
+        )
     repo = KanbanRepository(session)
     try:
         board = await repo.create_board(
@@ -184,14 +188,24 @@ async def create_board(
         ) from exc
     await repo.set_last_selected_board_id(user_id, board.id)
     await session.commit()
-    if vis == BOARD_VIS_SHARED and body.instant_add_members:
-        for member_user_id in sorted({int(x) for x in body.member_user_ids if int(x) != user_id}):
-            await notify_todo_board_added(
-                recipient_user_id=member_user_id,
-                actor_user_id=user_id,
-                board_id=board.id,
-                board_title=board.title,
-            )
+    if vis == BOARD_VIS_SHARED and body.member_user_ids:
+        invitee_ids = sorted({int(x) for x in body.member_user_ids if int(x) != user_id})
+        if body.instant_add_members:
+            for member_user_id in invitee_ids:
+                await notify_todo_board_added(
+                    recipient_user_id=member_user_id,
+                    actor_user_id=user_id,
+                    board_id=board.id,
+                    board_title=board.title,
+                )
+        else:
+            for member_user_id in invitee_ids:
+                await notify_todo_board_invited(
+                    recipient_user_id=member_user_id,
+                    actor_user_id=user_id,
+                    board_id=board.id,
+                    board_title=board.title,
+                )
     return await build_board_out(session, board.id, viewer_user_id=user_id)
 
 
@@ -321,6 +335,49 @@ async def delete_board_by_id(
         await repo.set_last_selected_board_id(user_id, None)
     await session.commit()
     return {"ok": True}
+
+
+@boards_router.post("/{board_id}/members", response_model=BoardMembersListOut)
+async def add_members(
+    board_id: int,
+    body: AddBoardMembersBody,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    if body.role not in ("editor", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    repo = KanbanRepository(session)
+    result = await repo.add_board_members(
+        user_id,
+        board_id,
+        user_ids=body.user_ids,
+        role=body.role,
+        instant=body.instant,
+    )
+    if result is None:
+        b = await repo.get_board_by_id(board_id)
+        if not b or await repo.board_role(user_id, board_id) not in ("owner", "editor"):
+            raise HTTPException(status_code=404, detail="Board not found")
+        raise HTTPException(status_code=400, detail="Members can only be added to shared boards")
+    board = await repo.get_board_by_id(board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    await session.commit()
+    for member_user_id in result.added_user_ids:
+        await notify_todo_board_added(
+            recipient_user_id=member_user_id,
+            actor_user_id=user_id,
+            board_id=board_id,
+            board_title=board.title,
+        )
+    for inv in result.invited:
+        await notify_todo_board_invited(
+            recipient_user_id=inv.invitee_user_id,
+            actor_user_id=user_id,
+            board_id=board_id,
+            board_title=board.title,
+        )
+    return await list_members(board_id, user_id, session)
 
 
 @boards_router.get("/{board_id}/members", response_model=BoardMembersListOut)

@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from collections import defaultdict
@@ -91,6 +92,13 @@ _DEFAULT_KANBAN_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 _INVITE_TTL_DAYS = 7
+
+
+@dataclass
+class AddBoardMembersResult:
+    added_user_ids: list[int] = field(default_factory=list)
+    invited: list[TodoBoardInviteModel] = field(default_factory=list)
+    skipped_user_ids: list[int] = field(default_factory=list)
 
 
 class KanbanRepository:
@@ -477,6 +485,71 @@ class KanbanRepository:
             created.append(inv)
         await self._session.flush()
         return created
+
+    async def add_board_members(
+        self,
+        actor_user_id: int,
+        board_id: int,
+        *,
+        user_ids: list[int],
+        role: str,
+        instant: bool,
+    ) -> AddBoardMembersResult | None:
+        b = await self.require_board_write(actor_user_id, board_id)
+        if not b or b.archived_at is not None or b.visibility != BOARD_VIS_SHARED:
+            return None
+        now = _utc_now()
+        result = AddBoardMembersResult()
+        board_owner = b.user_id
+        for raw in sorted({int(x) for x in user_ids}):
+            if raw == board_owner:
+                result.skipped_user_ids.append(raw)
+                continue
+            rm = await self._session.execute(
+                select(TodoBoardMemberModel).where(
+                    TodoBoardMemberModel.board_id == board_id,
+                    TodoBoardMemberModel.user_id == raw,
+                )
+            )
+            if rm.scalars().one_or_none():
+                result.skipped_user_ids.append(raw)
+                continue
+            if instant:
+                self._session.add(
+                    TodoBoardMemberModel(
+                        board_id=board_id,
+                        user_id=raw,
+                        role=role,
+                        joined_at=now,
+                    )
+                )
+                result.added_user_ids.append(raw)
+            else:
+                rp = await self._session.execute(
+                    select(TodoBoardInviteModel).where(
+                        TodoBoardInviteModel.board_id == board_id,
+                        TodoBoardInviteModel.invitee_user_id == raw,
+                        TodoBoardInviteModel.status == INVITE_PENDING,
+                    )
+                )
+                if rp.scalars().one_or_none():
+                    result.skipped_user_ids.append(raw)
+                    continue
+                inv = TodoBoardInviteModel(
+                    board_id=board_id,
+                    inviter_user_id=actor_user_id,
+                    invitee_user_id=raw,
+                    role_offered=role,
+                    status=INVITE_PENDING,
+                    message=None,
+                    created_at=now,
+                    expires_at=now + timedelta(days=_INVITE_TTL_DAYS),
+                    resolved_at=None,
+                )
+                self._session.add(inv)
+                result.invited.append(inv)
+        await self._session.flush()
+        return result
 
     async def accept_invite(self, invite_id: int, user_id: int) -> TodoBoardInviteModel | None:
         now = _utc_now()
