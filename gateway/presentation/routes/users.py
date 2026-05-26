@@ -4,6 +4,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
 
 from infrastructure.auth_upstream import (
     access_token_from_request,
@@ -335,6 +336,71 @@ async def delete_desktop_background(
         raise HTTPException(status_code=r.status_code, detail=r.text or "Failed to delete")
     merged = await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
     return _normalize_desktop_background_url(merged)
+
+
+class UserPublicResponse(BaseModel):
+    id: int
+    email: str
+    display_name: Optional[str] = None
+    picture: Optional[str] = None
+    position: Optional[str] = None
+    is_archived: bool = False
+
+
+class UserPublicListResponse(BaseModel):
+    items: list[UserPublicResponse]
+    missing_ids: list[int] = []
+
+
+@router.get("/public", response_model=UserPublicListResponse)
+async def get_users_public_batch(
+    request: Request,
+    ids: str = Query(
+        ...,
+        description="Список ID через запятую, например ids=1,2,3 (максимум 200)",
+    ),
+    include_archived: bool = Query(True),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_auth),
+):
+    r = await auth_service_request(
+        "GET",
+        "/users/public",
+        bearer_for_upstream(request, authorization),
+        params={"ids": ids, "include_archived": include_archived},
+    )
+    if r.status_code == 400:
+        try:
+            d = r.json().get("detail", "Bad request")
+        except Exception:
+            d = "Bad request"
+        raise HTTPException(status_code=400, detail=d)
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Auth service error")
+    return r.json()
+
+
+@router.get("/{user_id}/public", response_model=UserPublicResponse)
+async def get_user_public(
+    request: Request,
+    user_id: int,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_auth),
+):
+    r = await auth_service_request(
+        "GET",
+        f"/users/{user_id}/public",
+        bearer_for_upstream(request, authorization),
+    )
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="User not found")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Auth service error")
+    return r.json()
 
 
 @router.get("", response_model=list[UserResponse])

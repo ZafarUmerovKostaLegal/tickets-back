@@ -517,9 +517,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
-      - WEEKLY_SUBMIT_HOUR=${WEEKLY_SUBMIT_HOUR:-6}
+      - WEEKLY_SUBMIT_HOUR=${WEEKLY_SUBMIT_HOUR:-12}
       - WEEKLY_SUBMIT_MINUTE=${WEEKLY_SUBMIT_MINUTE:-0}
-      - WEEKLY_SUBMIT_DOW=${WEEKLY_SUBMIT_DOW:-6}
+      - WEEKLY_SUBMIT_DOW=${WEEKLY_SUBMIT_DOW:-1}
     depends_on:
       redis:
         condition: service_healthy

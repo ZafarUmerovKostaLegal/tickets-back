@@ -13,6 +13,7 @@ __all__ = [
     "previous_closed_saturday_fri_for_anchor",
     "now_in_submit_tz",
     "is_work_week_edit_deadline_passed",
+    "work_week_monday_twelve_closing_aware",
 ]
 
 
@@ -43,11 +44,17 @@ def work_week_start_end_inclusive(d: date) -> tuple[date, date]:
     return s, s + timedelta(days=6)
 
 
-def work_week_saturday_nine_closing_aware(week_start_saturday: date, *, tz_name: str) -> datetime:
+def work_week_monday_twelve_closing_aware(week_start_saturday: date, *, tz_name: str) -> datetime:
+    """Момент закрытия редактирования рабочей недели (Sat..Fri) — следующий понедельник в 12:00.
+
+    Раньше закрытие было в субботу 09:00; теперь — в понедельник 12:00.
+    week_start_saturday — это суббота, с которой начинается рабочая неделя.
+    Понедельник, следующий за пятницей этой недели = week_start + 9 дней.
+    """
 
     t = (tz_name or "UTC").strip() or "UTC"
-    day = week_start_saturday + timedelta(days=7)
-    clock = time(9, 0, 0)
+    day = week_start_saturday + timedelta(days=9)
+    clock = time(12, 0, 0)
     if t.upper() in ("UTC", "GMT", "Z"):
         return datetime.combine(day, clock, tzinfo=timezone.utc)
     return datetime.combine(day, clock, tzinfo=ZoneInfo(t))
@@ -65,7 +72,7 @@ def is_work_week_edit_deadline_passed(
     n = now if now is not None else now_in_submit_tz()
     if n.tzinfo is None:
         raise ValueError("now must be timezone-aware when passed explicitly")
-    close_at = work_week_saturday_nine_closing_aware(w0, tz_name=stz)
+    close_at = work_week_monday_twelve_closing_aware(w0, tz_name=stz)
     return n >= close_at
 
 

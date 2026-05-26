@@ -23,10 +23,10 @@ app.conf.update(
     enable_utc=True,
 )
 
-H = int(os.environ.get("WEEKLY_SUBMIT_HOUR", "6"))
+H = int(os.environ.get("WEEKLY_SUBMIT_HOUR", "12"))
 M = int(os.environ.get("WEEKLY_SUBMIT_MINUTE", "0"))
 
-_dow = os.environ.get("WEEKLY_SUBMIT_DOW", "6")
+_dow = os.environ.get("WEEKLY_SUBMIT_DOW", "1")
 try:
     DOW: int | str = int(_dow)
 except ValueError:

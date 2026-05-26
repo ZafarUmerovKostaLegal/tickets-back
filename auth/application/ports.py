@@ -54,6 +54,10 @@ class UserRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    async def get_many_by_ids(self, user_ids: Sequence[int]) -> Sequence[User]:
+        pass
+
+    @abstractmethod
     async def get_all(
         self,
         include_archived: bool = False,

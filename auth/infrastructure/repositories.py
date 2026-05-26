@@ -100,6 +100,16 @@ class UserRepository(UserRepositoryPort):
         row = result.scalars().one_or_none()
         return self._to_entity(row) if row else None
 
+    async def get_many_by_ids(self, user_ids: Sequence[int]) -> Sequence[User]:
+        ids = sorted({int(x) for x in user_ids})
+        if not ids:
+            return []
+        result = await self._session.execute(
+            select(UserModel).where(UserModel.id.in_(ids))
+        )
+        rows = result.scalars().all()
+        return [self._to_entity(r) for r in rows]
+
     async def get_all(
         self,
         include_archived: bool = False,

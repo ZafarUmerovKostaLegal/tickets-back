@@ -22,6 +22,8 @@ from presentation.http_auth import access_token_from_request
 from presentation.schemas import (
     UserResponse,
     UserDetailResponse,
+    UserPublicResponse,
+    UserPublicListResponse,
     SetRoleRequest,
     BlockUserRequest,
     ArchiveUserRequest,
@@ -75,6 +77,17 @@ def _user_to_response(user: User, *, omit_permissions: bool = False) -> UserResp
         permissions=perms,
         time_tracking_role=user.time_tracking_role,
         desktop_background=user.desktop_background,
+    )
+
+
+def _user_to_public(user: User) -> UserPublicResponse:
+    return UserPublicResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        picture=user.picture,
+        position=user.position,
+        is_archived=user.is_archived,
     )
 
 
@@ -186,6 +199,61 @@ async def list_users(
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return _user_to_response(current_user)
+
+
+@router.get("/public", response_model=UserPublicListResponse)
+async def get_users_public_batch(
+    ids: str = Query(
+        ...,
+        description="Список ID через запятую, например ids=1,2,3 (максимум 200)",
+    ),
+    include_archived: bool = Query(
+        True,
+        description="Возвращать ли архивированных. По умолчанию true: в чатах/задачах архивные нужны для отображения старых сообщений.",
+    ),
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    raw_ids: list[int] = []
+    for chunk in (ids or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            raw_ids.append(int(chunk))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid user id: {chunk!r}") from None
+    if not raw_ids:
+        raise HTTPException(status_code=400, detail="Query parameter ids is required")
+    requested = sorted({i for i in raw_ids if i > 0})
+    if len(requested) > 200:
+        raise HTTPException(status_code=400, detail="Too many ids (max 200)")
+    rows = await user_repo.get_many_by_ids(requested)
+    by_id = {u.id: u for u in rows}
+    items: list[UserPublicResponse] = []
+    missing: list[int] = []
+    for uid in requested:
+        u = by_id.get(uid)
+        if u is None:
+            missing.append(uid)
+            continue
+        if not include_archived and u.is_archived:
+            missing.append(uid)
+            continue
+        items.append(_user_to_public(u))
+    return UserPublicListResponse(items=items, missing_ids=missing)
+
+
+@router.get("/{user_id}/public", response_model=UserPublicResponse)
+async def get_user_public(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    user = await user_repo.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_to_public(user)
 
 
 @router.get("/{user_id}", response_model=UserDetailResponse)

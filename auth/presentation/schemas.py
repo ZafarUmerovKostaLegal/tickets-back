@@ -20,6 +20,20 @@ class UserResponse(BaseModel):
     desktop_background: Optional[str] = None
 
 
+class UserPublicResponse(BaseModel):
+    id: int
+    email: str
+    display_name: Optional[str] = None
+    picture: Optional[str] = None
+    position: Optional[str] = None
+    is_archived: bool = False
+
+
+class UserPublicListResponse(BaseModel):
+    items: list[UserPublicResponse]
+    missing_ids: list[int] = []
+
+
 class UserDetailResponse(BaseModel):
     id: int
     azure_oid: str
