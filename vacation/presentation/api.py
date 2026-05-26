@@ -12,6 +12,7 @@ from infrastructure.schema_readiness import mark_schema_ready
 from presentation.middleware.schema_readiness import SchemaReadinessMiddleware
 from presentation.routes.health import router as health_router
 from presentation.routes.schedule import router as schedule_router
+from presentation.routes.leave_requests import router as leave_requests_router
 
 _log = logging.getLogger("vacation.startup")
 _STARTUP_RETRIES = 30
@@ -25,6 +26,38 @@ def _is_database_missing_error(exc: BaseException) -> bool:
     return "does not exist" in s and "database" in s
 
 
+_UPGRADE_SQL = (
+    # schedule_employees columns added in 2026
+    "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS auth_user_id INTEGER",
+    "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS email VARCHAR(320)",
+    "ALTER TABLE schedule_employees ALTER COLUMN excel_row_no DROP NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_schedule_employees_auth_user_id ON schedule_employees(auth_user_id)",
+    """DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'uq_schedule_employees_year_auth_user'
+        ) THEN
+            ALTER TABLE schedule_employees
+                ADD CONSTRAINT uq_schedule_employees_year_auth_user UNIQUE (year, auth_user_id);
+        END IF;
+    END $$""",
+    "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS leave_request_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_absence_days_leave_request_id ON absence_days(leave_request_id)",
+)
+
+
+async def _apply_upgrade_sql() -> None:
+    if engine is None:
+        return
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        for stmt in _UPGRADE_SQL:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as exc:  # pragma: no cover - defensive
+                _log.warning("upgrade step failed (%s): %s", stmt[:80], exc)
+
+
 async def _ensure_schema_with_retries() -> None:
 
     last_exc: Exception | None = None
@@ -34,6 +67,7 @@ async def _ensure_schema_with_retries() -> None:
                 return
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+            await _apply_upgrade_sql()
             mark_schema_ready()
             _log.info("Схема БД vacation готова")
             return
@@ -107,3 +141,4 @@ app.add_middleware(SqlInjectionGuardMiddleware)
 app.add_middleware(SchemaReadinessMiddleware)
 app.include_router(health_router)
 app.include_router(schedule_router)
+app.include_router(leave_requests_router)

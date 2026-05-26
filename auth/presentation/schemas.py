@@ -25,6 +25,7 @@ class UserPublicResponse(BaseModel):
     email: str
     display_name: Optional[str] = None
     picture: Optional[str] = None
+    role: Optional[str] = None
     position: Optional[str] = None
     is_archived: bool = False
 

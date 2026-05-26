@@ -649,6 +649,22 @@ services:
       - VACATION_DB_NAME=${VACATION_DB_NAME:-kosta_vacation}
       - VACATION_DB_HOST=${VACATION_DB_HOST:-vacation_db}
       - VACATION_DB_PORT=${VACATION_DB_PORT:-5432}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-}
+      - FRONTEND_URL=${FRONTEND_URL:-}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - VACATION_SMTP_HOST=${VACATION_SMTP_HOST:-${EXPENSE_SMTP_HOST:-}}
+      - VACATION_SMTP_PORT=${VACATION_SMTP_PORT:-${EXPENSE_SMTP_PORT:-587}}
+      - VACATION_SMTP_USER=${VACATION_SMTP_USER:-${EXPENSE_SMTP_USER:-}}
+      - VACATION_SMTP_PASSWORD=${VACATION_SMTP_PASSWORD:-${EXPENSE_SMTP_PASSWORD:-}}
+      - VACATION_SMTP_USE_TLS=${VACATION_SMTP_USE_TLS:-true}
+      - VACATION_MAIL_FROM=${VACATION_MAIL_FROM:-${EXPENSE_MAIL_FROM:-}}
+      - VACATION_MAIL_BCC=${VACATION_MAIL_BCC:-}
+      - VACATION_EMAIL_ACTION_SECRET=${VACATION_EMAIL_ACTION_SECRET:-}
+      - VACATION_EMAIL_ACTION_TTL_SECONDS=${VACATION_EMAIL_ACTION_TTL_SECONDS:-1209600}
+      - VACATION_EMAIL_ACTION_CONFIRM_STEP=${VACATION_EMAIL_ACTION_CONFIRM_STEP:-true}
+    volumes:
+      - media_storage:/app/media
     healthcheck:
       test:
         [
@@ -662,6 +678,8 @@ services:
     depends_on:
       vacation_db:
         condition: service_healthy
+      auth:
+        condition: service_started
 
   vacation_db:
     image: postgres:16-alpine

@@ -86,6 +86,7 @@ def _user_to_public(user: User) -> UserPublicResponse:
         email=user.email,
         display_name=user.display_name,
         picture=user.picture,
+        role=user.role,
         position=user.position,
         is_archived=user.is_archived,
     )
@@ -242,6 +243,29 @@ async def get_users_public_batch(
             continue
         items.append(_user_to_public(u))
     return UserPublicListResponse(items=items, missing_ids=missing)
+
+
+_PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")
+
+
+@router.get("/partners", response_model=UserPublicListResponse)
+async def list_partners(
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    """Список партнёров — публичные данные, для любого авторизованного сотрудника.
+
+    Нужен для выбора согласующего при подаче заявки на отпуск/нерабочий день/удалённый режим.
+    """
+
+    users = await user_repo.get_all(include_archived=False)
+    items = [
+        _user_to_public(u)
+        for u in users
+        if (u.role or "").strip() in _PARTNER_ROLE_VALUES
+    ]
+    items.sort(key=lambda u: (u.display_name or u.email or "").lower())
+    return UserPublicListResponse(items=items, missing_ids=[])
 
 
 @router.get("/{user_id}/public", response_model=UserPublicResponse)

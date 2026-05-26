@@ -30,6 +30,23 @@ class Settings(BaseSettings):
     vacation_db_name: str = Field(default="kosta_vacation", validation_alias="VACATION_DB_NAME")
     service_name: str = "vacation"
 
+    auth_service_url: str = Field(default="http://auth:1236", validation_alias="AUTH_SERVICE_URL")
+    media_path: str = Field(default="/app/media", validation_alias="MEDIA_PATH")
+    frontend_url: str = Field(default="", validation_alias="FRONTEND_URL")
+    public_api_base_url: str = Field(default="", validation_alias="GATEWAY_BASE_URL")
+
+    smtp_host: str = Field(default="", validation_alias="VACATION_SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="VACATION_SMTP_PORT")
+    smtp_user: str = Field(default="", validation_alias="VACATION_SMTP_USER")
+    smtp_password: str = Field(default="", validation_alias="VACATION_SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(default=True, validation_alias="VACATION_SMTP_USE_TLS")
+    mail_from: str = Field(default="", validation_alias="VACATION_MAIL_FROM")
+    mail_bcc: str = Field(default="", validation_alias="VACATION_MAIL_BCC")
+
+    email_action_secret: str = Field(default="", validation_alias="VACATION_EMAIL_ACTION_SECRET")
+    email_action_ttl_seconds: int = Field(default=14 * 24 * 3600, validation_alias="VACATION_EMAIL_ACTION_TTL_SECONDS")
+    email_action_confirm_step: bool = Field(default=True, validation_alias="VACATION_EMAIL_ACTION_CONFIRM_STEP")
+
     @field_validator("vacation_db_password", "vacation_db_user", "vacation_db_name", mode="before")
     @classmethod
     def strip_bom_and_edges(cls, v: object) -> object:

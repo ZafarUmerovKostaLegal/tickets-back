@@ -1,23 +1,18 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import sessionmaker, selectinload
-from starlette.concurrency import run_in_threadpool
+from sqlalchemy.orm import selectinload
 
-from application.excel_schedule_import import import_schedule_from_workbook
 from application.kind_legend import KIND_LEGEND_ENTRIES, KindLegendEntry
-from infrastructure.config import get_settings, resolve_database_url
 from infrastructure.database import get_session
-from infrastructure.db_sync import sync_engine_url
 from infrastructure.models import AbsenceDay, ScheduleEmployee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
-MAX_IMPORT_FILE_BYTES = 20 * 1024 * 1024
 
 KIND_LABELS: dict[int, str] = {
     1: "annual_vacation",
@@ -31,9 +26,13 @@ KIND_LABELS: dict[int, str] = {
 class EmployeeOut(BaseModel):
     id: int
     year: int
-    excel_row_no: int | None
+    excel_row_no: int | None = None
+    auth_user_id: int | None = Field(None, alias="authUserId")
     full_name: str
+    email: str | None = None
     planned_period_note: str | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class AbsenceDayOut(BaseModel):
@@ -65,18 +64,29 @@ class ImportResultOut(BaseModel):
 class EmployeeCreateBody(BaseModel):
     year: int = Field(..., ge=2000, le=2100)
     full_name: str = Field(..., min_length=1, max_length=500)
-    excel_row_no: int | None = Field(None, ge=1)
+    auth_user_id: int | None = Field(None, alias="authUserId")
+    email: str | None = Field(None, max_length=320)
     planned_period_note: str | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class EmployeePatchBody(BaseModel):
     full_name: str | None = Field(None, min_length=1, max_length=500)
     planned_period_note: str | None = None
-    excel_row_no: int | None = Field(None, ge=1)
+    auth_user_id: int | None = Field(None, alias="authUserId")
+    email: str | None = Field(None, max_length=320)
+
+    model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
     def at_least_one(self):
-        if self.full_name is None and self.planned_period_note is None and self.excel_row_no is None:
+        if (
+            self.full_name is None
+            and self.planned_period_note is None
+            and self.auth_user_id is None
+            and self.email is None
+        ):
             raise ValueError("Укажите хотя бы одно поле для обновления")
         return self
 
@@ -106,57 +116,16 @@ def _absence_out(d: AbsenceDay) -> AbsenceDayOut:
     )
 
 
-def _sync_import_bytes(db_url: str, content: bytes, year: int, sheet: str | None) -> tuple[int, int]:
-    engine = create_engine(sync_engine_url(db_url), echo=False)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-    with SessionLocal() as session:
-        return import_schedule_from_workbook(
-            session,
-            year=year,
-            sheet_name=sheet,
-            source=content,
-        )
-
-
 @router.post("/import", response_model=ImportResultOut)
-async def import_excel_upload(
-    year: int = Form(..., ge=2000, le=2100),
-    file: UploadFile = File(...),
-    sheet: str | None = Form(None),
-):
-
-    settings = get_settings()
-    db_url = resolve_database_url(settings).strip()
-    if not db_url:
-        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
-
-    filename = (file.filename or "").lower()
-    if not filename.endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="Ожидается файл Excel (.xlsx или .xlsm)")
-
-    content = await file.read()
-    if len(content) > MAX_IMPORT_FILE_BYTES:
-        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 20 МБ)")
-
-    if len(content) < 4 or content[:4] != b"PK\x03\x04":
-        raise HTTPException(
-            status_code=400,
-            detail="Ожидается настоящий файл Excel OOXML (.xlsx / .xlsm)",
-        )
-
-    sheet_name = sheet.strip() if sheet and sheet.strip() else None
-
-    try:
-        emp, days = await run_in_threadpool(_sync_import_bytes, db_url, content, year, sheet_name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Не удалось прочитать или разобрать файл: {e}",
-        ) from e
-
-    return ImportResultOut(year=year, employees_imported=emp, absence_days_imported=days)
+async def import_excel_upload():
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Импорт из Excel отключён. График заполняется автоматически: "
+            "сотрудник подаёт заявку через POST /api/v1/vacations/leave-requests, "
+            "после approve дни появляются в schedule_employees/absence_days."
+        ),
+    )
 
 
 @router.get("/kind-codes", response_model=dict[str, str])
@@ -174,18 +143,26 @@ async def kind_legend() -> list[KindLegendEntry]:
 @router.get("/employees", response_model=list[EmployeeOut])
 async def list_employees(
     year: int = Query(..., ge=2000, le=2100),
+    only_registered: bool = Query(
+        True,
+        description="Возвращать только сотрудников, привязанных к зарегистрированному auth-пользователю",
+    ),
     session: AsyncSession = Depends(get_session),
 ):
-    r = await session.execute(
-        select(ScheduleEmployee).where(ScheduleEmployee.year == year).order_by(ScheduleEmployee.excel_row_no.nulls_last(), ScheduleEmployee.id)
-    )
+    q = select(ScheduleEmployee).where(ScheduleEmployee.year == year)
+    if only_registered:
+        q = q.where(ScheduleEmployee.auth_user_id.is_not(None))
+    q = q.order_by(ScheduleEmployee.full_name.asc(), ScheduleEmployee.id)
+    r = await session.execute(q)
     rows = r.scalars().all()
     return [
         EmployeeOut(
             id=e.id,
             year=e.year,
             excel_row_no=e.excel_row_no,
+            auth_user_id=e.auth_user_id,
             full_name=e.full_name,
+            email=e.email,
             planned_period_note=e.planned_period_note,
         )
         for e in rows
@@ -214,7 +191,9 @@ async def get_employee(
         id=e.id,
         year=e.year,
         excel_row_no=e.excel_row_no,
+        auth_user_id=e.auth_user_id,
         full_name=e.full_name,
+        email=e.email,
         planned_period_note=e.planned_period_note,
         absence_days=[_absence_out(d) for d in days],
     )
@@ -259,8 +238,10 @@ async def create_employee(
 ):
     emp = ScheduleEmployee(
         year=body.year,
-        excel_row_no=body.excel_row_no,
+        excel_row_no=None,
+        auth_user_id=body.auth_user_id,
         full_name=body.full_name.strip(),
+        email=(body.email.strip() if body.email and body.email.strip() else None),
         planned_period_note=(body.planned_period_note.strip() if body.planned_period_note and body.planned_period_note.strip() else None),
     )
     session.add(emp)
@@ -274,7 +255,9 @@ async def create_employee(
         id=emp.id,
         year=emp.year,
         excel_row_no=emp.excel_row_no,
+        auth_user_id=emp.auth_user_id,
         full_name=emp.full_name,
+        email=emp.email,
         planned_period_note=emp.planned_period_note,
     )
 
@@ -293,8 +276,10 @@ async def patch_employee(
         emp.full_name = body.full_name.strip()
     if body.planned_period_note is not None:
         emp.planned_period_note = body.planned_period_note.strip() if body.planned_period_note.strip() else None
-    if body.excel_row_no is not None:
-        emp.excel_row_no = body.excel_row_no
+    if body.auth_user_id is not None:
+        emp.auth_user_id = body.auth_user_id
+    if body.email is not None:
+        emp.email = body.email.strip() if body.email.strip() else None
     try:
         await session.commit()
     except IntegrityError:
@@ -305,7 +290,9 @@ async def patch_employee(
         id=emp.id,
         year=emp.year,
         excel_row_no=emp.excel_row_no,
+        auth_user_id=emp.auth_user_id,
         full_name=emp.full_name,
+        email=emp.email,
         planned_period_note=emp.planned_period_note,
     )
 

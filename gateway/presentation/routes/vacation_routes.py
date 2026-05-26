@@ -14,11 +14,33 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/vacations", tags=["vacations"])
 
-async def vacation_access(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
+_SELF_SERVICE_PREFIXES = (
+    "leave-requests",
+    "leave-kinds",
+    "partners",
+)
 
+
+def _is_self_service_path(path: str) -> bool:
+    p = (path or "").lstrip("/").lower()
+    return any(p == pref or p.startswith(pref + "/") or p.startswith(pref + "?") for pref in _SELF_SERVICE_PREFIXES)
+
+
+async def vacation_access(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
     user = await verify_bearer_and_get_user(request, authorization)
     role = (user.get("role") or "").strip()
     method = request.method.upper()
+
+    # Эндпоинты подачи заявок / выбора партнёра / справочника видов отсутствия —
+    # доступны любому авторизованному сотруднику. Сам vacation-сервис проверяет,
+    # что менять/решать заявку может только её владелец или выбранный партнёр.
+    raw_path = request.url.path
+    rel_path = raw_path.split("/api/v1/vacations/", 1)[-1] if "/api/v1/vacations/" in raw_path else raw_path
+    if _is_self_service_path(rel_path):
+        if not role:
+            raise HTTPException(status_code=403, detail="Authentication required")
+        return user
+
     if method == "GET":
         if not role_in_set(role, VACATION_VIEW):
             raise HTTPException(
@@ -96,6 +118,12 @@ async def proxy_vacation_schedule_import(
 ):
 
     return await _forward(request, "schedule/import", authorization, timeout=120.0)
+
+
+@router.get("/leave-requests/email-action")
+async def proxy_vacation_email_action(request: Request):
+    """Публичный (без JWT) колбэк из e-mail партнёру — токен сам себя авторизует."""
+    return await _forward(request, "leave-requests/email-action", authorization=None, timeout=60.0)
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PATCH", "DELETE"])

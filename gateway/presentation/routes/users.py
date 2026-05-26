@@ -343,6 +343,7 @@ class UserPublicResponse(BaseModel):
     email: str
     display_name: Optional[str] = None
     picture: Optional[str] = None
+    role: Optional[str] = None
     position: Optional[str] = None
     is_archived: bool = False
 
@@ -375,6 +376,25 @@ async def get_users_public_batch(
         except Exception:
             d = "Bad request"
         raise HTTPException(status_code=400, detail=d)
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Auth service error")
+    return r.json()
+
+
+@router.get("/partners", response_model=UserPublicListResponse)
+async def list_partners(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_auth),
+):
+    """Список партнёров (public projection) — для выбора согласующего в заявках."""
+    r = await auth_service_request(
+        "GET",
+        "/users/partners",
+        bearer_for_upstream(request, authorization),
+    )
     if r.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     if r.status_code >= 400:
