@@ -25,6 +25,7 @@ services:
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
       - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
+      - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
       - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-http://localhost:8080}
@@ -39,6 +40,8 @@ services:
       - AUTH_SESSION_COOKIE_SAMESITE=${AUTH_SESSION_COOKIE_SAMESITE:-lax}
     volumes:
       - media_storage:/app/media
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [

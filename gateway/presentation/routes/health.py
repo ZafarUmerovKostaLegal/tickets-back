@@ -108,3 +108,81 @@ async def health_todos():
             "todos_service_url": base,
         }
     )
+
+
+@router.get("/call-schedule", summary="Проверка call_schedule с gateway")
+async def health_call_schedule():
+    base = (get_settings().call_schedule_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "CALL_SCHEDULE_SERVICE_URL not configured",
+                "hint": "Задайте CALL_SCHEDULE_SERVICE_URL, например http://call_schedule:1245",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Call schedule unreachable from gateway",
+                "call_schedule_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Call schedule /health not OK",
+                "call_schedule_service_url": base,
+                "upstream_status": r.status_code,
+            },
+        )
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "call_schedule": "reachable",
+            "call_schedule_service_url": base,
+            "api_prefix": "/api/v1/call-schedule",
+        }
+    )
+
+
+@router.get("/smart-home", summary="Проверка Smart Home API с gateway")
+async def health_smart_home():
+    base = (get_settings().smart_home_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "SMART_HOME_SERVICE_URL not configured",
+                "hint": "Задайте SMART_HOME_SERVICE_URL, например http://host.docker.internal:8765",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(base)
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Smart Home unreachable from gateway",
+                "smart_home_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    return JSONResponse(
+        content={
+            "status": "ok" if r.status_code < 500 else "degraded",
+            "smart_home": "reachable",
+            "smart_home_service_url": base,
+            "upstream_status": r.status_code,
+            "api_prefix": "/api/v1/smart-home",
+        }
+    )

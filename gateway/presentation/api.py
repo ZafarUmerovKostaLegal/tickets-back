@@ -27,6 +27,7 @@ from presentation.routes import (
     chat_routes,
     chat_ws,
     call_schedule_routes,
+    smart_home_routes,
     media,
     attendance_routes,
     vacation_routes,
@@ -136,6 +137,7 @@ app.include_router(todos_routes.router)
 app.include_router(chat_ws.router)
 app.include_router(chat_routes.router)
 app.include_router(call_schedule_routes.router)
+app.include_router(smart_home_routes.router)
 app.include_router(media.router)
 app.include_router(attendance_routes.router_compat)
 app.include_router(attendance_routes.router)

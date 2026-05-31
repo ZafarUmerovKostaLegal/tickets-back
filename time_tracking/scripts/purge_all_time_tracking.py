@@ -1,5 +1,8 @@
 """Полная очистка данных time tracking в текущей БД (см. TIME_TRACKING_TABLES).
 
+Удаляет в том числе time_tracking_users. Чтобы сохранить пользователей TT, используйте
+scripts/purge_time_tracking_keep_users.py.
+
 Не трогает пользователей основного приложения (auth) — только таблицы модуля time_tracking.
 
 Запуск из каталога time_tracking:
