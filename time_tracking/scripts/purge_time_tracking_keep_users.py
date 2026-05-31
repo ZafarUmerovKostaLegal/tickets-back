@@ -211,7 +211,7 @@ async def _run(
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=(
             "Удалить ВСЕ данные time tracking (мок и боевые): записи, клиенты, "
@@ -239,7 +239,7 @@ def main() -> int:
     g.add_argument("--dry-run", action="store_true", help="Только план и счётчики")
     g.add_argument("--execute", action="store_true", help="Выполнить удаление")
 
-    args = p.parse_args()
+    args = p.parse_args(argv)
     if args.execute and args.confirm.strip() != CONFIRM_PHRASE:
         print(f"Для --execute укажите: --confirm {CONFIRM_PHRASE}", file=sys.stderr)
         return 1
