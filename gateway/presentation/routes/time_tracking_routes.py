@@ -137,6 +137,30 @@ def require_manage_role(user: dict = Depends(get_current_user)):
     return user
 
 
+def _time_tracking_role(user: dict) -> str:
+    return (user.get("time_tracking_role") or user.get("timeTrackingRole") or "").strip()
+
+
+def require_client_contacts_view(user: dict = Depends(get_current_user)):
+    """Контакты клиентов: TT user/manager или админ/офис (как на странице «Контакты»)."""
+    tt = _time_tracking_role(user)
+    if tt in {"user", "manager"}:
+        return user
+    role = (user.get("role") or "").strip()
+    if role in {
+        "Главный администратор",
+        "Администратор",
+        "Партнер",
+        "IT отдел",
+        "Офис менеджер",
+    }:
+        return user
+    raise HTTPException(
+        status_code=403,
+        detail="Доступ к контактам клиентов только для ролей учёта времени user/manager или администраторов",
+    )
+
+
 async def _fetch_time_tracking_user_role(auth_user_id: int) -> str | None:
 
     r = await _tt_request("GET", f"/users/{auth_user_id}", timeout=10.0)
@@ -662,7 +686,7 @@ async def delete_project_task(
 
 
 @router.get("/clients/{client_id}/contacts")
-async def list_client_contacts_gateway(client_id: str, _: dict = Depends(require_view_role)):
+async def list_client_contacts_gateway(client_id: str, _: dict = Depends(require_client_contacts_view)):
     return await _tt_json("GET", f"/clients/{client_id}/contacts")
 
 
@@ -670,7 +694,7 @@ async def list_client_contacts_gateway(client_id: str, _: dict = Depends(require
 async def get_client_contact_gateway(
     client_id: str,
     contact_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_client_contacts_view),
 ):
     return await _tt_json("GET", f"/clients/{client_id}/contacts/{contact_id}")
 

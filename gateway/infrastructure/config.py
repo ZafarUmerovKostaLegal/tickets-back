@@ -17,6 +17,7 @@ _DEFAULT_SERVICE_URLS: dict[str, str] = {
     "vacation_service_url": "http://vacation:1244",
     "call_schedule_service_url": "http://call_schedule:1245",
     "chat_service_url": "http://chat:1246",
+    "contacts_service_url": "http://contacts:1248",
     "smart_home_service_url": "",
 }
 
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     todos_service_url: str = ""
     call_schedule_service_url: str = ""
     chat_service_url: str = ""
+    contacts_service_url: str = ""
     smart_home_service_url: str = ""
     frontend_url: str = ""
     admin_frontend_url: str = ""

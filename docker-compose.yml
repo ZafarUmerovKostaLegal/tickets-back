@@ -25,6 +25,7 @@ services:
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
       - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
+      - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
@@ -78,6 +79,32 @@ services:
       call_schedule:
         condition: service_started
       chat:
+        condition: service_started
+      contacts:
+        condition: service_started
+
+  contacts:
+    build:
+      context: .
+      dockerfile: contacts/Dockerfile
+    restart: unless-stopped
+    environment:
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - TIME_TRACKING_SERVICE_URL=${TIME_TRACKING_SERVICE_URL:-http://time_tracking:1241}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1248/health\", timeout=3)"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      auth:
+        condition: service_healthy
+      time_tracking:
         condition: service_started
 
   # Утилита очистки БД: весь репозиторий монтируется в /work (см. scripts/wipe_all_keep_tt_users.py).

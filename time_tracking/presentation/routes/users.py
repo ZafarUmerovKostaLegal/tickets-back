@@ -11,6 +11,7 @@ from application.auth_user_directory import (
 )
 from application.access_control import (
     ensure_can_list_all_tt_users,
+    ensure_can_view_colleague_directory,
     ensure_can_read_tt_user_row,
     ensure_delete_tt_user_allowed,
     ensure_managed_scope_allowed,
@@ -79,7 +80,7 @@ async def list_users(
     authorization: str | None = Header(None, alias="Authorization"),
 ) -> list[UserResponse]:
 
-    await ensure_can_list_all_tt_users(viewer)
+    await ensure_can_view_colleague_directory(viewer)
     repo = TimeTrackingUserRepository(session)
     rows = await repo.list_users()
     pos_map = await fetch_auth_user_positions_by_id(authorization or "")

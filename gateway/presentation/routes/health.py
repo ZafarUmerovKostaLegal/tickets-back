@@ -63,6 +63,44 @@ async def health_chat():
     )
 
 
+@router.get("/contacts", summary="Проверка доступности микросервиса contacts с gateway")
+async def health_contacts():
+    base = (get_settings().contacts_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "CONTACTS_SERVICE_URL not configured",
+                "hint": "Задайте CONTACTS_SERVICE_URL, например http://contacts:1248",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Contacts unreachable from gateway",
+                "contacts_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Contacts /health not OK",
+                "contacts_service_url": base,
+                "upstream_status": r.status_code,
+            },
+        )
+    return JSONResponse(
+        content={"status": "ok", "contacts": "reachable", "contacts_service_url": base}
+    )
+
+
 @router.get("/todos", summary="Проверка доступности микросервиса todos с gateway")
 async def health_todos():
 

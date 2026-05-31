@@ -158,6 +158,14 @@ async def ensure_can_list_all_tt_users(viewer: dict) -> None:
     )
 
 
+async def ensure_can_view_colleague_directory(viewer: dict) -> None:
+    """Каталог коллег (страница «Контакты», сервис contacts) — любой авторизованный сотрудник."""
+    if viewer.get("id") is None:
+        raise HTTPException(status_code=403, detail="Authorization required")
+    if viewer.get("is_archived"):
+        raise HTTPException(status_code=403, detail="Archived employees cannot view colleagues")
+
+
 async def ensure_managed_scope_allowed(viewer: dict, manager_auth_user_id: int) -> None:
 
     if _viewer_id(viewer) == manager_auth_user_id:
