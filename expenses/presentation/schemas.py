@@ -113,6 +113,8 @@ class ExpenseRequestListItemOut(BaseModel):
     comment: Optional[str] = None
     status: str
     current_approver_id: Optional[int] = Field(None, serialization_alias="currentApproverId")
+    partner_user_id: Optional[int] = Field(None, serialization_alias="partnerUserId")
+    partner_user: Optional[ExpenseAuthorSnippet] = Field(None, serialization_alias="partnerUser")
     created_by_user_id: int = Field(serialization_alias="createdByUserId")
     created_by: ExpenseAuthorSnippet = Field(serialization_alias="createdBy")
     updated_by_user_id: int = Field(serialization_alias="updatedByUserId")
@@ -170,6 +172,7 @@ class ExpenseCreateBody(BaseModel):
     business_purpose: Optional[str] = Field(None, validation_alias=AliasChoices("businessPurpose", "business_purpose"))
     comment: Optional[str] = None
     current_approver_id: Optional[int] = Field(None, validation_alias=AliasChoices("currentApproverId", "current_approver_id"))
+    partner_user_id: Optional[int] = Field(None, validation_alias=AliasChoices("partnerUserId", "partner_user_id"))
 
     @field_validator("amount_uzs", "exchange_rate", mode="before")
     @classmethod
@@ -187,6 +190,19 @@ class ExpenseCreateBody(BaseModel):
         if v is None or v == "":
             return None
         return normalize_payment_method(str(v))
+
+    @field_validator("partner_user_id", mode="before")
+    @classmethod
+    def coerce_partner_user_id(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError("partnerUserId must be an integer") from e
+        if n <= 0:
+            raise ValueError("partnerUserId must be positive")
+        return n
 
     @model_validator(mode="after")
     def validate_deadline_vs_expense_date(self) -> "ExpenseCreateBody":
@@ -221,6 +237,7 @@ class ExpenseUpdateBody(BaseModel):
     business_purpose: Optional[str] = Field(None, validation_alias=AliasChoices("businessPurpose", "business_purpose"))
     comment: Optional[str] = None
     current_approver_id: Optional[int] = Field(None, validation_alias=AliasChoices("currentApproverId", "current_approver_id"))
+    partner_user_id: Optional[int] = Field(None, validation_alias=AliasChoices("partnerUserId", "partner_user_id"))
 
     @field_validator("amount_uzs", "exchange_rate", mode="before")
     @classmethod
@@ -242,6 +259,19 @@ class ExpenseUpdateBody(BaseModel):
         if v is None or v == "":
             return None
         return normalize_payment_method(str(v))
+
+    @field_validator("partner_user_id", mode="before")
+    @classmethod
+    def coerce_partner_user_id_opt(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError("partnerUserId must be an integer") from e
+        if n <= 0:
+            raise ValueError("partnerUserId must be positive")
+        return n
 
 
 class RejectBody(BaseModel):

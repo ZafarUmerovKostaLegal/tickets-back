@@ -17,6 +17,14 @@ def test_is_partner_expense():
     assert is_partner_expense(" food ") is False
 
 
+def test_is_partner_org_role():
+    from application.expense_service import is_partner_org_role
+
+    assert is_partner_org_role("Партнер") is True
+    assert is_partner_org_role("Партнёр") is True
+    assert is_partner_org_role("Сотрудник") is False
+
+
 def test_partner_submit_relaxes_reimbursable_requirements():
 
     validate_submit_fields(

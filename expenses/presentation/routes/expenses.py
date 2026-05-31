@@ -15,12 +15,13 @@ from starlette.responses import FileResponse
 from application.expense_service import (
     calc_equivalent,
     is_partner_expense,
+    is_partner_org_role,
     validate_expense_subtype_rules,
     validate_submit_fields,
 )
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.auth_users import fetch_users_by_ids
+from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.expense_author_decision_notify import (
     run_author_decision_notification_safe,
     run_expense_paid_notification_safe,
@@ -77,7 +78,12 @@ _NO_NEW_ATTACHMENT_STATUSES = frozenset({"rejected", "closed", "withdrawn"})
 _MODERATOR_UPLOAD_STATUSES = frozenset({"pending_approval", "approved", "paid", "not_reimbursable"})
 
 
-def _moderation_email_context(row: ExpenseRequestModel, user: dict) -> ExpenseModerationEmailContext:
+def _moderation_email_context(
+    row: ExpenseRequestModel,
+    user: dict,
+    *,
+    partner_profile: dict | None = None,
+) -> ExpenseModerationEmailContext:
     attachments = [
         AttachmentEmailItem(
             id=a.id,
@@ -108,6 +114,8 @@ def _moderation_email_context(row: ExpenseRequestModel, user: dict) -> ExpenseMo
         comment=row.comment,
         author_email=user.get("email"),
         author_name=user.get("display_name"),
+        partner_user_name=(partner_profile or {}).get("display_name"),
+        partner_user_email=(partner_profile or {}).get("email"),
         attachments=attachments,
     )
 
@@ -199,10 +207,42 @@ def _author_snippet(user_id: int, profile: dict | None) -> ExpenseAuthorSnippet:
     )
 
 
+async def _resolve_partner_user_id(
+    *,
+    expense_type: str,
+    partner_user_id: int | None,
+    authorization: Optional[str],
+) -> int | None:
+    if not is_partner_expense(expense_type):
+        if partner_user_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="partnerUserId допустим только для expenseType=partner_expense",
+            )
+        return None
+    if partner_user_id is None:
+        return None
+    settings = get_settings()
+    profile = await fetch_user_by_id(settings.auth_service_url, authorization, partner_user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Партнёр не найден")
+    if not is_partner_org_role(profile.get("role")):
+        raise HTTPException(status_code=400, detail="Выбранный пользователь не является партнёром")
+    return partner_user_id
+
+
+def _validate_partner_expense_date(expense_type: str, expense_date: date) -> None:
+    if not is_partner_expense(expense_type):
+        return
+    if expense_date > date.today():
+        raise HTTPException(status_code=400, detail="Дата расхода партнёра не может быть в будущем")
+
+
 def _list_item(
     row: ExpenseRequestModel,
     author: dict | None = None,
     paid_by_profile: dict | None = None,
+    partner_profile: dict | None = None,
 ) -> ExpenseRequestListItemOut:
     n = len(row.attachments or [])
     a = author or {}
@@ -216,6 +256,11 @@ def _list_item(
     paid_by = (
         _author_snippet(row.paid_by_user_id, paid_by_profile)
         if row.paid_by_user_id is not None
+        else None
+    )
+    partner_user = (
+        _author_snippet(row.partner_user_id, partner_profile)
+        if row.partner_user_id is not None
         else None
     )
     return ExpenseRequestListItemOut(
@@ -237,6 +282,8 @@ def _list_item(
         comment=row.comment,
         status=row.status,
         current_approver_id=row.current_approver_id,
+        partner_user_id=row.partner_user_id,
+        partner_user=partner_user,
         created_by_user_id=row.created_by_user_id,
         created_by=created_by,
         updated_by_user_id=row.updated_by_user_id,
@@ -258,8 +305,9 @@ def _detail(
     row: ExpenseRequestModel,
     author: dict | None = None,
     paid_by_profile: dict | None = None,
+    partner_profile: dict | None = None,
 ) -> ExpenseRequestDetailOut:
-    li = _list_item(row, author, paid_by_profile)
+    li = _list_item(row, author, paid_by_profile, partner_profile)
     sh = sorted(row.status_history or [], key=lambda x: x.changed_at)
     al = sorted(row.audit_logs or [], key=lambda x: x.performed_at)
     atts = row.attachments or []
@@ -312,10 +360,13 @@ async def _detail_response(row: ExpenseRequestModel, authorization: Optional[str
     ids = {row.created_by_user_id}
     if row.paid_by_user_id is not None:
         ids.add(row.paid_by_user_id)
+    if row.partner_user_id is not None:
+        ids.add(row.partner_user_id)
     m = await fetch_users_by_ids(settings.auth_service_url, authorization, ids)
     author = m.get(row.created_by_user_id)
     paid_by_p = m.get(row.paid_by_user_id) if row.paid_by_user_id is not None else None
-    return _detail(row, author, paid_by_p)
+    partner_p = m.get(row.partner_user_id) if row.partner_user_id is not None else None
+    return _detail(row, author, paid_by_p, partner_p)
 
 
 async def _list_with_authors(
@@ -331,6 +382,8 @@ async def _list_with_authors(
         ids.add(r.created_by_user_id)
         if r.paid_by_user_id is not None:
             ids.add(r.paid_by_user_id)
+        if r.partner_user_id is not None:
+            ids.add(r.partner_user_id)
     m = await fetch_users_by_ids(settings.auth_service_url, authorization, ids)
     return ExpenseListResponse(
         items=[
@@ -338,6 +391,7 @@ async def _list_with_authors(
                 r,
                 m.get(r.created_by_user_id),
                 m.get(r.paid_by_user_id) if r.paid_by_user_id is not None else None,
+                m.get(r.partner_user_id) if r.partner_user_id is not None else None,
             )
             for r in rows
         ],
@@ -445,6 +499,12 @@ async def create_expense(
     exchange_rate = body.exchange_rate
     eq = calc_equivalent(amount_uzs, exchange_rate)
     exp_d = body.expense_date
+    _validate_partner_expense_date(body.expense_type, exp_d)
+    partner_uid = await _resolve_partner_user_id(
+        expense_type=body.expense_type,
+        partner_user_id=body.partner_user_id,
+        authorization=authorization,
+    )
     rid = await next_kl_id(session)
     uid = int(user["id"])
     repo = ExpenseRepository(session)
@@ -469,6 +529,7 @@ async def create_expense(
         business_purpose=body.business_purpose,
         comment=body.comment,
         status="approved" if partner else "draft",
+        partner_user_id=partner_uid,
         created_by_user_id=uid,
         updated_by_user_id=uid,
     )
@@ -493,7 +554,12 @@ async def create_expense(
     await session.commit()
     row = await repo.get_by_id(row.id, load_children=True)
     if partner:
-        await _run_partner_recorded_mail(_moderation_email_context(row, user))
+        partner_profile = None
+        if partner_uid is not None:
+            partner_profile = await fetch_user_by_id(settings.auth_service_url, authorization, partner_uid)
+        await _run_partner_recorded_mail(
+            _moderation_email_context(row, user, partner_profile=partner_profile),
+        )
     return await _detail_response(row, authorization)
 
 
@@ -546,6 +612,7 @@ async def update_expense(
         "business_purpose": row.business_purpose,
         "comment": row.comment,
         "current_approver_id": row.current_approver_id,
+        "partner_user_id": row.partner_user_id,
     }
     data = body.model_dump(exclude_unset=True)
     eff_type = row.expense_type
@@ -558,6 +625,20 @@ async def update_expense(
         validate_expense_subtype_rules(eff_type, eff_subtype)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    eff_partner_uid = row.partner_user_id
+    if "partner_user_id" in data:
+        eff_partner_uid = await _resolve_partner_user_id(
+            expense_type=eff_type,
+            partner_user_id=data.get("partner_user_id"),
+            authorization=authorization,
+        )
+    elif "expense_type" in data:
+        eff_partner_uid = await _resolve_partner_user_id(
+            expense_type=eff_type,
+            partner_user_id=row.partner_user_id,
+            authorization=authorization,
+        )
 
     amount_uzs = data.get("amount_uzs", row.amount_uzs)
     exchange_rate = data.get("exchange_rate", row.exchange_rate)
@@ -574,6 +655,7 @@ async def update_expense(
     exp_d = row.expense_date
     if "expense_date" in data:
         exp_d = data["expense_date"]
+    _validate_partner_expense_date(eff_type, exp_d)
     pd_new = row.payment_deadline
     if "payment_deadline" in data:
         pd_new = data["payment_deadline"]
@@ -586,6 +668,10 @@ async def update_expense(
     payment_deadline_arg: date | object = _MISSING
     if "payment_deadline" in data:
         payment_deadline_arg = data["payment_deadline"]
+
+    partner_user_id_arg: int | None | object = _MISSING
+    if "partner_user_id" in data or "expense_type" in data:
+        partner_user_id_arg = eff_partner_uid
 
     await repo.update_fields(
         row,
@@ -606,6 +692,7 @@ async def update_expense(
         business_purpose=data.get("business_purpose"),
         comment=data.get("comment"),
         current_approver_id=data.get("current_approver_id"),
+        partner_user_id=partner_user_id_arg,
         updated_by_user_id=int(user["id"]),
     )
     await session.flush()
@@ -626,6 +713,7 @@ async def update_expense(
         "business_purpose": row.business_purpose,
         "comment": row.comment,
         "current_approver_id": row.current_approver_id,
+        "partner_user_id": row.partner_user_id,
     }
     await _audit_diff(repo, row, before, after, int(user["id"]))
     await session.commit()
@@ -698,7 +786,16 @@ async def submit_expense(
         )
         await session.commit()
         row = await repo.get_by_id(expense_id, load_children=True)
-        await _run_partner_recorded_mail(_moderation_email_context(row, user))
+        partner_profile = None
+        if row.partner_user_id is not None:
+            partner_profile = await fetch_user_by_id(
+                settings.auth_service_url,
+                authorization,
+                row.partner_user_id,
+            )
+        await _run_partner_recorded_mail(
+            _moderation_email_context(row, user, partner_profile=partner_profile),
+        )
         return await _detail_response(row, authorization)
 
     row.status = "pending_approval"

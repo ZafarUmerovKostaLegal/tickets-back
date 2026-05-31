@@ -40,6 +40,7 @@ class ExpenseRequestModel(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     current_approver_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    partner_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     updated_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

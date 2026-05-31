@@ -74,6 +74,10 @@ def is_partner_expense(expense_type: str | None) -> bool:
     return (expense_type or "").strip() == "partner_expense"
 
 
+def is_partner_org_role(role: str | None) -> bool:
+    return (role or "").strip() in ("Партнер", "Партнёр")
+
+
 def validate_expense_subtype_rules(expense_type: str, expense_subtype: str | None) -> None:
 
     if (expense_type or "").strip() != "partner_expense":

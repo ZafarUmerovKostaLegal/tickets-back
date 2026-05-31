@@ -68,7 +68,9 @@ async def lifespan(app: FastAPI):
                     "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS paid_by_user_id INTEGER",
                     "ALTER TABLE expense_attachments ADD COLUMN IF NOT EXISTS attachment_kind VARCHAR(64)",
                     "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS expense_category_id VARCHAR(64)",
+                    "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS partner_user_id INTEGER",
                     "CREATE INDEX IF NOT EXISTS ix_expense_requests_expense_category_id ON expense_requests (expense_category_id)",
+                    "CREATE INDEX IF NOT EXISTS ix_expense_requests_partner_user_id ON expense_requests (partner_user_id)",
                 ):
                     try:
                         await conn.execute(text(ddl))

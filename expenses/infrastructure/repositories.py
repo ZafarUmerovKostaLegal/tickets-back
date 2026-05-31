@@ -174,6 +174,7 @@ class ExpenseRepository:
         business_purpose: str | None = None,
         comment: str | None = None,
         status: str = "draft",
+        partner_user_id: int | None = None,
         created_by_user_id: int = 0,
         updated_by_user_id: int = 0,
     ) -> ExpenseRequestModel:
@@ -197,6 +198,7 @@ class ExpenseRepository:
             business_purpose=business_purpose,
             comment=comment,
             status=status,
+            partner_user_id=partner_user_id,
             created_by_user_id=created_by_user_id,
             updated_by_user_id=updated_by_user_id,
             created_at=now,
@@ -227,6 +229,7 @@ class ExpenseRepository:
         business_purpose: str | None = None,
         comment: str | None = None,
         current_approver_id: int | None = None,
+        partner_user_id: int | None | object = _MISSING,
         updated_by_user_id: int = 0,
     ) -> None:
         if description is not None:
@@ -263,6 +266,8 @@ class ExpenseRepository:
             row.comment = comment
         if current_approver_id is not None:
             row.current_approver_id = current_approver_id
+        if partner_user_id is not _MISSING:
+            row.partner_user_id = partner_user_id
         row.updated_by_user_id = updated_by_user_id
         row.updated_at = _now_utc()
         self._session.add(row)

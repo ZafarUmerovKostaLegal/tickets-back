@@ -66,6 +66,8 @@ class ExpenseModerationEmailContext:
     comment: str | None
     author_email: str | None
     author_name: str | None
+    partner_user_name: str | None = None
+    partner_user_email: str | None = None
     attachments: list[AttachmentEmailItem]
 
 
@@ -725,6 +727,12 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
     if ctx.author_email:
         author_line = f"{author_line} ({ctx.author_email})" if author_line != "—" else ctx.author_email
 
+    partner_line = "—"
+    pn = (ctx.partner_user_name or "").strip()
+    pe = (ctx.partner_user_email or "").strip()
+    if pn or pe:
+        partner_line = f"{pn or '—'}" + (f" ({pe})" if pe else "")
+
     desc = (ctx.description or "").strip() or "—"
     et = (ctx.expense_type or "").strip() or "—"
     sub = (ctx.expense_subtype or "").strip() or "—"
@@ -751,6 +759,7 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
     plain_lines = [
         f"В систему добавлен расход партнёра {expense_id} (без согласования).",
         f"Автор: {author_line}",
+        f"Партнёр (расход): {partner_line}",
         f"Дата расхода: {expense_date_fmt}",
         f"Срок оплаты: {pd_fmt}",
         f"Подтип: {sub}",
@@ -781,6 +790,7 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
         </p>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
           {_detail_row("Автор", html.escape(author_line))}
+          {_detail_row("Партнёр (расход)", html.escape(partner_line))}
           {_detail_row("Дата расхода", html.escape(expense_date_fmt))}
           {_detail_row("Срок оплаты", html.escape(pd_fmt))}
           {_detail_row("Тип / подтип", html.escape(f"{et} / {sub}"))}
