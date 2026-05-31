@@ -691,6 +691,31 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             granted_access: set[tuple[int, str]] = set()
             for hr in rows:
                 client_currency.setdefault(_norm(hr.client_name), hr.currency)
+
+            # Сначала гарантируем TT-пользователя для каждого имени из Harvest (даже без регистрации в auth).
+            unique_by_harvest_user: dict[str, HarvestRow] = {}
+            for hr in rows:
+                unique_by_harvest_user.setdefault(hr.harvest_user_key, hr)
+            print(f"\nПользователи Harvest (уникальных): {len(unique_by_harvest_user)}")
+            for _key, sample in sorted(unique_by_harvest_user.items(), key=lambda x: x[0]):
+                uid, tt_created, user_source = await resolve_auth_user_id(
+                    session,
+                    sample,
+                    user_index,
+                    auth_index,
+                    auth_by_id,
+                    tt_by_auth,
+                    harvest_placeholder_ids,
+                    dry_run_placeholder_next,
+                )
+                if user_source == "harvest":
+                    harvest_only_names.add(sample.harvest_user_key)
+                    if tt_created and execute:
+                        stats["tt_user_harvest_placeholder"] += 1
+                        print(f"  + создан TT-пользователь Harvest: {_harvest_display_name(sample)}")
+                elif user_source == "auth" and tt_created:
+                    stats["tt_user_created"] += 1
+
             granter: int | None = None
 
             for hr in rows:
@@ -781,10 +806,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     task_id = row_task.id
                     tmap[tname] = task_id
                     stats["task_created"] += 1
+                    await session.flush()
                 elif not task_id:
                     stats["task_created"] += 1
 
-                auth_user_id, tt_created, user_source = await resolve_auth_user_id(
+                auth_user_id, _tt_created, user_source = await resolve_auth_user_id(
                     session,
                     hr,
                     user_index,
@@ -794,12 +820,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     harvest_placeholder_ids,
                     dry_run_placeholder_next,
                 )
-                if user_source == "auth" and tt_created:
-                    stats["tt_user_created"] += 1
-                elif user_source == "harvest" and tt_created:
-                    stats["tt_user_harvest_placeholder"] += 1
-                    harvest_only_names.add(hr.harvest_user_key)
-                elif user_source == "harvest":
+                if user_source == "harvest":
                     harvest_only_names.add(hr.harvest_user_key)
                 if granter is None:
                     u = tt_by_auth.get(auth_user_id)
@@ -854,7 +875,10 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         stats["entry_created"] += 1
                     except ValueError as e:
                         stats["entry_error"] += 1
-                        print(f"  ошибка записи {hr.work_date} {hr.harvest_user_key}: {e}")
+                        print(
+                            f"  ОШИБКА записи {hr.work_date} {_harvest_display_name(hr)} "
+                            f"({hr.hours} ч): {e}"
+                        )
                 else:
                     stats["entry_planned"] += 1
 
@@ -890,7 +914,23 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     )
                 print(f"\nИтого: файл {expected_hours_total}, БД {db_hours_total}")
                 if db_hours_total != expected_hours_total:
-                    print("ВНИМАНИЕ: сумма часов в БД не совпадает с файлом Harvest.")
+                    print("ОШИБКА: сумма часов в БД не совпадает с файлом Harvest.")
+                    await session.rollback()
+                    return 1
+
+                if stats["entry_error"] > 0:
+                    print(f"\nОШИБКА: не импортировано записей: {stats['entry_error']}")
+                    await session.rollback()
+                    return 1
+
+                processed = stats["entry_created"] + stats["entry_duplicate"]
+                if processed != len(rows):
+                    print(
+                        f"\nОШИБКА: в файле {len(rows)} строк, в БД создано/найдено {processed} "
+                        f"(создано: {stats['entry_created']}, дубликаты: {stats['entry_duplicate']})."
+                    )
+                    await session.rollback()
+                    return 1
 
                 await session.commit()
                 print("\nИмпорт выполнен.")
@@ -915,7 +955,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     f"(+ ошибок: {stats['entry_error']})."
                 )
             elif execute:
-                print(f"Все {expected} строк отчёта обработаны.")
+                print(f"Все {expected} строк отчёта в БД (создано {stats['entry_created']}, дубликаты {stats['entry_duplicate']}).")
     finally:
         await engine.dispose()
     return 0
