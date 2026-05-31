@@ -120,7 +120,12 @@ def _parse_currency(raw: object) -> str:
 
 
 def _parse_billable(raw: object) -> bool:
-    return str(raw or "").strip().lower() in ("yes", "true", "1", "y")
+    s = str(raw or "").strip().lower()
+    if s in ("no", "false", "0", "n", "non-billable", "non billable", "nonbillable"):
+        return False
+    if s in ("yes", "true", "1", "y", "billable"):
+        return True
+    return False
 
 
 def _parse_work_date(raw: object) -> date | None:
@@ -600,6 +605,20 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 total += r.hours
         return total
 
+    def expected_hours_breakdown_for_project(
+        client_name: str, project_name: str
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        total = Decimal("0")
+        billable = Decimal("0")
+        ckey = _norm(client_name)
+        pkey = _norm(project_name)
+        for r in rows:
+            if _norm(r.client_name) == ckey and _norm(r.project_name) == pkey:
+                total += r.hours
+                if r.is_billable:
+                    billable += r.hours
+        return total, billable, total - billable
+
     async def find_client_by_name(session: AsyncSession, name: str) -> TimeManagerClientModel | None:
         target = _norm(name)
         r = await session.execute(select(TimeManagerClientModel))
@@ -899,21 +918,47 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         stats=stats,
                     )
 
-                print("\nСверка часов по проектам:")
+                await session.flush()
+
+                print(
+                    f"\nЗаписей времени: создано {stats['entry_created']}, "
+                    f"дубликаты {stats['entry_duplicate']}, ошибок {stats['entry_error']}"
+                )
+
+                print("\nСверка часов по проектам (Billable? из колонки 8 файла):")
                 db_hours_total = Decimal("0")
+                db_billable_total = Decimal("0")
+                db_non_billable_total = Decimal("0")
+                hours_ok = True
                 for project_id, (client_id, client_name, project_name) in project_meta.items():
                     db_total, db_billable, db_non_billable = await entry_repo.aggregate_totals_for_project(
                         project_id
                     )
-                    exp_total = expected_hours_for_project(client_name, project_name)
-                    db_hours_total += db_total
-                    status = "OK" if db_total == exp_total else "РАСХОЖДЕНИЕ"
-                    print(
-                        f"  [{status}] {project_name}: файл {exp_total}, БД {db_total} "
-                        f"(billable {db_billable}, non-billable {db_non_billable})"
+                    exp_total, exp_billable, exp_non_billable = expected_hours_breakdown_for_project(
+                        client_name, project_name
                     )
-                print(f"\nИтого: файл {expected_hours_total}, БД {db_hours_total}")
-                if db_hours_total != expected_hours_total:
+                    db_hours_total += db_total
+                    db_billable_total += db_billable
+                    db_non_billable_total += db_non_billable
+                    project_ok = (
+                        db_total == exp_total
+                        and db_billable == exp_billable
+                        and db_non_billable == exp_non_billable
+                    )
+                    if not project_ok:
+                        hours_ok = False
+                    status = "OK" if project_ok else "РАСХОЖДЕНИЕ"
+                    print(
+                        f"  [{status}] {project_name}: "
+                        f"файл {exp_total} (billable {exp_billable}, non-billable {exp_non_billable}), "
+                        f"БД {db_total} (billable {db_billable}, non-billable {db_non_billable})"
+                    )
+                print(
+                    f"\nИтого: файл {expected_hours_total} "
+                    f"(billable {expected_billable_total}, non-billable {expected_non_billable_total}), "
+                    f"БД {db_hours_total} (billable {db_billable_total}, non-billable {db_non_billable_total})"
+                )
+                if not hours_ok or db_hours_total != expected_hours_total:
                     print("ОШИБКА: сумма часов в БД не совпадает с файлом Harvest.")
                     await session.rollback()
                     return 1
