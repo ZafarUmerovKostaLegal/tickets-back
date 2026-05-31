@@ -19,6 +19,7 @@ COPY time_tracking/ ./
 #   python /app/wipe_repo/scripts/purge_expenses_keep_reference.py --dry-run
 #   python /app/wipe_repo/scripts/delete_expenses_with_project.py --dry-run
 #   python /app/wipe_repo/scripts/purge_tickets_and_todos.py --dry-run
+#   python /app/scripts/import_harvest_time_report.py --file /tmp/harvest.xlsx --dry-run
 COPY scripts/requirements-wipe.txt /app/wipe_repo/scripts/requirements-wipe.txt
 COPY scripts/wipe_all_keep_tt_users.py /app/wipe_repo/scripts/wipe_all_keep_tt_users.py
 COPY scripts/purge_time_tracking_keep_users.py /app/wipe_repo/scripts/purge_time_tracking_keep_users.py
