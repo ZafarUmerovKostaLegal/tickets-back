@@ -1,0 +1,5 @@
+services:
+  backup:
+    volumes:
+      - ${BACKUP_HOST_PATH:-./backups}:/backups
+      - media_storage:/media:ro

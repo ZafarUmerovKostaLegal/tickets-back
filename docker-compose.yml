@@ -102,6 +102,73 @@ services:
       EXPENSES_DATABASE_URL: ${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
       VACATION_DATABASE_URL: ${VACATION_DATABASE_URL:-}
 
+  # Сервис резервного копирования (профиль backup).
+  # Включение: docker compose --profile backup up -d backup
+  # Разовый снимок: docker compose --profile backup run --rm backup python -m application.cli run-once
+  backup:
+    profiles:
+      - backup
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKUP_ROOT: /backups
+      MEDIA_PATH: /media
+      BACKUP_MEDIA: ${BACKUP_MEDIA:-true}
+      BACKUP_SCHEDULE_CRON: ${BACKUP_SCHEDULE_CRON:-0 3 * * *}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_RETENTION_MIN_COUNT: ${BACKUP_RETENTION_MIN_COUNT:-14}
+      BACKUP_API_TOKEN: ${BACKUP_API_TOKEN:-}
+      BACKUP_ON_START: ${BACKUP_ON_START:-false}
+      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
+      TICKETS_DATABASE_URL: ${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
+      TODOS_DATABASE_URL: ${TODOS_DATABASE_URL:-postgresql://todos:todos@todos_db:5432/kosta_todos}
+      NOTIFICATIONS_DATABASE_URL: ${NOTIFICATIONS_DATABASE_URL:-postgresql://notifications:notifications@notifications_db:5432/kosta_notifications}
+      INVENTORY_DATABASE_URL: ${INVENTORY_DATABASE_URL:-postgresql://inventory:inventory@inventory_db:5432/kosta_inventory}
+      ATTENDANCE_DATABASE_URL: ${ATTENDANCE_DATABASE_URL:-postgresql://attendance:attendance@attendance_db:5432/kosta_attendance}
+      TIME_TRACKING_DATABASE_URL: ${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
+      EXPENSES_DATABASE_URL: ${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
+      PROJECTS_DATABASE_URL: ${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
+      VACATION_DATABASE_URL: ${VACATION_DATABASE_URL:-postgresql://vacation:vacation@vacation_db:5432/kosta_vacation}
+      CHAT_DATABASE_URL: ${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+    volumes:
+      - backup_storage:/backups
+      - media_storage:/media:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1247/live\", timeout=3)"',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      users_db:
+        condition: service_healthy
+      tickets_db:
+        condition: service_healthy
+      todos_db:
+        condition: service_healthy
+      notifications_db:
+        condition: service_healthy
+      inventory_db:
+        condition: service_healthy
+      attendance_db:
+        condition: service_healthy
+      time_tracking_db:
+        condition: service_healthy
+      expenses_db:
+        condition: service_healthy
+      projects_db:
+        condition: service_healthy
+      vacation_db:
+        condition: service_healthy
+      chat_db:
+        condition: service_healthy
+
   call_schedule:
     build:
       context: .
@@ -710,6 +777,7 @@ services:
 
 volumes:
   media_storage:
+  backup_storage:
   redis_data:
   users_db_data:
   tickets_db_data:

@@ -1,164 +1,190 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from io import BytesIO
-from datetime import date, datetime
 
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import cm
+from reportlab.lib.units import mm
+from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
-from reportlab.lib import colors
+from reportlab.pdfgen import canvas
 
-from application.kind_legend import KIND_LABELS_RU
+from application.leave_pdf_copy import DEFAULT_PDF_COPY, FIRM_LINE, KIND_PDF_COPY
 from infrastructure.models import LeaveRequest
 
+_FONT_REG = "LeavePdfRegular"
+_FONT_SIZE = 12
+_LINE_H = 5.8 * mm
+_FONTS_READY = False
 
-def _register_cyrillic_font() -> str:
+
+def _register_fonts() -> str:
+    global _FONTS_READY, _FONT_REG
+    if _FONTS_READY:
+        return _FONT_REG
     candidates = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/times.ttf",
+        "C:/Windows/Fonts/Times New Roman.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",
     )
     for path in candidates:
         try:
-            pdfmetrics.registerFont(TTFont("BodyFont", path))
-            return "BodyFont"
+            pdfmetrics.registerFont(TTFont(_FONT_REG, path))
+            _FONTS_READY = True
+            return _FONT_REG
         except Exception:
             continue
-    return "Helvetica"
+    _FONT_REG = "Times-Roman"
+    _FONTS_READY = True
+    return _FONT_REG
 
 
-_FONT = _register_cyrillic_font()
+_MONTHS_GEN = (
+    "",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
 
 
 def _fmt_date(d: date | None) -> str:
-    return d.strftime("%d.%m.%Y") if d else "—"
+    return d.strftime("%d.%m.%Y") if d else "__________"
+
+
+def _submission_date(req: LeaveRequest) -> date:
+    if isinstance(req.created_at, datetime):
+        return req.created_at.date()
+    return date.today()
+
+
+def _return_date(d_to: date) -> str:
+    return _fmt_date(d_to + timedelta(days=1))
+
+
+def _date_phrase(d: date) -> str:
+    return f"«{d.day}» {_MONTHS_GEN[d.month]} {d.year} год."
+
+
+def _partner_dative(req: LeaveRequest) -> str:
+    name = (req.partner_full_name or "").strip()
+    return name or f"User #{req.partner_user_id}"
+
+
+def _employee_role_label(req: LeaveRequest) -> str:
+    pos = (req.employee_position or "").strip().lower()
+    if pos:
+        return pos
+    return "помощника"
+
+
+def _copy_for(req: LeaveRequest) -> tuple[str, str]:
+    tpl = KIND_PDF_COPY.get(req.kind_code, DEFAULT_PDF_COPY)
+    ctx = {
+        "date_from": _fmt_date(req.date_from),
+        "date_to": _fmt_date(req.date_to),
+        "days_count": str(req.days_count),
+        "return_date": _return_date(req.date_to),
+    }
+    body = tpl.body.format(**ctx)
+    return tpl.subject, body
+
+
+def _draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_w: float, font: str) -> float:
+    lines = simpleSplit(text, font, _FONT_SIZE, max_w)
+    for line in lines:
+        c.drawString(x, y, line)
+        y -= _LINE_H
+    return y
+
+
+def _draw_underline(c: canvas.Canvas, x: float, y: float, width: float) -> None:
+    c.line(x, y - 1.2, x + width, y - 1.2)
+
+
+def _draw_centered_lines(c: canvas.Canvas, lines: list[str], y: float, page_w: float) -> float:
+    cx = page_w / 2
+    for line in lines:
+        c.drawCentredString(cx, y, line)
+        y -= _LINE_H
+    return y
 
 
 def render_leave_request_pdf(req: LeaveRequest) -> bytes:
+    """PDF заявления по образцу ОТПУСК.doc (Kosta Legal)."""
+    font = _register_fonts()
     buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        leftMargin=2 * cm,
-        rightMargin=2 * cm,
-        topMargin=2 * cm,
-        bottomMargin=2 * cm,
-        title=f"Заявка на отсутствие #{req.id}",
-    )
-    body = ParagraphStyle(
-        "Body",
-        parent=getSampleStyleSheet()["BodyText"],
-        fontName=_FONT,
-        fontSize=11,
-        leading=14,
-    )
-    h1 = ParagraphStyle(
-        "H1",
-        parent=body,
-        fontSize=16,
-        leading=20,
-        spaceAfter=10,
-        spaceBefore=0,
-        textColor=colors.HexColor("#1e3a8a"),
-    )
-    label = ParagraphStyle("Label", parent=body, textColor=colors.HexColor("#475569"))
-    small = ParagraphStyle("Small", parent=body, fontSize=9, textColor=colors.HexColor("#64748b"))
+    page_w, page_h = A4
+    c = canvas.Canvas(buf, pagesize=A4, title=f"Заявление #{req.id}")
 
-    kind_ru = KIND_LABELS_RU.get(req.kind_code, "—")
+    left = 25 * mm
+    right = page_w - 25 * mm
+    text_w = right - left
 
-    flow: list = []
-    flow.append(Paragraph("Kosta Legal", small))
-    flow.append(Paragraph(f"Заявка на отсутствие №{req.id}", h1))
-    flow.append(
-        Paragraph(
-            f"Создана: {req.created_at.strftime('%d.%m.%Y %H:%M')} · Статус: <b>{req.status}</b>",
-            small,
-        )
+    c.setFont(font, _FONT_SIZE)
+
+    y = page_h - 25 * mm
+    y = _draw_centered_lines(
+        c,
+        [
+            "Управляющему партнеру",
+            FIRM_LINE,
+            _partner_dative(req),
+        ],
+        y,
+        page_w,
     )
-    flow.append(Spacer(1, 0.4 * cm))
 
-    rows = [
-        ("Сотрудник", req.employee_full_name or "—"),
-        ("Должность", req.employee_position or "—"),
-        ("E-mail сотрудника", req.employee_email or "—"),
-        ("Согласующий партнёр", req.partner_full_name or f"User #{req.partner_user_id}"),
-        ("E-mail партнёра", req.partner_email or "—"),
-        ("Вид отсутствия", kind_ru),
-        ("Период", f"с {_fmt_date(req.date_from)} по {_fmt_date(req.date_to)}"),
-        ("Календарных дней", str(req.days_count)),
-        ("Комментарий сотрудника", (req.reason or "").strip() or "—"),
-    ]
-    if req.status != "pending":
-        rows.append(
-            (
-                "Решение",
-                (
-                    f"{req.status} · "
-                    + (req.decision_at.strftime("%d.%m.%Y %H:%M") if req.decision_at else "—")
-                    + (
-                        f"\nКомментарий: {req.decision_reason}"
-                        if req.decision_reason
-                        else ""
-                    )
-                ),
-            )
-        )
+    y -= 10 * mm
+    prefix = f"От {_employee_role_label(req)} "
+    c.drawString(left, y, prefix)
+    prefix_w = c.stringWidth(prefix, font, _FONT_SIZE)
+    name_x = left + prefix_w
+    employee_name = (req.employee_full_name or "").strip()
+    if employee_name:
+        c.drawString(name_x, y, employee_name)
+        underline_w = max(55 * mm, c.stringWidth(employee_name, font, _FONT_SIZE) + 6 * mm)
+    else:
+        underline_w = 70 * mm
+    _draw_underline(c, name_x, y, underline_w)
 
-    table_data = [[Paragraph(k, label), Paragraph(str(v).replace("\n", "<br/>"), body)] for k, v in rows]
-    tbl = Table(table_data, colWidths=[5.5 * cm, 11.5 * cm])
-    tbl.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), _FONT),
-                ("FONTSIZE", (0, 0), (-1, -1), 11),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    flow.append(tbl)
-    flow.append(Spacer(1, 1.0 * cm))
-    flow.append(
-        Paragraph(
-            "Прошу согласовать указанный период отсутствия. Электронная подпись (PDF-документ) "
-            "формируется автоматически системой Kosta Legal на основании заявки сотрудника.",
-            body,
-        )
-    )
-    flow.append(Spacer(1, 1.5 * cm))
+    y -= 18 * mm
+    c.drawCentredString(page_w / 2, y, "З А Я В Л Е Н И Е")
 
-    sign_data = [
-        [Paragraph("Сотрудник", label), Paragraph(req.employee_full_name or "—", body)],
-        [Paragraph("Дата подачи", label), Paragraph(_fmt_date(req.created_at.date() if isinstance(req.created_at, datetime) else None), body)],
-    ]
-    sign_tbl = Table(sign_data, colWidths=[5.5 * cm, 11.5 * cm])
-    sign_tbl.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), _FONT),
-                ("FONTSIZE", (0, 0), (-1, -1), 11),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    flow.append(sign_tbl)
+    subject, body = _copy_for(req)
+    y -= 10 * mm
+    c.drawCentredString(page_w / 2, y, subject)
 
-    doc.build(flow)
+    y -= 12 * mm
+    y = _draw_wrapped(c, body, left, y, text_w, font)
+
+    if (req.reason or "").strip():
+        y -= 4 * mm
+        y = _draw_wrapped(c, f"Примечание: {req.reason.strip()}", left, y, text_w, font)
+
+    y -= 16 * mm
+    _draw_underline(c, left + 35 * mm, y, 45 * mm)
+    _draw_underline(c, left + 85 * mm, y, 45 * mm)
+
+    y -= 14 * mm
+    _draw_underline(c, left, y, text_w)
+
+    y -= 16 * mm
+    sub_d = _submission_date(req)
+    date_line = _date_phrase(sub_d)
+    c.drawRightString(right, y, date_line)
+
+    c.showPage()
+    c.save()
     return buf.getvalue()
