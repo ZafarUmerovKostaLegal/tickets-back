@@ -513,6 +513,11 @@ def main() -> int:
 
     if not args.file.is_file():
         print(f"Файл не найден: {args.file}")
+        print(
+            "Если запуск из контейнера time_tracking: xlsx на хосте контейнер не видит.\n"
+            "На хосте: docker cp timetrackinck/harvest_....xlsx $(docker compose ps -q time_tracking):/tmp/harvest.xlsx\n"
+            "В контейнере: python scripts/import_harvest_time_report.py --file /tmp/harvest.xlsx --dry-run"
+        )
         return 1
 
     database_url = _resolve_database_url(args.database_url or None)
