@@ -32,7 +32,8 @@ async def patch_message(
     msg = await repo.edit_message(user_id, message_id, text)
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
-    out = message_to_out(msg)
+    atts_by_msg = await repo.attachments_for_message_ids([msg.id])
+    out = message_to_out(msg, atts_by_msg.get(msg.id))
     recipients = await repo.member_user_ids(msg.room_id)
     await session.commit()
     await push_chat_event(

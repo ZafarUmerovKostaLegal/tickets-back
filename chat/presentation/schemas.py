@@ -7,6 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from infrastructure.models import KOSTA_DAILY_SLUG
 
 
+class AttachmentOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    file_name: str = Field(..., alias="fileName")
+    content_type: str = Field(..., alias="contentType")
+    size_bytes: int = Field(0, alias="sizeBytes")
+    created_at: datetime = Field(..., alias="createdAt")
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -17,6 +27,7 @@ class MessageOut(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
     edited_at: datetime | None = Field(None, alias="editedAt")
     is_deleted: bool = Field(False, alias="isDeleted")
+    attachments: list[AttachmentOut] = Field(default_factory=list)
 
 
 class RoomMemberOut(BaseModel):
@@ -86,15 +97,28 @@ class RoomMembersListOut(BaseModel):
     items: list[RoomMemberOut]
 
 
-def message_to_out(msg) -> MessageOut:
+def attachment_to_out(att) -> AttachmentOut:
+    return AttachmentOut(
+        id=att.id,
+        file_name=att.file_name,
+        content_type=att.content_type,
+        size_bytes=int(att.size_bytes or 0),
+        created_at=att.created_at,
+    )
+
+
+def message_to_out(msg, attachments=None) -> MessageOut:
+    deleted = msg.deleted_at is not None
+    atts = [] if deleted else [attachment_to_out(a) for a in (attachments or [])]
     return MessageOut(
         id=msg.id,
         room_id=msg.room_id,
         author_user_id=msg.author_user_id,
-        body=msg.body if msg.deleted_at is None else "",
+        body=msg.body if not deleted else "",
         created_at=msg.created_at,
         edited_at=msg.edited_at,
-        is_deleted=msg.deleted_at is not None,
+        is_deleted=deleted,
+        attachments=atts,
     )
 
 

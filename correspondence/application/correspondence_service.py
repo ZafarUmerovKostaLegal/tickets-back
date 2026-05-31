@@ -95,12 +95,15 @@ def sniff_mime(content: bytes, declared: str | None) -> str | None:
 
 
 def validate_upload_content(content: bytes, declared_mime: str | None) -> str:
+    if not content:
+        raise ValueError("Empty file")
     mime = sniff_mime(content, declared_mime)
-    if mime is None or mime not in ALLOWED_MIME_TYPES:
-        raise ValueError(
-            "Допустимые форматы: JPEG, PNG, WebP, HEIC, PDF"
-        )
-    return mime
+    if mime:
+        return mime
+    decl = (declared_mime or "").split(";")[0].strip().lower()
+    if decl:
+        return decl
+    return "application/octet-stream"
 
 
 def normalize_attachment_kind(value: str | None, *, default: str) -> str:

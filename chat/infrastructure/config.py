@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     chat_push_url: str = ""
     ws_internal_secret: str = ""
     max_message_length: int = 4000
+    media_path: str = "/app/media"
+    max_file_bytes: int = 15 * 1024 * 1024
 
     @field_validator("auth_service_url", mode="before")
     @classmethod

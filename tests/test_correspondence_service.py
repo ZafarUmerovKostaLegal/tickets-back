@@ -30,6 +30,11 @@ def test_validate_pdf_magic():
     assert mime == "application/pdf"
 
 
+def test_validate_arbitrary_file():
+    mime = validate_upload_content(b"PK\x03\x04", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    assert mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def test_normalize_doc_type_default_letter():
     assert normalize_doc_type(None) == "letter"
 

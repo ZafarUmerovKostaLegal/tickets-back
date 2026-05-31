@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
+from infrastructure.file_storage import save_chat_file
 from infrastructure.realtime_push import push_chat_event
 from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
@@ -159,9 +160,10 @@ async def list_messages(
     has_more = len(items) > limit
     if has_more:
         items = items[:limit]
+    atts_by_msg = await repo.attachments_for_message_ids([m.id for m in items])
     await session.commit()
     return MessagesListOut(
-        items=[message_to_out(m) for m in items],
+        items=[message_to_out(m, atts_by_msg.get(m.id)) for m in items],
         has_more=has_more,
     )
 
@@ -184,6 +186,57 @@ async def post_message(
     if not msg:
         raise HTTPException(status_code=404, detail="Room not found")
     out = message_to_out(msg)
+    recipients = await repo.member_user_ids(room_id)
+    await session.commit()
+    await push_chat_event(
+        recipient_user_ids=recipients,
+        room_id=room_id,
+        event="message",
+        payload={"message": out.model_dump(by_alias=True, mode="json")},
+    )
+    return out
+
+
+@router.post("/{room_id}/messages/upload", response_model=MessageOut, status_code=201)
+async def post_message_with_file(
+    room_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    file: UploadFile = File(...),
+    body: Optional[str] = Form(None),
+    session: AsyncSession = Depends(get_session),
+):
+    settings = get_settings()
+    text = (body or "").strip()
+    if len(text) > settings.max_message_length:
+        raise HTTPException(status_code=400, detail="Message too long")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > settings.max_file_bytes:
+        mb = settings.max_file_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"File size exceeds {mb}MB")
+
+    repo = ChatRepository(session)
+    msg = await repo.create_message(user_id, room_id, text)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Room not found")
+    try:
+        storage_key, size = save_chat_file(
+            room_id=room_id,
+            message_id=msg.id,
+            original_filename=file.filename or "file",
+            content=content,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    att = await repo.add_message_attachment(
+        message_id=msg.id,
+        file_name=file.filename or "file",
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=size,
+        storage_key=storage_key,
+    )
+    out = message_to_out(msg, [att])
     recipients = await repo.member_user_ids(room_id)
     await session.commit()
     await push_chat_event(

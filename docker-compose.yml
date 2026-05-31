@@ -279,6 +279,10 @@ services:
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
+    volumes:
+      - media_storage:/app/media
     healthcheck:
       test:
         [

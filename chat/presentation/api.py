@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import Base, engine
-from presentation.routes import health, messages_routes, rooms_routes
+from presentation.routes import attachments_routes, health, messages_routes, rooms_routes
 
 CHAT_API_PREFIX = "/api/v1/chat"
 
@@ -36,3 +36,4 @@ app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(health.router)
 app.include_router(rooms_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(messages_routes.router, prefix=CHAT_API_PREFIX)
+app.include_router(attachments_routes.router, prefix=CHAT_API_PREFIX)

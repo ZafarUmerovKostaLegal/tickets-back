@@ -5,9 +5,6 @@ from infrastructure.config import get_settings
 
 MAX_SIZE_BYTES = get_settings().max_attachment_size_mb * 1024 * 1024
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".doc", ".docx"}
-
-
 def get_tickets_upload_dir() -> Path:
     path = Path(get_settings().media_path) / "tickets"
     path.mkdir(parents=True, exist_ok=True)
@@ -17,9 +14,8 @@ def get_tickets_upload_dir() -> Path:
 def _validate_attachment(filename: str, content: bytes) -> None:
     if len(content) > MAX_SIZE_BYTES:
         raise ValueError(f"File size exceeds {get_settings().max_attachment_size_mb}MB")
-    ext = (Path(filename).suffix or "").lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    if not (filename or "").strip() and not content:
+        raise ValueError("Empty file")
 
 
 def save_attachment(filename: str, content: bytes) -> str:

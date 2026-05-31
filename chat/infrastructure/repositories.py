@@ -13,6 +13,7 @@ from infrastructure.models import (
     ROOM_TYPE_COMPANY,
     ROOM_TYPE_DM,
     ROOM_TYPE_GROUP,
+    ChatMessageAttachmentModel,
     ChatMessageModel,
     ChatReadStateModel,
     ChatRoomMemberModel,
@@ -191,6 +192,56 @@ class ChatRepository:
         await self._session.flush()
         await self._touch_read_state(user_id, room_id, msg.id, now)
         return msg
+
+    async def add_message_attachment(
+        self,
+        *,
+        message_id: int,
+        file_name: str,
+        content_type: str,
+        size_bytes: int,
+        storage_key: str,
+    ) -> ChatMessageAttachmentModel:
+        att = ChatMessageAttachmentModel(
+            message_id=message_id,
+            file_name=file_name[:255],
+            content_type=(content_type or "application/octet-stream")[:128],
+            size_bytes=int(size_bytes),
+            storage_key=storage_key,
+            created_at=_utc_now(),
+        )
+        self._session.add(att)
+        await self._session.flush()
+        return att
+
+    async def attachments_for_message_ids(
+        self, message_ids: list[int]
+    ) -> dict[int, list[ChatMessageAttachmentModel]]:
+        out: dict[int, list[ChatMessageAttachmentModel]] = {}
+        if not message_ids:
+            return out
+        r = await self._session.execute(
+            select(ChatMessageAttachmentModel)
+            .where(ChatMessageAttachmentModel.message_id.in_(message_ids))
+            .order_by(ChatMessageAttachmentModel.id.asc())
+        )
+        for att in r.scalars().all():
+            out.setdefault(att.message_id, []).append(att)
+        return out
+
+    async def get_attachment_with_room(
+        self, attachment_id: int
+    ) -> tuple[ChatMessageAttachmentModel, int] | None:
+        r = await self._session.execute(
+            select(ChatMessageAttachmentModel, ChatMessageModel.room_id)
+            .join(ChatMessageModel, ChatMessageModel.id == ChatMessageAttachmentModel.message_id)
+            .where(ChatMessageAttachmentModel.id == attachment_id)
+        )
+        row = r.one_or_none()
+        if not row:
+            return None
+        att, room_id = row
+        return att, int(room_id)
 
     async def edit_message(
         self,
