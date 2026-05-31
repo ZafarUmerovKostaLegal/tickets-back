@@ -1,6 +1,21 @@
 
+# Production overlay: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 services:
   gateway:
     environment:
       - ENVIRONMENT=production
       - CORS_ALLOW_PRIVATE_NETWORK=false
+      - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
+      - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-https://tickets.kostalegal.com}
+      - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
+      - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
+      - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+
+  contacts:
+    restart: unless-stopped
+
+  expenses:
+    restart: unless-stopped
+    environment:
+      - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}

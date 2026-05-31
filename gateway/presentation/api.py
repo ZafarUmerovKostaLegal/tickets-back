@@ -66,6 +66,12 @@ app = FastAPI(
 )
 register_exception_handlers(app)
 
+_KNOWN_PRODUCTION_ORIGINS = (
+    "https://tickets.kostalegal.com",
+    "https://www.tickets.kostalegal.com",
+)
+
+
 def _cors_origins() -> list[str]:
     settings = get_settings()
     origins: list[str] = []
@@ -84,6 +90,9 @@ def _cors_origins() -> list[str]:
         "http://localhost:5500",
         "http://127.0.0.1:5500",
     ]
+    env = (settings.environment or "").strip().lower()
+    if env == "production":
+        defaults = list(_KNOWN_PRODUCTION_ORIGINS) + defaults
     for o in defaults:
         if o not in origins:
             origins.append(o)
@@ -101,9 +110,26 @@ _CORS_PRIVATE_ORIGIN_REGEX = (
     r")(:\d+)?$"
 )
 
+_CORS_KOSTALEGAL_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*kostalegal\.com$"
+
+
+def _cors_origin_regex(settings) -> str | None:
+    env = (settings.environment or "").strip().lower()
+    parts: list[str] = []
+    if settings.cors_allow_private_network:
+        parts.append(_CORS_PRIVATE_ORIGIN_REGEX)
+    if env == "production":
+        parts.append(_CORS_KOSTALEGAL_ORIGIN_REGEX)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return "|".join(f"(?:{p})" for p in parts)
+
+
 origins = _cors_origins()
 _settings = get_settings()
-_cors_regex = _CORS_PRIVATE_ORIGIN_REGEX if _settings.cors_allow_private_network else None
+_cors_regex = _cors_origin_regex(_settings)
 
 
 app.add_middleware(TimeTrackingClientsPathRewriteMiddleware)
