@@ -44,6 +44,7 @@ def main() -> int:
         print(f"Не удалось загрузить: {_TT_SCRIPT}", file=sys.stderr)
         return 1
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return int(mod.main())
 

@@ -29,6 +29,7 @@ from application.services.reports.budget_report_service import (
 from infrastructure.repositories import (
     ClientProjectRepository,
     ClientRepository,
+    ClientTaskRepository,
     TimeEntryRepository,
     TimeTrackingUserRepository,
 )
@@ -175,9 +176,11 @@ async def build_client_project_dashboard(
         )
 
     task_rows: list[dict] = []
+    seen_task_ids: set[str] = set()
     for tid, tname, billable_default, hrs in await entry_repo.aggregate_task_hours_for_project(
         project_id, date_from, date_to
     ):
+        seen_task_ids.add(tid)
         if hrs <= 0:
             continue
         tm = task_money.get(str(tid), {"billable": Decimal(0), "cost": Decimal(0)})
@@ -191,6 +194,23 @@ async def build_client_project_dashboard(
                 "internal_cost_amount": float(_money(tm["cost"])),
             }
         )
+
+    task_repo = ClientTaskRepository(session)
+    for task in await task_repo.list_for_project(project_id):
+        tid = str(task.id)
+        if tid in seen_task_ids:
+            continue
+        task_rows.append(
+            {
+                "task_id": tid,
+                "name": task.name,
+                "billable": bool(task.billable_by_default),
+                "hours": _hours_json(_ZERO),
+                "billable_amount": 0.0,
+                "internal_cost_amount": 0.0,
+            }
+        )
+    task_rows.sort(key=lambda row: (not row["billable"], str(row["name"]).lower()))
     for is_b, hrs in await entry_repo.aggregate_unassigned_hours_by_billable_for_project(
         project_id, date_from, date_to
     ):

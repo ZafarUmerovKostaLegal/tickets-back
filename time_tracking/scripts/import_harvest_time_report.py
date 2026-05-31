@@ -46,7 +46,7 @@ HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
 HARVEST_IMPORT_PROJECT_BILLABLE = Decimal("0.01")
 HARVEST_HOURS_QUANT = Decimal("0.01")
-HARVEST_EXTRA_REQUIRED_TASKS = ("Meetings", "My mehnat registration")
+HARVEST_EXTRA_REQUIRED_TASKS = ("My mehnat registration",)
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -118,9 +118,32 @@ def _norm(s: str | None) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
-HARVEST_NON_BILLABLE_TASK_NAMES = frozenset(
-    {_norm("Meetings"), _norm("My mehnat registration")}
-)
+def _billable_default_for_harvest_task(task_key: str, project_rows: list[HarvestRow]) -> bool:
+    """Как в Harvest: задача non-billable только если все часы по ней non-billable."""
+    task_rows = [r for r in project_rows if _norm(r.task_name) == task_key]
+    if not task_rows:
+        return True
+    bill_h = sum((r.hours for r in task_rows if r.is_billable), Decimal("0"))
+    non_h = sum((r.hours for r in task_rows if not r.is_billable), Decimal("0"))
+    if bill_h <= 0 and non_h > 0:
+        return False
+    return True
+
+
+def _expected_task_hours_map(project_rows: list[HarvestRow]) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    acc: dict[str, list[Decimal]] = defaultdict(
+        lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
+    )
+    for r in project_rows:
+        key = _norm(r.task_name)
+        acc[key][0] += r.hours
+        if r.is_billable:
+            acc[key][1] += r.hours
+        else:
+            acc[key][2] += r.hours
+    for name in HARVEST_EXTRA_REQUIRED_TASKS:
+        acc.setdefault(_norm(name), [Decimal("0"), Decimal("0"), Decimal("0")])
+    return {k: (v[0], v[1], v[2]) for k, v in acc.items()}
 
 
 def _parse_currency(raw: object) -> str:
@@ -421,7 +444,7 @@ async def _load_auth_users_for_import(auth_db_url: str) -> tuple[dict[str, int],
 
 
 async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str = "", replace: bool = False) -> int:
-    from sqlalchemy import delete, select, update
+    from sqlalchemy import and_, case, delete, func, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
@@ -826,7 +849,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             display_names.setdefault(_norm(name), name)
 
         for key, display_name in sorted(display_names.items(), key=lambda x: x[1].lower()):
-            billable_default = key not in HARVEST_NON_BILLABLE_TASK_NAMES
+            billable_default = _billable_default_for_harvest_task(key, project_rows)
             task_id = tmap.get(key)
             if task_id:
                 await task_repo.update(
@@ -846,6 +869,66 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 stats["task_created"] += 1
         await session.flush()
         return tmap
+
+    async def db_task_breakdown_for_project(
+        session: AsyncSession,
+        project_id: str,
+    ) -> dict[str, tuple[str, Decimal, Decimal, Decimal, bool]]:
+        q = (
+            select(
+                TimeManagerClientTaskModel.name,
+                func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("billable"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("non_billable"),
+                TimeManagerClientTaskModel.billable_by_default,
+            )
+            .select_from(TimeManagerClientTaskModel)
+            .outerjoin(
+                TimeEntryModel,
+                and_(
+                    TimeEntryModel.task_id == TimeManagerClientTaskModel.id,
+                    TimeEntryModel.voided_at.is_(None),
+                ),
+            )
+            .where(TimeManagerClientTaskModel.project_id == project_id)
+            .group_by(
+                TimeManagerClientTaskModel.id,
+                TimeManagerClientTaskModel.name,
+                TimeManagerClientTaskModel.billable_by_default,
+            )
+        )
+        r = await session.execute(q)
+        out: dict[str, tuple[str, Decimal, Decimal, Decimal, bool]] = {}
+        for row in r.all():
+            key = _norm(row.name)
+            if key in out:
+                prev = out[key]
+                out[key] = (
+                    prev[0],
+                    prev[1] + _quantize_harvest_hours(Decimal(str(row.total))),
+                    prev[2] + _quantize_harvest_hours(Decimal(str(row.billable))),
+                    prev[3] + _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                    bool(row.billable_by_default),
+                )
+            else:
+                out[key] = (
+                    str(row.name),
+                    _quantize_harvest_hours(Decimal(str(row.total))),
+                    _quantize_harvest_hours(Decimal(str(row.billable))),
+                    _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                    bool(row.billable_by_default),
+                )
+        return out
 
     async def entry_exists_by_import_ref(session: AsyncSession, import_ref: str) -> bool:
         r = await session.execute(
@@ -1013,8 +1096,8 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     )
                     projects_tasks_initialized.add(project_id)
                     if execute:
-                        nb = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
-                        print(f"  Задачи проекта «{hr.project_name}»: из CSV + non-billable: {nb}")
+                        extra = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
+                        print(f"  Задачи проекта «{hr.project_name}»: из CSV + обязательные: {extra}")
 
                 tmap = task_cache[project_id]
                 tname = _norm(hr.task_name)
@@ -1149,6 +1232,46 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         f"файл {exp_total} (billable {exp_billable}, non-billable {exp_non_billable}), "
                         f"БД {db_total} (billable {db_billable}, non-billable {db_non_billable})"
                     )
+
+                print("\nСверка часов по задачам (как в Harvest):")
+                tasks_ok = True
+                for project_id, (_client_id, client_name, project_name) in project_meta.items():
+                    proj_rows = rows_for_project(client_name, project_name)
+                    expected_tasks = _expected_task_hours_map(proj_rows)
+                    db_tasks = await db_task_breakdown_for_project(session, project_id)
+                    print(f"  Проект «{project_name}»:")
+                    for key in sorted(
+                        expected_tasks,
+                        key=lambda k: (db_tasks.get(k, (k,))[0] if k in db_tasks else k).lower(),
+                    ):
+                        exp_total, exp_bill, exp_non = expected_tasks[key]
+                        exp_total = _quantize_harvest_hours(exp_total)
+                        exp_bill = _quantize_harvest_hours(exp_bill)
+                        exp_non = _quantize_harvest_hours(exp_non)
+                        exp_billable_flag = _billable_default_for_harvest_task(key, proj_rows)
+                        label = db_tasks[key][0] if key in db_tasks else key
+                        if key not in db_tasks:
+                            tasks_ok = False
+                            print(f"    [ОТСУТСТВУЕТ] {label}: файл {exp_total} ч")
+                            continue
+                        name, db_total, db_bill, db_non, db_flag = db_tasks[key]
+                        task_ok = (
+                            db_total == exp_total
+                            and db_bill == exp_bill
+                            and db_non == exp_non
+                            and db_flag == exp_billable_flag
+                        )
+                        if not task_ok:
+                            tasks_ok = False
+                        status = "OK" if task_ok else "РАСХОЖДЕНИЕ"
+                        billable_label = "billable" if exp_billable_flag else "non-billable"
+                        print(
+                            f"    [{status}] {name} ({billable_label}): "
+                            f"файл {exp_total} (b {exp_bill}, nb {exp_non}), "
+                            f"БД {db_total} (b {db_bill}, nb {db_non}), "
+                            f"флаг задачи={'billable' if db_flag else 'non-billable'}"
+                        )
+
                 print(
                     f"\nИтого: файл {expected_hours_total} "
                     f"(billable {expected_billable_total}, non-billable {expected_non_billable_total}), "
@@ -1156,6 +1279,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 )
                 if not hours_ok or db_hours_total != expected_hours_total:
                     print("ОШИБКА: сумма часов в БД не совпадает с файлом Harvest.")
+                    await session.rollback()
+                    return 1
+
+                if not tasks_ok:
+                    print("ОШИБКА: часы или billable-флаг задач не совпадают с Harvest.")
                     await session.rollback()
                     return 1
 
