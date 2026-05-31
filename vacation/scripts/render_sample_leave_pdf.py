@@ -10,16 +10,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from infrastructure.models import LeaveRequest
 from infrastructure.pdf_generation import render_leave_request_pdf
 
-req = LeaveRequest(
-    id=1,
+_BASE = dict(
     employee_user_id=1,
-    employee_full_name="Иванова Мария Петровна",
     employee_email="m.ivanova@example.com",
-    employee_position="помощника",
     partner_user_id=2,
-    partner_full_name="Ахмаджонову Азизбеку Ахмадовичу",
+    partner_full_name="Ахмаджonovu Азizbeku Akhmadovichu",
     partner_email="a.ahmadjonov@kostalegal.com",
-    kind_code=1,
     date_from=date(2026, 6, 1),
     date_to=date(2026, 6, 14),
     days_count=14,
@@ -34,6 +30,29 @@ req = LeaveRequest(
     updated_at=None,
 )
 
-out = Path(__file__).with_name("sample_leave_request.pdf")
-out.write_bytes(render_leave_request_pdf(req))
-print(out)
+annual = LeaveRequest(
+    id=1,
+    employee_full_name="Иванова Мария Петровна",
+    employee_position="помощника",
+    kind_code=1,
+    **_BASE,
+)
+
+remote = LeaveRequest(
+    id=2,
+    employee_full_name="Zafar Umerov",
+    employee_position="partner",
+    kind_code=5,
+    date_from=date(2026, 5, 31),
+    date_to=date(2026, 6, 1),
+    days_count=2,
+    reason="Проверка работы и отправки",
+    partner_full_name="Azizbek Akhmadjonov",
+    **_BASE,
+)
+
+out_dir = Path(__file__).resolve().parent
+(out_dir / "sample_leave_request.pdf").write_bytes(render_leave_request_pdf(annual))
+(out_dir / "sample_remote_work_request.pdf").write_bytes(render_leave_request_pdf(remote))
+print(out_dir / "sample_leave_request.pdf")
+print(out_dir / "sample_remote_work_request.pdf")

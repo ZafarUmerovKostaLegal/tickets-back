@@ -82,11 +82,33 @@ def _partner_dative(req: LeaveRequest) -> str:
     return name or f"User #{req.partner_user_id}"
 
 
+_ROLE_GENITIVE: dict[str, str] = {
+    "partner": "партнера",
+    "assistant": "помощника",
+    "lawyer": "юриста",
+    "attorney": "адвоката",
+    "intern": "стажера",
+    "trainee": "стажера",
+    "партнер": "партнера",
+    "партнёр": "партнёра",
+    "помощник": "помощника",
+    "юрист": "юриста",
+    "адвокат": "адвоката",
+    "стажер": "стажера",
+    "стажёр": "стажёра",
+}
+
+
 def _employee_role_label(req: LeaveRequest) -> str:
-    pos = (req.employee_position or "").strip().lower()
-    if pos:
-        return pos
-    return "помощника"
+    pos = (req.employee_position or "").strip()
+    if not pos:
+        return "помощника"
+    key = pos.lower()
+    if key in _ROLE_GENITIVE:
+        return _ROLE_GENITIVE[key]
+    if key.endswith(("а", "я", "ы", "и")):
+        return key
+    return key
 
 
 def _copy_for(req: LeaveRequest) -> tuple[str, str]:
@@ -121,6 +143,13 @@ def _draw_centered_lines(c: canvas.Canvas, lines: list[str], y: float, page_w: f
     return y
 
 
+def _draw_right_lines(c: canvas.Canvas, lines: list[str], y: float, right_x: float) -> float:
+    for line in lines:
+        c.drawRightString(right_x, y, line)
+        y -= _LINE_H
+    return y
+
+
 def render_leave_request_pdf(req: LeaveRequest) -> bytes:
     """PDF заявления по образцу ОТПУСК.doc (Kosta Legal)."""
     font = _register_fonts()
@@ -135,7 +164,7 @@ def render_leave_request_pdf(req: LeaveRequest) -> bytes:
     c.setFont(font, _FONT_SIZE)
 
     y = page_h - 25 * mm
-    y = _draw_centered_lines(
+    y = _draw_right_lines(
         c,
         [
             "Управляющему партнеру",
@@ -143,7 +172,7 @@ def render_leave_request_pdf(req: LeaveRequest) -> bytes:
             _partner_dative(req),
         ],
         y,
-        page_w,
+        right,
     )
 
     y -= 10 * mm
@@ -160,7 +189,7 @@ def render_leave_request_pdf(req: LeaveRequest) -> bytes:
     _draw_underline(c, name_x, y, underline_w)
 
     y -= 18 * mm
-    c.drawCentredString(page_w / 2, y, "З А Я В Л Е Н И Е")
+    c.drawCentredString(page_w / 2, y, "ЗАЯВЛЕНИЕ")
 
     subject, body = _copy_for(req)
     y -= 10 * mm
