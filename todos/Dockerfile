@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend_common ./backend_common
 COPY todos/ ./
 
+# Очистка todos (консоль контейнера / Portainer):
+#   python scripts/purge_all_todos.py --execute --confirm WIPE_ALL_TODOS
+
 EXPOSE 1240
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1240", "--no-access-log", "--log-level", "info"]

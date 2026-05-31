@@ -18,11 +18,15 @@ COPY time_tracking/ ./
 #   python /app/wipe_repo/scripts/purge_time_tracking_keep_users.py --dry-run
 #   python /app/wipe_repo/scripts/purge_expenses_keep_reference.py --dry-run
 #   python /app/wipe_repo/scripts/delete_expenses_with_project.py --dry-run
+#   python /app/wipe_repo/scripts/purge_tickets_and_todos.py --dry-run
 COPY scripts/requirements-wipe.txt /app/wipe_repo/scripts/requirements-wipe.txt
 COPY scripts/wipe_all_keep_tt_users.py /app/wipe_repo/scripts/wipe_all_keep_tt_users.py
 COPY scripts/purge_time_tracking_keep_users.py /app/wipe_repo/scripts/purge_time_tracking_keep_users.py
 COPY scripts/purge_expenses_keep_reference.py /app/wipe_repo/scripts/purge_expenses_keep_reference.py
 COPY scripts/delete_expenses_with_project.py /app/wipe_repo/scripts/delete_expenses_with_project.py
+COPY scripts/purge_tickets_and_todos.py /app/wipe_repo/scripts/purge_tickets_and_todos.py
+COPY scripts/purge_all_tickets.py /app/wipe_repo/scripts/purge_all_tickets.py
+COPY scripts/purge_all_todos.py /app/wipe_repo/scripts/purge_all_todos.py
 RUN pip install --no-cache-dir -r /app/wipe_repo/scripts/requirements-wipe.txt
 
 COPY auth /app/wipe_repo/auth
