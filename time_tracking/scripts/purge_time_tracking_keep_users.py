@@ -1,17 +1,27 @@
-"""Очистка данных time tracking с сохранением пользователей (time_tracking_users).
+"""Полная очистка данных time tracking с сохранением пользователей (time_tracking_users).
 
-Удаляет:
-  • записи времени, сдачи недель, разблокировки редактирования;
-  • счета и счётчики номеров;
-  • снимки/представления отчётов (включая партнёрские подтверждения — каскадом);
-  • ставки пользователей, доступы к проектам;
-  • клиентов и всё связанное (проекты, задачи, контакты, категории расходов).
+Удаляет ВСЁ прикладное содержимое — и мок, и боевые (production) данные:
+  • все записи времени (time_tracking_entries);
+  • все сдачи недель, разблокировки редактирования;
+  • все счета и счётчики номеров;
+  • все снимки/представления отчётов (партнёрские подтверждения — каскадом);
+  • все ставки пользователей, все доступы к проектам;
+  • всех клиентов и всё связанное (проекты, задачи, контакты, категории расходов).
 
 Не трогает:
-  • строки time_tracking_users (профили сотрудников в модуле TT);
+  • строки time_tracking_users (профили реальных сотрудников в модуле TT);
   • пользователей auth (основное приложение).
 
-Запуск из каталога time_tracking (нужен DATABASE_URL или TIME_TRACKING_DATABASE_URL):
+Флаг --remove-mock-users удаляет только тестовых TT-пользователей (mock.tt.user.*@local.invalid);
+боевые строки time_tracking_users без этого флага остаются.
+
+=== Запуск на сервере БЕЗ Docker ===
+
+  cd /path/to/tickets-back
+  python3 -m venv .venv-purge && source .venv-purge/bin/activate
+  pip install -r scripts/requirements-wipe.txt
+
+  export TIME_TRACKING_DATABASE_URL="postgresql://USER:PASS@HOST:5432/kosta_time_tracking"
 
   python scripts/purge_time_tracking_keep_users.py --dry-run
   python scripts/purge_time_tracking_keep_users.py --execute --confirm WIPE_TT_KEEP_USERS
@@ -20,12 +30,7 @@
 
   python scripts/purge_time_tracking_keep_users.py --database-url postgresql://... --dry-run
 
-Docker (профиль tools, из корня репозитория):
-
-  docker compose --profile tools run --rm wipe_keep_tt \\
-    python time_tracking/scripts/purge_time_tracking_keep_users.py --dry-run
-
-Опционально удалить мок-пользователей TT (email mock.tt.user.*@local.invalid):
+Дополнительно убрать мок-пользователей из time_tracking_users:
 
   ... --execute --confirm WIPE_TT_KEEP_USERS --remove-mock-users
 """
@@ -86,9 +91,12 @@ def _resolve_database_url(cli_url: str | None) -> str:
     for key in ("TIME_TRACKING_DATABASE_URL", "DATABASE_URL"):
         val = (os.environ.get(key) or "").strip()
         if val:
+            print(f"Подключение: env {key} (host из URL скрыт в логах)")
             return val
     raise SystemExit(
-        "Задайте URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL"
+        "Задайте URL БД time tracking:\n"
+        "  export TIME_TRACKING_DATABASE_URL='postgresql://user:pass@host:5432/kosta_time_tracking'\n"
+        "или: --database-url postgresql://..."
     )
 
 
@@ -137,22 +145,29 @@ async def _purge(
         print("Нет данных для удаления.")
         return
 
-    print("Текущие объёмы:")
+    print("Текущие объёмы (мок + боевые данные):")
     for k, v in counts.items():
         print(f"  {k}: {v}")
 
-    print("\nБудут очищены таблицы:")
+    print("\nБудут удалены ВСЕ строки (не только мок) из таблиц:")
     for t in TABLES_CLEARED:
         print(f"  — {t}")
-    print(f"\nОстанутся пользователи TT (не мок): {counts['tt_users_real']}")
+    print(
+        f"\nОстанутся профили сотрудников в time_tracking_users (боевые): {counts['tt_users_real']}"
+    )
     if remove_mock_users:
         print(f"Дополнительно удалятся мок-пользователи TT: {counts['tt_users_mock']}")
     else:
         print(f"Мок-пользователи TT не трогаем: {counts['tt_users_mock']}")
 
     if dry_run:
-        print(f"\n[dry-run] Без изменений. Удаление: --execute --confirm {CONFIRM_PHRASE!r}")
+        print(
+            f"\n[dry-run] Без изменений. Для удаления всех данных (мок и боевых): "
+            f"--execute --confirm {CONFIRM_PHRASE!r}"
+        )
         return
+
+    print("\n*** УДАЛЕНИЕ: все записи, клиенты, проекты, ставки, счета, отчёты ***")
 
     await session.execute(delete(TimeEntryModel))
     await session.execute(delete(InvoiceModel))
@@ -171,6 +186,11 @@ async def _purge(
 
     await session.commit()
     print("\nГотово: данные time tracking удалены, пользователи TT сохранены.")
+
+    after = await _counts(session)
+    print("\nПосле очистки:")
+    for k, v in after.items():
+        print(f"  {k}: {v}")
 
 
 async def _run(
@@ -193,7 +213,10 @@ async def _run(
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Удалить данные time tracking, сохранив time_tracking_users."
+        description=(
+            "Удалить ВСЕ данные time tracking (мок и боевые): записи, клиенты, "
+            "проекты, ставки, счета, отчёты. Сохранить time_tracking_users."
+        )
     )
     p.add_argument(
         "--database-url",
