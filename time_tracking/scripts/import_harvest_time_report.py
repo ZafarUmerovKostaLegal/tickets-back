@@ -29,7 +29,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -41,6 +41,7 @@ DEFAULT_XLSX = TT_ROOT / HARVEST_XLSX_NAME
 HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
 HARVEST_IMPORT_PROJECT_BILLABLE = Decimal("0.01")
+HARVEST_HOURS_QUANT = Decimal("0.01")
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -146,6 +147,10 @@ def _parse_work_date(raw: object) -> date | None:
     return None
 
 
+def _quantize_harvest_hours(h: Decimal) -> Decimal:
+    return h.quantize(HARVEST_HOURS_QUANT, rounding=ROUND_HALF_UP)
+
+
 def _parse_hours(raw: object) -> Decimal | None:
     if raw is None or raw == "":
         return None
@@ -155,7 +160,11 @@ def _parse_hours(raw: object) -> Decimal | None:
         return None
     if h <= 0:
         return None
-    return h
+    return _quantize_harvest_hours(h)
+
+
+def _harvest_seconds_for_hours(hours: Decimal) -> int:
+    return int((_quantize_harvest_hours(hours) * Decimal(3600)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 @dataclass(frozen=True)
@@ -321,7 +330,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
         ensure_projects_have_partner_assignee,
         job_title_indicates_partner,
     )
-    from application.time_rounding import seconds_from_hours
+    from infrastructure.repository_shared import _now_utc
     from infrastructure.models import (
         TimeEntryModel,
         TimeManagerClientModel,
@@ -875,21 +884,26 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     ):
                         stats["entry_duplicate"] += 1
                         continue
-                    sec = seconds_from_hours(hr.hours)
-                    if sec < 60:
-                        sec = 60
+                    sec = _harvest_seconds_for_hours(hr.hours)
                     try:
-                        await entry_repo.create(
-                            entry_id=str(uuid.uuid4()),
-                            auth_user_id=auth_user_id,
-                            work_date=hr.work_date,
-                            duration_seconds=sec,
-                            hours=hr.hours,
-                            is_billable=hr.is_billable,
-                            project_id=project_id,
-                            task_id=task_id,
-                            description=description,
-                            external_reference_url=hr.external_reference_url,
+                        entry_id = str(uuid.uuid4())
+                        file_hours = hr.hours
+                        session.add(
+                            TimeEntryModel(
+                                id=entry_id,
+                                auth_user_id=auth_user_id,
+                                work_date=hr.work_date,
+                                duration_seconds=sec,
+                                hours=file_hours,
+                                rounded_hours=file_hours,
+                                is_billable=hr.is_billable,
+                                project_id=project_id,
+                                task_id=task_id,
+                                description=description,
+                                external_reference_url=hr.external_reference_url,
+                                created_at=_now_utc(),
+                                updated_at=None,
+                            )
                         )
                         stats["entry_created"] += 1
                     except ValueError as e:
@@ -934,6 +948,9 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     db_total, db_billable, db_non_billable = await entry_repo.aggregate_totals_for_project(
                         project_id
                     )
+                    db_total = _quantize_harvest_hours(Decimal(str(db_total)))
+                    db_billable = _quantize_harvest_hours(Decimal(str(db_billable)))
+                    db_non_billable = _quantize_harvest_hours(Decimal(str(db_non_billable)))
                     exp_total, exp_billable, exp_non_billable = expected_hours_breakdown_for_project(
                         client_name, project_name
                     )
