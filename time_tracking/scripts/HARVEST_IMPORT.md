@@ -22,8 +22,8 @@ python scripts/import_harvest_time_report.py --dry-run
 python scripts/import_harvest_time_report.py --execute
 ```
 
-Уволенные сотрудники: скрипт ищет их в **архивных** TT-пользователях и в **auth DB** (`AUTH_DATABASE_URL`).
-Найденным выдаётся доступ к проекту и импортируются часы из Harvest.
+Уволенные: сначала TT (включая архив) и auth DB (`AUTH_DATABASE_URL`).
+Если сотрудника нет нигде — создаётся архивный TT-пользователь Harvest; **все строки импортируются**.
 
 Явно:
 

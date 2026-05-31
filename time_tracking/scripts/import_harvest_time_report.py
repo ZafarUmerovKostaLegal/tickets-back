@@ -14,8 +14,8 @@
 
 URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL.
 
-Пользователи сопоставляются с time_tracking_users по ФИО (First Name + Last Name ↔ display_name),
-включая архивных (уволенных). Для бывших сотрудников без записи в TT — AUTH_DATABASE_URL / --auth-db-url.
+Пользователи сопоставляются с time_tracking_users (включая архив), затем auth DB.
+Если сотрудника нет нигде — создаётся архивный TT-пользователь Harvest (все записи импортируются).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 import uuid
 from collections import Counter
@@ -37,6 +38,8 @@ TT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TT_ROOT.parent
 HARVEST_XLSX_NAME = "harvest_time_report_from2023-01-23to2026-05-26.xlsx"
 DEFAULT_XLSX = TT_ROOT / HARVEST_XLSX_NAME
+HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
+HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -238,6 +241,23 @@ def _match_auth_user_id(row: HarvestRow, index: dict[str, int]) -> int | None:
     return None
 
 
+def _harvest_display_name(row: HarvestRow) -> str:
+    return " ".join(p for p in (row.first_name.strip(), row.last_name.strip()) if p)
+
+
+def _harvest_import_email(row: HarvestRow) -> str:
+    slug = re.sub(r"[^a-z0-9]+", ".", row.harvest_user_key).strip(".") or "unknown"
+    if row.employee_id:
+        emp = re.sub(r"[^a-z0-9]+", "", str(row.employee_id).lower())
+        if emp:
+            slug = f"{slug}.{emp}"
+    local = f"harvest.{slug}"
+    max_local = 255 - len(HARVEST_IMPORT_EMAIL_DOMAIN) - 1
+    if len(local) > max_local:
+        local = local[:max_local]
+    return f"{local}@{HARVEST_IMPORT_EMAIL_DOMAIN}"
+
+
 async def _load_auth_users_for_import(auth_db_url: str) -> tuple[dict[str, int], dict[int, dict]]:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -336,6 +356,35 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
     match_auth_user_id = _match_auth_user_id
 
+    async def find_tt_user_by_email(session: AsyncSession, email: str) -> TimeTrackingUserModel | None:
+        r = await session.execute(
+            select(TimeTrackingUserModel).where(TimeTrackingUserModel.email == email)
+        )
+        return r.scalars().one_or_none()
+
+    async def next_harvest_auth_user_id(session: AsyncSession) -> int:
+        from sqlalchemy import func
+
+        r = await session.execute(select(func.max(TimeTrackingUserModel.auth_user_id)))
+        mx = int(r.scalar_one_or_none() or 0)
+        return max(HARVEST_IMPORT_AUTH_ID_FLOOR, mx + 1)
+
+    def register_user_in_index(
+        row: HarvestRow,
+        *,
+        auth_user_id: int,
+        display_name: str,
+        email: str,
+        user_index: dict[str, int],
+    ) -> None:
+        user_index[row.harvest_user_key] = auth_user_id
+        _build_name_index(
+            display_name=display_name,
+            email=email,
+            auth_user_id=auth_user_id,
+            index=user_index,
+        )
+
     async def ensure_tt_user_from_auth(session: AsyncSession, auth_user: dict) -> bool:
         tur = TimeTrackingUserRepository(session)
         if await tur.get_by_auth_user_id(auth_user["auth_user_id"]):
@@ -355,35 +404,119 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
         await session.flush()
         return True
 
+    async def ensure_harvest_placeholder_user(
+        session: AsyncSession,
+        row: HarvestRow,
+        *,
+        user_index: dict[str, int],
+        tt_by_auth: dict[int, TimeTrackingUserModel],
+        harvest_placeholder_ids: dict[str, int],
+        dry_run_placeholder_next: list[int],
+    ) -> tuple[int, bool]:
+        email = _harvest_import_email(row)
+        display_name = _harvest_display_name(row)
+
+        existing = await find_tt_user_by_email(session, email)
+        if existing is not None:
+            uid = int(existing.auth_user_id)
+            register_user_in_index(
+                row,
+                auth_user_id=uid,
+                display_name=display_name,
+                email=email,
+                user_index=user_index,
+            )
+            tt_by_auth[uid] = existing
+            harvest_placeholder_ids[row.harvest_user_key] = uid
+            return uid, False
+
+        cached = harvest_placeholder_ids.get(row.harvest_user_key)
+        if cached is not None:
+            return cached, False
+
+        if not execute:
+            dry_run_placeholder_next[0] -= 1
+            uid = dry_run_placeholder_next[0]
+            harvest_placeholder_ids[row.harvest_user_key] = uid
+            register_user_in_index(
+                row,
+                auth_user_id=uid,
+                display_name=display_name,
+                email=email,
+                user_index=user_index,
+            )
+            return uid, False
+
+        tur = TimeTrackingUserRepository(session)
+        uid = await next_harvest_auth_user_id(session)
+        await tur.upsert_user(
+            auth_user_id=uid,
+            email=email,
+            display_name=display_name,
+            role="",
+            is_blocked=False,
+            is_archived=True,
+            position="Harvest import",
+            update_position=True,
+        )
+        await session.flush()
+        refreshed = await tur.get_by_auth_user_id(uid)
+        if refreshed is not None:
+            tt_by_auth[uid] = refreshed
+        harvest_placeholder_ids[row.harvest_user_key] = uid
+        register_user_in_index(
+            row,
+            auth_user_id=uid,
+            display_name=display_name,
+            email=email,
+            user_index=user_index,
+        )
+        return uid, True
+
     async def resolve_auth_user_id(
         session: AsyncSession,
         row: HarvestRow,
         user_index: dict[str, int],
         auth_index: dict[str, int],
         auth_by_id: dict[int, dict],
-    ) -> tuple[int | None, bool]:
+        tt_by_auth: dict[int, TimeTrackingUserModel],
+        harvest_placeholder_ids: dict[str, int],
+        dry_run_placeholder_next: list[int],
+    ) -> tuple[int, bool, str]:
+        """Всегда возвращает auth_user_id. Третье значение: tt|auth|harvest."""
         uid = match_auth_user_id(row, user_index)
         if uid is not None:
-            return uid, False
-        if not auth_index:
-            return None, False
-        uid = match_auth_user_id(row, auth_index)
-        if uid is None:
-            return None, False
-        auth_user = auth_by_id.get(uid)
-        if auth_user is None:
-            return None, False
-        created = False
-        if execute:
-            created = await ensure_tt_user_from_auth(session, auth_user)
-            _build_name_index(
-                display_name=str(auth_user.get("display_name") or "") or None,
-                email=auth_user["email"],
-                auth_user_id=uid,
-                index=user_index,
-            )
-            user_index[row.harvest_user_key] = uid
-        return uid, created
+            return uid, False, "tt"
+
+        if auth_index:
+            uid = match_auth_user_id(row, auth_index)
+            if uid is not None:
+                auth_user = auth_by_id.get(uid)
+                if auth_user is not None:
+                    created = False
+                    if execute:
+                        created = await ensure_tt_user_from_auth(session, auth_user)
+                        register_user_in_index(
+                            row,
+                            auth_user_id=uid,
+                            display_name=str(auth_user.get("display_name") or _harvest_display_name(row)),
+                            email=auth_user["email"],
+                            user_index=user_index,
+                        )
+                        refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(uid)
+                        if refreshed is not None:
+                            tt_by_auth[uid] = refreshed
+                    return uid, created, "auth"
+
+        uid, created = await ensure_harvest_placeholder_user(
+            session,
+            row,
+            user_index=user_index,
+            tt_by_auth=tt_by_auth,
+            harvest_placeholder_ids=harvest_placeholder_ids,
+            dry_run_placeholder_next=dry_run_placeholder_next,
+        )
+        return uid, created, "harvest"
 
     async def find_client_by_name(session: AsyncSession, name: str) -> TimeManagerClientModel | None:
         target = _norm(name)
@@ -455,27 +588,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
     try:
         async with session_factory() as session:
             tt_users = list((await session.execute(select(TimeTrackingUserModel))).scalars().all())
-            if not tt_users and not auth_index:
-                print("Нет пользователей в time_tracking_users. Сначала restore_tt_users_from_auth_db.py")
-                return 1
-
             user_index = build_user_index(tt_users)
             tt_by_auth = {int(u.auth_user_id): u for u in tt_users}
-
-            def preview_resolve(row: HarvestRow) -> int | None:
-                uid = match_auth_user_id(row, user_index)
-                if uid is not None:
-                    return uid
-                return match_auth_user_id(row, auth_index) if auth_index else None
-
-            unmatched = sorted({r.harvest_user_key for r in rows if preview_resolve(r) is None})
-            if unmatched:
-                print("\nНе найдены ни в TT (включая архив), ни в auth:")
-                for name in unmatched:
-                    print(f"  - {name}")
-                print("Их записи будут пропущены; клиент и проект всё равно создадутся.")
-            elif auth_index:
-                print("\nСопоставление: активные и архивные TT-пользователи + auth DB для уволенных.")
+            harvest_placeholder_ids: dict[str, int] = {}
+            dry_run_placeholder_next = [0]
+            harvest_only_names: set[str] = set()
 
             stats = Counter()
             client_repo = ClientRepository(session)
@@ -580,14 +697,23 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 elif not task_id:
                     stats["task_created"] += 1
 
-                auth_user_id, tt_created = await resolve_auth_user_id(
-                    session, hr, user_index, auth_index, auth_by_id
+                auth_user_id, tt_created, user_source = await resolve_auth_user_id(
+                    session,
+                    hr,
+                    user_index,
+                    auth_index,
+                    auth_by_id,
+                    tt_by_auth,
+                    harvest_placeholder_ids,
+                    dry_run_placeholder_next,
                 )
-                if auth_user_id is None:
-                    stats["skipped_entry"] += 1
-                    continue
-                if tt_created:
+                if user_source == "auth" and tt_created:
                     stats["tt_user_created"] += 1
+                elif user_source == "harvest" and tt_created:
+                    stats["tt_user_harvest_placeholder"] += 1
+                    harvest_only_names.add(hr.harvest_user_key)
+                elif user_source == "harvest":
+                    harvest_only_names.add(hr.harvest_user_key)
                 if granter is None:
                     u = tt_by_auth.get(auth_user_id)
                     if u is None or not u.is_archived:
@@ -645,6 +771,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 else:
                     stats["entry_planned"] += 1
 
+            if harvest_only_names:
+                print("\nСозданы/использованы TT-пользователи Harvest (нет в auth/TT):")
+                for name in sorted(harvest_only_names):
+                    print(f"  - {name}")
+
             if execute:
                 await session.commit()
                 print("\nИмпорт выполнен.")
@@ -656,11 +787,19 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 f"проектов создано: {stats['project_created']}, уже было: {stats['project_exists']}; "
                 f"задач создано: {stats['task_created']}; "
                 f"доступ к проекту выдан: {stats['project_access_granted']}; "
-                f"TT-пользователей из auth: {stats['tt_user_created']}; "
+                f"TT из auth: {stats['tt_user_created']}, placeholder Harvest: {stats['tt_user_harvest_placeholder']}; "
                 f"записей времени: {stats['entry_created'] or stats['entry_planned']} "
-                f"(пропуск дубликатов: {stats['entry_duplicate']}, без пользователя: {stats['skipped_entry']}, "
-                f"ошибок: {stats['entry_error']})."
+                f"(дубликаты: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
             )
+            expected = len(rows)
+            imported = stats["entry_created"] + stats["entry_duplicate"] if execute else stats["entry_planned"]
+            if imported + stats["entry_error"] < expected:
+                print(
+                    f"ВНИМАНИЕ: в отчёте {expected} строк, обработано {imported} "
+                    f"(+ ошибок: {stats['entry_error']})."
+                )
+            elif execute:
+                print(f"Все {expected} строк отчёта обработаны.")
     finally:
         await engine.dispose()
     return 0
