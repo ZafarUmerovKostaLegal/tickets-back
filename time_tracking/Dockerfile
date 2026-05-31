@@ -15,8 +15,14 @@ COPY time_tracking/ ./
 
 # Скрипт очистки БД для запуска из консоли контейнера (Portainer и т.п.):
 #   python /app/wipe_repo/scripts/wipe_all_keep_tt_users.py --dry-run
+#   python /app/wipe_repo/scripts/purge_time_tracking_keep_users.py --dry-run
+#   python /app/wipe_repo/scripts/purge_expenses_keep_reference.py --dry-run
+#   python /app/wipe_repo/scripts/delete_expenses_with_project.py --dry-run
 COPY scripts/requirements-wipe.txt /app/wipe_repo/scripts/requirements-wipe.txt
 COPY scripts/wipe_all_keep_tt_users.py /app/wipe_repo/scripts/wipe_all_keep_tt_users.py
+COPY scripts/purge_time_tracking_keep_users.py /app/wipe_repo/scripts/purge_time_tracking_keep_users.py
+COPY scripts/purge_expenses_keep_reference.py /app/wipe_repo/scripts/purge_expenses_keep_reference.py
+COPY scripts/delete_expenses_with_project.py /app/wipe_repo/scripts/delete_expenses_with_project.py
 RUN pip install --no-cache-dir -r /app/wipe_repo/scripts/requirements-wipe.txt
 
 COPY auth /app/wipe_repo/auth
