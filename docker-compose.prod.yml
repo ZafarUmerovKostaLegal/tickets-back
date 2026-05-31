@@ -9,10 +9,14 @@ services:
       - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-https://tickets.kostalegal.com}
       - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
+      - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
 
   contacts:
+    restart: unless-stopped
+
+  correspondence:
     restart: unless-stopped
 
   expenses:

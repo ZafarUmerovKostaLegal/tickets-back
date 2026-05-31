@@ -1,0 +1,38 @@
+
+
+from service_path import ensure_service_in_path
+
+ensure_service_in_path("correspondence")
+
+from application.correspondence_service import (
+    format_registry_number,
+    normalize_doc_type,
+    parse_status_filter,
+    sniff_mime,
+    validate_upload_content,
+)
+
+
+def test_format_registry_number_incoming():
+    assert format_registry_number("incoming", 2026, 457) == "ВХ-2026/0457"
+
+
+def test_format_registry_number_outgoing():
+    assert format_registry_number("outgoing", 2026, 3) == "ИСХ-2026/0003"
+
+
+def test_parse_status_group_work():
+    assert parse_status_filter(None, "work") == ["approval", "progress"]
+
+
+def test_validate_pdf_magic():
+    mime = validate_upload_content(b"%PDF-1.4 test", "application/octet-stream")
+    assert mime == "application/pdf"
+
+
+def test_normalize_doc_type_default_letter():
+    assert normalize_doc_type(None) == "letter"
+
+
+def test_sniff_jpeg():
+    assert sniff_mime(b"\xff\xd8\xff\xe0", None) == "image/jpeg"

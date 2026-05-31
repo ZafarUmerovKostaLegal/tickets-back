@@ -26,6 +26,7 @@ services:
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
       - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
+      - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
@@ -82,6 +83,8 @@ services:
         condition: service_started
       contacts:
         condition: service_started
+      correspondence:
+        condition: service_started
 
   contacts:
     build:
@@ -106,6 +109,47 @@ services:
         condition: service_healthy
       time_tracking:
         condition: service_started
+
+  correspondence:
+    build:
+      context: .
+      dockerfile: correspondence/Dockerfile
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${CORRESPONDENCE_DATABASE_URL:-postgresql://correspondence:correspondence@correspondence_db:5432/kosta_correspondence}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - CORRESPONDENCE_MAX_FILE_BYTES=${CORRESPONDENCE_MAX_FILE_BYTES:-15728640}
+      - LOG_LEVEL=${CORRESPONDENCE_LOG_LEVEL:-info}
+    volumes:
+      - media_storage:/app/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:1249/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 90s
+    depends_on:
+      correspondence_db:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  correspondence_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: ["postgres", "-c", "log_min_messages=warning"]
+    environment:
+      POSTGRES_USER: ${CORRESPONDENCE_DB_USER:-correspondence}
+      POSTGRES_PASSWORD: ${CORRESPONDENCE_DB_PASSWORD:-correspondence}
+      POSTGRES_DB: ${CORRESPONDENCE_DB_NAME:-kosta_correspondence}
+    volumes:
+      - correspondence_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # Утилита очистки БД: весь репозиторий монтируется в /work (см. scripts/wipe_all_keep_tt_users.py).
   # Запуск: docker compose --profile tools run --rm wipe_keep_tt --dry-run
@@ -817,3 +861,4 @@ volumes:
   projects_db_data:
   vacation_db_data:
   chat_db_data:
+  correspondence_db_data:
