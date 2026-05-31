@@ -6,13 +6,11 @@
   export TIME_TRACKING_DATABASE_URL="postgresql://user:pass@host:5432/kosta_time_tracking"
   pip install -r time_tracking/requirements.txt
 
-  python time_tracking/scripts/import_harvest_time_report.py \\
-    --file time_tracking/harvest_time_report_from2023-01-23to2026-05-26.xlsx \\
-    --dry-run
+  python time_tracking/scripts/import_harvest_time_report.py --dry-run
+  python time_tracking/scripts/import_harvest_time_report.py --execute
 
-  python time_tracking/scripts/import_harvest_time_report.py \\
-    --file time_tracking/harvest_time_report_from2023-01-23to2026-05-26.xlsx \\
-    --execute
+По умолчанию ищется: harvest_time_report_from2023-01-23to2026-05-26.xlsx
+(time_tracking/, timetrackinck/, /tmp/ в контейнере).
 
 URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL.
 
@@ -35,7 +33,38 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 TT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_XLSX = TT_ROOT / "harvest_time_report_from2023-01-23to2026-05-26.xlsx"
+REPO_ROOT = TT_ROOT.parent
+HARVEST_XLSX_NAME = "harvest_time_report_from2023-01-23to2026-05-26.xlsx"
+DEFAULT_XLSX = TT_ROOT / HARVEST_XLSX_NAME
+
+
+def _harvest_file_candidates(preferred: Path) -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+
+    def add(p: Path) -> None:
+        key = str(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+
+    add(preferred)
+    add(DEFAULT_XLSX)
+    add(Path("/tmp") / HARVEST_XLSX_NAME)
+    add(REPO_ROOT / "timetrackinck" / HARVEST_XLSX_NAME)
+    add(Path.cwd() / HARVEST_XLSX_NAME)
+    add(Path.cwd() / "timetrackinck" / HARVEST_XLSX_NAME)
+    return out
+
+
+def _resolve_harvest_file(preferred: Path) -> Path | None:
+    for candidate in _harvest_file_candidates(preferred):
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            if str(resolved) != str(preferred):
+                print(f"Используется файл: {resolved}")
+            return resolved
+    return None
 
 
 def _make_async_url(url: str) -> str:
@@ -498,7 +527,7 @@ def main() -> int:
         "--file",
         type=Path,
         default=DEFAULT_XLSX,
-        help=f"Путь к .xlsx (по умолчанию: {DEFAULT_XLSX.name} в каталоге time_tracking).",
+        help=f"Путь к .xlsx (по умолчанию ищется {HARVEST_XLSX_NAME}).",
     )
     p.add_argument(
         "--database-url",
@@ -511,18 +540,23 @@ def main() -> int:
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
     args = p.parse_args()
 
-    if not args.file.is_file():
+    xlsx = _resolve_harvest_file(args.file)
+    if xlsx is None:
         print(f"Файл не найден: {args.file}")
+        print(f"Ожидаемое имя: {HARVEST_XLSX_NAME}")
+        print("Проверьте пути:")
+        for c in _harvest_file_candidates(args.file):
+            print(f"  - {c}")
         print(
-            "Если запуск из контейнера time_tracking: xlsx на хосте контейнер не видит.\n"
-            "На хосте: docker cp timetrackinck/harvest_....xlsx $(docker compose ps -q time_tracking):/tmp/harvest.xlsx\n"
-            "В контейнере: python scripts/import_harvest_time_report.py --file /tmp/harvest.xlsx --dry-run"
+            "\nКонтейнер time_tracking — скопируйте с хоста:\n"
+            f"  docker cp timetrackinck/{HARVEST_XLSX_NAME} "
+            "$(docker compose ps -q time_tracking):/tmp/" + HARVEST_XLSX_NAME
         )
         return 1
 
     database_url = _resolve_database_url(args.database_url or None)
     _configure_database_url(database_url)
-    return asyncio.run(_run(path=args.file.resolve(), execute=args.execute, database_url=database_url))
+    return asyncio.run(_run(path=xlsx, execute=args.execute, database_url=database_url))
 
 
 if __name__ == "__main__":

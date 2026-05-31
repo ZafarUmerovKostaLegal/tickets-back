@@ -1,62 +1,51 @@
 # Импорт Harvest — контейнер time_tracking
 
+Файл: **`harvest_time_report_from2023-01-23to2026-05-26.xlsx`**
+
 ## Быстрый старт
 
-**1. На хосте** (не в контейнере) скопируйте xlsx в контейнер:
+**1. На хосте** скопируйте xlsx в контainer (полное имя файла):
 
 ```bash
 cd /path/to/tickets-back
 
 docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
-  $(docker compose ps -q time_tracking):/tmp/harvest.xlsx
+  $(docker compose ps -q time_tracking):/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx
 ```
 
-**2. В контейнере** `time_tracking`:
+**2. В контейнере** `time_tracking` — `--file` можно не указывать:
 
 ```bash
-python scripts/import_harvest_time_report.py --file /tmp/harvest.xlsx --dry-run
-python scripts/import_harvest_time_report.py --file /tmp/harvest.xlsx --execute
+python scripts/import_harvest_time_report.py --dry-run
+python scripts/import_harvest_time_report.py --execute
 ```
 
-Команда **без** `> >` в конце — иначе `--dry-run` не распознается.
+Скрипт сам ищет файл в `/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx`.
 
----
-
-## Пути внутри контейнера
-
-| Что | Путь |
-|-----|------|
-| Скрипт | `/app/scripts/import_harvest_time_report.py` |
-| Рабочая папка | `/app` |
-| xlsx после docker cp | `/tmp/harvest.xlsx` |
-
-**Неправильно:** `time_tracking/scripts/...` (такого каталога в контейнере нет)  
-**Неправильно:** `timetrackinck/...` (папка на хосте, из контейнера не видна)
-
----
-
-## БД
-
-В контейнере уже заданы `DATABASE_URL` / `TIME_TRACKING_DATABASE_URL` из docker-compose — `--database-url` обычно не нужен.
-
----
-
-## Скрипта нет на сервере
+Явно:
 
 ```bash
-git pull
-docker compose up -d --build time_tracking
-docker compose exec time_tracking ls -la scripts/import_harvest_time_report.py
+python scripts/import_harvest_time_report.py \
+  --file /tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
+  --dry-run
 ```
+
+Без `> >` в конце команды.
 
 ---
 
-## Без Docker (на хосте)
+## Где ищется файл по умолчанию
+
+1. `/app/time_tracking/harvest_time_report_from2023-01-23to2026-05-26.xlsx`
+2. `/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx` (после docker cp)
+3. `timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx` (на хосте)
+
+---
+
+## Без Docker
 
 ```bash
 cd /path/to/tickets-back
 export TIME_TRACKING_DATABASE_URL="postgresql://..."
-python scripts/import_harvest_time_report.py \
-  --file timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
-  --dry-run
+python scripts/import_harvest_time_report.py --dry-run
 ```
