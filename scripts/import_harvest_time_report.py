@@ -8,7 +8,7 @@
   python scripts/import_harvest_time_report.py --dry-run
   python scripts/import_harvest_time_report.py --execute
 
-Файл xlsx по умолчанию: harvest_time_report_from2023-01-23to2026-05-26.xlsx
+Файл по умолчанию: harvest_time_report_from2023-01-23to2026-05-26.csv (затем .xlsx)
 """
 
 from __future__ import annotations

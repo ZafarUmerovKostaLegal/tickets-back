@@ -1,55 +1,64 @@
 # Импорт Harvest — контейнер time_tracking
 
-Файл: **`harvest_time_report_from2023-01-23to2026-05-26.xlsx`**
+**Источник данных (1:1):** `harvest_time_report_from2023-01-23to2026-05-26.csv`  
+(точный CSV-экспорт Harvest; xlsx с тем же именем — запасной вариант)
+
+Каждая строка CSV = одна запись времени с теми же Hours и Billable?.
 
 ## Быстрый старт
 
-**1. На хосте** скопируйте xlsx в контainer (полное имя файла):
+**1. На хосте** скопируйте CSV в контейнер:
 
 ```bash
 cd /path/to/tickets-back
 
-docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
-  $(docker compose ps -q time_tracking):/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx
+docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.csv \
+  $(docker compose ps -q time_tracking):/tmp/harvest_time_report_from2023-01-23to2026-05-26.csv
 ```
 
-**2. В контейнере** `time_tracking` — `--file` можно не указывать:
+**2. В контейнере** `time_tracking`:
 
 ```bash
 export AUTH_DATABASE_URL="postgresql://user:pass@host:5432/kosta_auth"
 
 python scripts/import_harvest_time_report.py --dry-run
-python scripts/import_harvest_time_report.py --execute
+python scripts/import_harvest_time_report.py --execute --replace
 ```
 
-Уволенные: TT (включая архив), auth DB, затем placeholder Harvest — **ни одна строка не пропускается**.
-
-Часы и **Billable?** (колонка 8: Yes/No) берутся из файла как есть (2 знака после запятой), без пересчёта через округление до минут.
-Импорт завершится с ошибкой, если хотя бы одна запись не попала в БД.
-
-После импорта скрипт:
-- сверяет часы файла и БД;
-- настраивает проект для редактирования (ставка по проекту + партнёр в команде).
-
-Если проект уже импортирован — повторный `--execute` безопасен (дубликаты пропускаются, настройки проекта обновятся).
-
-Явно:
-
-```bash
-python scripts/import_harvest_time_report.py \
-  --file /tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
-  --dry-run
-```
-
-Без `> >` в конце команды.
+`--file` можно не указывать — скрипт ищет CSV, затем xlsx.
 
 ---
 
-## Где ищется файл по умолчанию
+## Где лежит файл
 
-1. `/app/time_tracking/harvest_time_report_from2023-01-23to2026-05-26.xlsx`
-2. `/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx` (после docker cp)
-3. `timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx` (на хосте)
+| Путь | Описание |
+|------|----------|
+| `time_tracking/harvest_time_report_from2023-01-23to2026-05-26.csv` | в репозитории (основной) |
+| `/tmp/harvest_time_report_from2023-01-23to2026-05-26.csv` | после `docker cp` |
+| `timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.csv` | на хосте сервера |
+
+---
+
+## Что импортируется 1:1 из CSV
+
+- **Client** → клиент
+- **Project** / **Project Code** → проект
+- **Task**, **Notes** → задача и описание
+- **Hours** → часы (как в файле, 2 знака)
+- **Billable?** (`Yes`/`No`) → billable / non-billable
+- **First Name** + **Last Name** → пользователь (создаётся placeholder, если нет в системе)
+- **Currency** → валюта клиента/проекта
+
+### Задачи проекта (обязательные)
+
+Из CSV создаются все задачи с записями времени. Дополнительно в проект всегда добавляются **non-billable** задачи (даже если в Harvest 0 ч):
+
+- **Meetings**
+- **My mehnat registration**
+
+Дубликаты задач (например после старого `seed_default_common_tasks`) объединяются: записи переносятся на одну задачу, лишние удаляются.
+
+Повторный `--execute` безопасен: строки помечаются `harvest-import:<имя-файла>:<номер-строки>`.
 
 ---
 
@@ -58,5 +67,5 @@ python scripts/import_harvest_time_report.py \
 ```bash
 cd /path/to/tickets-back
 export TIME_TRACKING_DATABASE_URL="postgresql://..."
-python scripts/import_harvest_time_report.py --dry-run
+python scripts/import_harvest_time_report.py --execute --replace
 ```

@@ -1,4 +1,4 @@
-"""Импорт клиентов, проектов и записей времени из отчёта Harvest (.xlsx).
+"""Импорт клиентов, проектов и записей времени из отчёта Harvest (.csv / .xlsx).
 
 Запуск на сервере **без Docker**:
 
@@ -9,8 +9,9 @@
   python time_tracking/scripts/import_harvest_time_report.py --dry-run
   python time_tracking/scripts/import_harvest_time_report.py --execute
 
-По умолчанию ищется: harvest_time_report_from2023-01-23to2026-05-26.xlsx
-(time_tracking/, timetrackinck/, /tmp/ в контейнере).
+По умолчанию ищется CSV (точный экспорт Harvest):
+  harvest_time_report_from2023-01-23to2026-05-26.csv
+Затем xlsx с тем же именем.
 
 URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL.
 
@@ -22,11 +23,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import os
 import re
 import sys
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -36,12 +38,15 @@ from openpyxl import load_workbook
 
 TT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TT_ROOT.parent
-HARVEST_XLSX_NAME = "harvest_time_report_from2023-01-23to2026-05-26.xlsx"
-DEFAULT_XLSX = TT_ROOT / HARVEST_XLSX_NAME
+HARVEST_REPORT_BASENAME = "harvest_time_report_from2023-01-23to2026-05-26"
+HARVEST_CSV_NAME = f"{HARVEST_REPORT_BASENAME}.csv"
+HARVEST_XLSX_NAME = f"{HARVEST_REPORT_BASENAME}.xlsx"
+DEFAULT_HARVEST_FILE = TT_ROOT / HARVEST_CSV_NAME
 HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
 HARVEST_IMPORT_PROJECT_BILLABLE = Decimal("0.01")
 HARVEST_HOURS_QUANT = Decimal("0.01")
+HARVEST_EXTRA_REQUIRED_TASKS = ("Meetings", "My mehnat registration")
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -55,11 +60,12 @@ def _harvest_file_candidates(preferred: Path) -> list[Path]:
             out.append(p)
 
     add(preferred)
-    add(DEFAULT_XLSX)
-    add(Path("/tmp") / HARVEST_XLSX_NAME)
-    add(REPO_ROOT / "timetrackinck" / HARVEST_XLSX_NAME)
-    add(Path.cwd() / HARVEST_XLSX_NAME)
-    add(Path.cwd() / "timetrackinck" / HARVEST_XLSX_NAME)
+    for name in (HARVEST_CSV_NAME, HARVEST_XLSX_NAME):
+        add(TT_ROOT / name)
+        add(Path("/tmp") / name)
+        add(REPO_ROOT / "timetrackinck" / name)
+        add(Path.cwd() / name)
+        add(Path.cwd() / "timetrackinck" / name)
     return out
 
 
@@ -110,6 +116,11 @@ def _configure_database_url(database_url: str) -> None:
 
 def _norm(s: str | None) -> str:
     return " ".join((s or "").strip().lower().split())
+
+
+HARVEST_NON_BILLABLE_TASK_NAMES = frozenset(
+    {_norm("Meetings"), _norm("My mehnat registration")}
+)
 
 
 def _parse_currency(raw: object) -> str:
@@ -169,6 +180,7 @@ def _harvest_seconds_for_hours(hours: Decimal) -> int:
 
 @dataclass(frozen=True)
 class HarvestRow:
+    source_row_number: int
     work_date: date
     client_name: str
     project_name: str
@@ -187,49 +199,138 @@ class HarvestRow:
     def harvest_user_key(self) -> str:
         return _norm(f"{self.first_name} {self.last_name}")
 
+    def import_ref(self, file_name: str) -> str:
+        return f"harvest-import:{file_name}:{self.source_row_number}"
 
-def _load_rows(path: Path) -> list[HarvestRow]:
+
+def _csv_field(row: dict[str, str], name: str) -> str:
+    if name in row:
+        return str(row[name] or "").strip()
+    target = name.strip().lower()
+    for key, val in row.items():
+        if key and key.strip().lower() == target:
+            return str(val or "").strip()
+    return ""
+
+
+def _optional_text(raw: str) -> str | None:
+    text = (raw or "").strip()
+    return text or None
+
+
+def _row_from_harvest_fields(
+    *,
+    source_row_number: int,
+    work_date_raw: object,
+    client_name: str,
+    project_name: str,
+    project_code_raw: object,
+    task_name_raw: object,
+    notes_raw: object,
+    hours_raw: object,
+    billable_raw: object,
+    first_name: str,
+    last_name: str,
+    employee_id_raw: object,
+    currency_raw: object,
+    external_url_raw: object,
+) -> HarvestRow | None:
+    work_date = _parse_work_date(work_date_raw)
+    client_name = (client_name or "").strip()
+    project_name = (project_name or "").strip()
+    if not work_date or not client_name or not project_name:
+        return None
+    hours = _parse_hours(hours_raw)
+    if hours is None:
+        return None
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+    if not first_name and not last_name:
+        return None
+    return HarvestRow(
+        source_row_number=source_row_number,
+        work_date=work_date,
+        client_name=client_name,
+        project_name=project_name,
+        project_code=_optional_text(str(project_code_raw or "")),
+        task_name=(str(task_name_raw or "Other research").strip() or "Other research"),
+        notes=_optional_text(str(notes_raw or "")),
+        hours=hours,
+        is_billable=_parse_billable(billable_raw),
+        first_name=first_name,
+        last_name=last_name,
+        employee_id=_optional_text(str(employee_id_raw or "")),
+        currency=_parse_currency(currency_raw),
+        external_reference_url=_optional_text(str(external_url_raw or "")),
+    )
+
+
+def _load_rows_from_csv(path: Path) -> list[HarvestRow]:
+    out: list[HarvestRow] = []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for line_no, row in enumerate(reader, start=2):
+            if not row or not any(str(v or "").strip() for v in row.values()):
+                continue
+            parsed = _row_from_harvest_fields(
+                source_row_number=line_no,
+                work_date_raw=_csv_field(row, "Date"),
+                client_name=_csv_field(row, "Client"),
+                project_name=_csv_field(row, "Project"),
+                project_code_raw=_csv_field(row, "Project Code"),
+                task_name_raw=_csv_field(row, "Task"),
+                notes_raw=_csv_field(row, "Notes"),
+                hours_raw=_csv_field(row, "Hours"),
+                billable_raw=_csv_field(row, "Billable?"),
+                first_name=_csv_field(row, "First Name"),
+                last_name=_csv_field(row, "Last Name"),
+                employee_id_raw=_csv_field(row, "Employee Id"),
+                currency_raw=_csv_field(row, "Currency"),
+                external_url_raw=_csv_field(row, "External Reference URL"),
+            )
+            if parsed is not None:
+                out.append(parsed)
+    return out
+
+
+def _load_rows_from_xlsx(path: Path) -> list[HarvestRow]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         ws = wb["Harvest"] if "Harvest" in wb.sheetnames else wb[wb.sheetnames[0]]
         out: list[HarvestRow] = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
+        for line_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not row or all(c is None or str(c).strip() == "" for c in row):
                 continue
-            work_date = _parse_work_date(row[0])
-            client_name = str(row[1] or "").strip()
-            project_name = str(row[2] or "").strip()
-            if not work_date or not client_name or not project_name:
-                continue
-            hours = _parse_hours(row[6])
-            if hours is None:
-                continue
-            first_name = str(row[10] or "").strip()
-            last_name = str(row[11] or "").strip()
-            if not first_name and not last_name:
-                continue
-            out.append(
-                HarvestRow(
-                    work_date=work_date,
-                    client_name=client_name,
-                    project_name=project_name,
-                    project_code=(str(row[3]).strip() if row[3] not in (None, "") else None),
-                    task_name=str(row[4] or "Other research").strip() or "Other research",
-                    notes=(str(row[5]).strip() if row[5] not in (None, "") else None),
-                    hours=hours,
-                    is_billable=_parse_billable(row[7]),
-                    first_name=first_name,
-                    last_name=last_name,
-                    employee_id=(str(row[12]).strip() if row[12] not in (None, "") else None),
-                    currency=_parse_currency(row[19] if len(row) > 19 else None),
-                    external_reference_url=(
-                        str(row[20]).strip() if len(row) > 20 and row[20] not in (None, "") else None
-                    ),
-                )
+            parsed = _row_from_harvest_fields(
+                source_row_number=line_no,
+                work_date_raw=row[0],
+                client_name=str(row[1] or ""),
+                project_name=str(row[2] or ""),
+                project_code_raw=row[3],
+                task_name_raw=row[4],
+                notes_raw=row[5],
+                hours_raw=row[6],
+                billable_raw=row[7],
+                first_name=str(row[10] or ""),
+                last_name=str(row[11] or ""),
+                employee_id_raw=row[12] if len(row) > 12 else None,
+                currency_raw=row[19] if len(row) > 19 else None,
+                external_url_raw=row[20] if len(row) > 20 else None,
             )
+            if parsed is not None:
+                out.append(parsed)
         return out
     finally:
         wb.close()
+
+
+def _load_rows(path: Path) -> list[HarvestRow]:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return _load_rows_from_csv(path)
+    if suffix in (".xlsx", ".xlsm"):
+        return _load_rows_from_xlsx(path)
+    raise SystemExit(f"Неподдерживаемый формат файла: {path.suffix} (нужен .csv или .xlsx)")
 
 
 def _build_name_index(
@@ -319,12 +420,11 @@ async def _load_auth_users_for_import(auth_db_url: str) -> tuple[dict[str, int],
     return index, by_id
 
 
-async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str = "") -> int:
-    from sqlalchemy import select
+async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str = "", replace: bool = False) -> int:
+    from sqlalchemy import delete, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
-    from application.client_task_defaults import seed_default_common_tasks_for_project
     from application.project_billable_rate_sync import project_uses_shared_billable
     from application.project_partner_requirement import (
         ensure_projects_have_partner_assignee,
@@ -349,6 +449,8 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
         return 1
 
     print(f"Файл: {path}")
+    print(f"Формат: {path.suffix.lower()} (1 строка файла = 1 запись времени)")
+    harvest_source_name = path.name
     print(f"Строк в отчёте: {len(rows)}")
     print(f"Клиентов: {len({r.client_name for r in rows})}")
     print(f"Проектов: {len({(r.client_name, r.project_name) for r in rows})}")
@@ -658,35 +760,100 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 TimeManagerClientTaskModel.project_id == project_id
             )
         )
-        return {_norm(name): str(tid) for name, tid in r.all()}
+        out: dict[str, str] = {}
+        for name, tid in r.all():
+            key = _norm(name)
+            if key not in out:
+                out[key] = str(tid)
+        return out
 
-    async def entry_exists(
+    async def dedupe_project_tasks_by_name(
         session: AsyncSession,
-        *,
-        auth_user_id: int,
-        work_date: date,
         project_id: str,
-        task_id: str | None,
-        hours: Decimal,
-        description: str | None,
-    ) -> bool:
-        q = select(TimeEntryModel.id).where(
-            TimeEntryModel.auth_user_id == auth_user_id,
-            TimeEntryModel.work_date == work_date,
-            TimeEntryModel.project_id == project_id,
-            TimeEntryModel.hours == hours,
-            TimeEntryModel.voided_at.is_(None),
+        task_repo: ClientTaskRepository,
+    ) -> int:
+        r = await session.execute(
+            select(TimeManagerClientTaskModel)
+            .where(TimeManagerClientTaskModel.project_id == project_id)
+            .order_by(TimeManagerClientTaskModel.created_at.asc())
         )
-        if task_id:
-            q = q.where(TimeEntryModel.task_id == task_id)
-        else:
-            q = q.where(TimeEntryModel.task_id.is_(None))
-        desc = (description or "").strip()
-        if desc:
-            q = q.where(TimeEntryModel.description == desc)
-        else:
-            q = q.where(TimeEntryModel.description.is_(None))
-        r = await session.execute(q.limit(1))
+        groups: dict[str, list[TimeManagerClientTaskModel]] = defaultdict(list)
+        for task in r.scalars().all():
+            groups[_norm(task.name)].append(task)
+        merged = 0
+        for group in groups.values():
+            if len(group) <= 1:
+                continue
+            keeper = group[0]
+            for dup in group[1:]:
+                await session.execute(
+                    update(TimeEntryModel)
+                    .where(TimeEntryModel.task_id == dup.id)
+                    .values(task_id=keeper.id)
+                )
+                await task_repo.delete(project_id, dup.id)
+                merged += 1
+        return merged
+
+    def rows_for_project(client_name: str, project_name: str) -> list[HarvestRow]:
+        ckey = _norm(client_name)
+        pkey = _norm(project_name)
+        return [r for r in rows if _norm(r.client_name) == ckey and _norm(r.project_name) == pkey]
+
+    async def ensure_harvest_project_tasks(
+        session: AsyncSession,
+        project_id: str,
+        project_rows: list[HarvestRow],
+        task_repo: ClientTaskRepository,
+    ) -> dict[str, str]:
+        if not execute:
+            tmap: dict[str, str] = {}
+            for r in project_rows:
+                tmap[_norm(r.task_name)] = r.task_name
+            for name in HARVEST_EXTRA_REQUIRED_TASKS:
+                tmap.setdefault(_norm(name), name)
+            return tmap
+
+        merged = await dedupe_project_tasks_by_name(session, project_id, task_repo)
+        if merged:
+            print(f"  Объединены дубликаты задач проекта: {merged}")
+        tmap = await task_map_for_project(session, project_id)
+
+        display_names: dict[str, str] = {}
+        for r in project_rows:
+            display_names[_norm(r.task_name)] = r.task_name.strip()
+        for name in HARVEST_EXTRA_REQUIRED_TASKS:
+            display_names.setdefault(_norm(name), name)
+
+        for key, display_name in sorted(display_names.items(), key=lambda x: x[1].lower()):
+            billable_default = key not in HARVEST_NON_BILLABLE_TASK_NAMES
+            task_id = tmap.get(key)
+            if task_id:
+                await task_repo.update(
+                    project_id,
+                    task_id,
+                    {"billable_by_default": billable_default},
+                )
+            else:
+                row_task = await task_repo.create(
+                    project_id=project_id,
+                    name=display_name,
+                    default_billable_rate=Decimal("0"),
+                    billable_by_default=billable_default,
+                )
+                task_id = row_task.id
+                tmap[key] = task_id
+                stats["task_created"] += 1
+        await session.flush()
+        return tmap
+
+    async def entry_exists_by_import_ref(session: AsyncSession, import_ref: str) -> bool:
+        r = await session.execute(
+            select(TimeEntryModel.id).where(
+                TimeEntryModel.external_reference_url == import_ref,
+                TimeEntryModel.voided_at.is_(None),
+            ).limit(1)
+        )
         return r.scalar_one_or_none() is not None
 
     auth_index: dict[str, int] = {}
@@ -711,10 +878,30 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             entry_repo = TimeEntryRepository(session)
             access_repo = UserProjectAccessRepository(session)
 
+            if execute and replace:
+                pairs = sorted({(r.client_name, r.project_name) for r in rows})
+                for client_name, project_name in pairs:
+                    existing_client = await find_client_by_name(session, client_name)
+                    if existing_client is None:
+                        continue
+                    existing_project = await find_project(session, existing_client.id, project_name)
+                    if existing_project is None:
+                        continue
+                    result = await session.execute(
+                        delete(TimeEntryModel).where(TimeEntryModel.project_id == existing_project.id)
+                    )
+                    deleted = int(result.rowcount or 0)
+                    if deleted:
+                        print(
+                            f"Удалены старые записи: {client_name} / {project_name} — {deleted} шт."
+                        )
+                await session.flush()
+
             client_cache: dict[str, str] = {}
             project_cache: dict[tuple[str, str], str] = {}
             project_meta: dict[str, tuple[str, str, str]] = {}
             task_cache: dict[str, dict[str, str]] = {}
+            projects_tasks_initialized: set[str] = set()
             client_currency: dict[str, str] = {}
             granted_access: set[tuple[int, str]] = set()
             for hr in rows:
@@ -803,7 +990,6 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                             billable_rate_type="per_project",
                             project_billable_rate_amount=HARVEST_IMPORT_PROJECT_BILLABLE,
                         )
-                        await seed_default_common_tasks_for_project(session, created_p.id)
                         project_cache[pkey] = created_p.id
                         project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
                         stats["project_created"] += 1
@@ -817,26 +1003,26 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     stats["entry_planned"] += 1
                     continue
 
-                if project_id not in task_cache:
-                    await seed_default_common_tasks_for_project(session, project_id)
-                    task_cache[project_id] = await task_map_for_project(session, project_id)
+                if project_id not in projects_tasks_initialized:
+                    proj_rows = rows_for_project(hr.client_name, hr.project_name)
+                    task_cache[project_id] = await ensure_harvest_project_tasks(
+                        session,
+                        project_id,
+                        proj_rows,
+                        task_repo,
+                    )
+                    projects_tasks_initialized.add(project_id)
+                    if execute:
+                        nb = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
+                        print(f"  Задачи проекта «{hr.project_name}»: из CSV + non-billable: {nb}")
 
                 tmap = task_cache[project_id]
                 tname = _norm(hr.task_name)
                 task_id = tmap.get(tname)
-                if not task_id and execute:
-                    row_task = await task_repo.create(
-                        project_id=project_id,
-                        name=hr.task_name,
-                        default_billable_rate=Decimal("0"),
-                        billable_by_default=hr.is_billable,
-                    )
-                    task_id = row_task.id
-                    tmap[tname] = task_id
-                    stats["task_created"] += 1
-                    await session.flush()
-                elif not task_id:
-                    stats["task_created"] += 1
+                if not task_id:
+                    stats["entry_error"] += 1
+                    print(f"  ОШИБКА: нет задачи «{hr.task_name}» в проекте {hr.project_name}")
+                    continue
 
                 auth_user_id, _tt_created, user_source = await resolve_auth_user_id(
                     session,
@@ -873,15 +1059,8 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         )
                         granted_access.add(access_key)
                         stats["project_access_granted"] += 1
-                    if await entry_exists(
-                        session,
-                        auth_user_id=auth_user_id,
-                        work_date=hr.work_date,
-                        project_id=project_id,
-                        task_id=task_id,
-                        hours=hr.hours,
-                        description=description,
-                    ):
+                    import_ref = hr.import_ref(harvest_source_name)
+                    if await entry_exists_by_import_ref(session, import_ref):
                         stats["entry_duplicate"] += 1
                         continue
                     sec = _harvest_seconds_for_hours(hr.hours)
@@ -900,7 +1079,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                                 project_id=project_id,
                                 task_id=task_id,
                                 description=description,
-                                external_reference_url=hr.external_reference_url,
+                                external_reference_url=import_ref,
                                 created_at=_now_utc(),
                                 updated_at=None,
                             )
@@ -1024,12 +1203,12 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Импорт Harvest time report (.xlsx) в time tracking (без Docker).")
+    p = argparse.ArgumentParser(description="Импорт Harvest time report (.csv / .xlsx) в time tracking.")
     p.add_argument(
         "--file",
         type=Path,
-        default=DEFAULT_XLSX,
-        help=f"Путь к .xlsx (по умолчанию ищется {HARVEST_XLSX_NAME}).",
+        default=DEFAULT_HARVEST_FILE,
+        help=f"Путь к .csv или .xlsx (по умолчанию: {HARVEST_CSV_NAME}).",
     )
     p.add_argument(
         "--database-url",
@@ -1043,22 +1222,27 @@ def main() -> int:
         default="",
         help="Auth PostgreSQL URL для уволенных (env AUTH_DATABASE_URL).",
     )
+    p.add_argument(
+        "--replace",
+        action="store_true",
+        help="Удалить старые записи времени по проектам из файла перед импортом (чистый 1:1).",
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
     args = p.parse_args()
 
-    xlsx = _resolve_harvest_file(args.file)
-    if xlsx is None:
+    harvest_file = _resolve_harvest_file(args.file)
+    if harvest_file is None:
         print(f"Файл не найден: {args.file}")
-        print(f"Ожидаемое имя: {HARVEST_XLSX_NAME}")
+        print(f"Ожидаемые имена: {HARVEST_CSV_NAME} или {HARVEST_XLSX_NAME}")
         print("Проверьте пути:")
         for c in _harvest_file_candidates(args.file):
             print(f"  - {c}")
         print(
-            "\nКонтейнер time_tracking — скопируйте с хоста:\n"
-            f"  docker cp timetrackinck/{HARVEST_XLSX_NAME} "
-            "$(docker compose ps -q time_tracking):/tmp/" + HARVEST_XLSX_NAME
+            "\nКонтейнер time_tracking — скопируйте CSV с хоста:\n"
+            f"  docker cp timetrackinck/{HARVEST_CSV_NAME} "
+            "$(docker compose ps -q time_tracking):/tmp/" + HARVEST_CSV_NAME
         )
         return 1
 
@@ -1066,7 +1250,13 @@ def main() -> int:
     auth_db_url = (args.auth_db_url or os.environ.get("AUTH_DATABASE_URL") or "").strip()
     _configure_database_url(database_url)
     return asyncio.run(
-        _run(path=xlsx, execute=args.execute, database_url=database_url, auth_db_url=auth_db_url)
+        _run(
+            path=harvest_file,
+            execute=args.execute,
+            database_url=database_url,
+            auth_db_url=auth_db_url,
+            replace=args.replace,
+        )
     )
 
 
