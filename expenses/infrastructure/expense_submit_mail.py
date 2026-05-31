@@ -66,9 +66,9 @@ class ExpenseModerationEmailContext:
     comment: str | None
     author_email: str | None
     author_name: str | None
+    attachments: list[AttachmentEmailItem]
     partner_user_name: str | None = None
     partner_user_email: str | None = None
-    attachments: list[AttachmentEmailItem]
 
 
 def append_url_intent(url: str, param: str, value: str) -> str:
