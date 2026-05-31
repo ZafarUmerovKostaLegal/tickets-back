@@ -14,7 +14,8 @@
 
 URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL.
 
-Пользователи сопоставляются с time_tracking_users по ФИО (First Name + Last Name ↔ display_name).
+Пользователи сопоставляются с time_tracking_users по ФИО (First Name + Last Name ↔ display_name),
+включая архивных (уволенных). Для бывших сотрудников без записи в TT — AUTH_DATABASE_URL / --auth-db-url.
 """
 
 from __future__ import annotations
@@ -213,7 +214,77 @@ def _load_rows(path: Path) -> list[HarvestRow]:
         wb.close()
 
 
-async def _run(*, path: Path, execute: bool, database_url: str) -> int:
+def _build_name_index(
+    *,
+    display_name: str | None,
+    email: str | None,
+    auth_user_id: int,
+    index: dict[str, int],
+) -> None:
+    if display_name:
+        index[_norm(display_name)] = auth_user_id
+    if email:
+        local = email.split("@", 1)[0].replace(".", " ")
+        index[_norm(local)] = auth_user_id
+
+
+def _match_auth_user_id(row: HarvestRow, index: dict[str, int]) -> int | None:
+    key = row.harvest_user_key
+    if key in index:
+        return index[key]
+    rev = _norm(f"{row.last_name} {row.first_name}")
+    if rev in index:
+        return index[rev]
+    return None
+
+
+async def _load_auth_users_for_import(auth_db_url: str) -> tuple[dict[str, int], dict[int, dict]]:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from infrastructure.database import make_async_url
+
+    engine = create_async_engine(make_async_url(auth_db_url), echo=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    index: dict[str, int] = {}
+    by_id: dict[int, dict] = {}
+    try:
+        async with session_factory() as s:
+            r = await s.execute(
+                text(
+                    """
+                    SELECT id, email, display_name, picture, position, is_blocked, is_archived, time_tracking_role
+                    FROM users
+                    WHERE email IS NOT NULL AND trim(email) <> ''
+                    ORDER BY id
+                    """
+                )
+            )
+            for row in r.mappings().all():
+                auth_user_id = int(row["id"])
+                email = str(row["email"]).strip()
+                by_id[auth_user_id] = {
+                    "auth_user_id": auth_user_id,
+                    "email": email,
+                    "display_name": row["display_name"],
+                    "picture": row["picture"],
+                    "position": row["position"],
+                    "is_blocked": bool(row["is_blocked"]),
+                    "is_archived": bool(row["is_archived"]),
+                    "role": str(row["time_tracking_role"] or "").strip(),
+                }
+                _build_name_index(
+                    display_name=str(row["display_name"]) if row["display_name"] is not None else None,
+                    email=email,
+                    auth_user_id=auth_user_id,
+                    index=index,
+                )
+    finally:
+        await engine.dispose()
+    return index, by_id
+
+
+async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str = "") -> int:
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -230,6 +301,7 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
     from infrastructure.repository_access import UserProjectAccessRepository
     from infrastructure.repository_clients import ClientProjectRepository, ClientRepository, ClientTaskRepository
     from infrastructure.repository_entries import TimeEntryRepository
+    from infrastructure.repositories import TimeTrackingUserRepository
 
     rows = _load_rows(path)
     if not rows:
@@ -254,22 +326,64 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
     def build_user_index(users: list[TimeTrackingUserModel]) -> dict[str, int]:
         index: dict[str, int] = {}
         for u in users:
-            auth_id = int(u.auth_user_id)
-            if u.display_name:
-                index[_norm(u.display_name)] = auth_id
-            if u.email:
-                local = u.email.split("@", 1)[0].replace(".", " ")
-                index[_norm(local)] = auth_id
+            _build_name_index(
+                display_name=u.display_name,
+                email=u.email,
+                auth_user_id=int(u.auth_user_id),
+                index=index,
+            )
         return index
 
-    def match_auth_user_id(row: HarvestRow, index: dict[str, int]) -> int | None:
-        key = row.harvest_user_key
-        if key in index:
-            return index[key]
-        rev = _norm(f"{row.last_name} {row.first_name}")
-        if rev in index:
-            return index[rev]
-        return None
+    match_auth_user_id = _match_auth_user_id
+
+    async def ensure_tt_user_from_auth(session: AsyncSession, auth_user: dict) -> bool:
+        tur = TimeTrackingUserRepository(session)
+        if await tur.get_by_auth_user_id(auth_user["auth_user_id"]):
+            return False
+        pos = (str(auth_user.get("position") or "").strip()) or "Harvest import"
+        await tur.upsert_user(
+            auth_user_id=auth_user["auth_user_id"],
+            email=auth_user["email"],
+            display_name=auth_user.get("display_name"),
+            picture=auth_user.get("picture"),
+            role=str(auth_user.get("role") or ""),
+            is_blocked=bool(auth_user.get("is_blocked", False)),
+            is_archived=bool(auth_user.get("is_archived", True)),
+            position=pos,
+            update_position=True,
+        )
+        await session.flush()
+        return True
+
+    async def resolve_auth_user_id(
+        session: AsyncSession,
+        row: HarvestRow,
+        user_index: dict[str, int],
+        auth_index: dict[str, int],
+        auth_by_id: dict[int, dict],
+    ) -> tuple[int | None, bool]:
+        uid = match_auth_user_id(row, user_index)
+        if uid is not None:
+            return uid, False
+        if not auth_index:
+            return None, False
+        uid = match_auth_user_id(row, auth_index)
+        if uid is None:
+            return None, False
+        auth_user = auth_by_id.get(uid)
+        if auth_user is None:
+            return None, False
+        created = False
+        if execute:
+            created = await ensure_tt_user_from_auth(session, auth_user)
+            _build_name_index(
+                display_name=str(auth_user.get("display_name") or "") or None,
+                email=auth_user["email"],
+                auth_user_id=uid,
+                index=user_index,
+            )
+            user_index[row.harvest_user_key] = uid
+        return uid, created
 
     async def find_client_by_name(session: AsyncSession, name: str) -> TimeManagerClientModel | None:
         target = _norm(name)
@@ -332,26 +446,36 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
         r = await session.execute(q.limit(1))
         return r.scalar_one_or_none() is not None
 
+    auth_index: dict[str, int] = {}
+    auth_by_id: dict[int, dict] = {}
+    if auth_db_url.strip():
+        print(f"Auth DB: сопоставление уволенных сотрудников по display_name")
+        auth_index, auth_by_id = await _load_auth_users_for_import(auth_db_url.strip())
+
     try:
         async with session_factory() as session:
-            tt_users = list(
-                (
-                    await session.execute(
-                        select(TimeTrackingUserModel).where(TimeTrackingUserModel.is_archived.is_(False))
-                    )
-                ).scalars().all()
-            )
-            if not tt_users:
+            tt_users = list((await session.execute(select(TimeTrackingUserModel))).scalars().all())
+            if not tt_users and not auth_index:
                 print("Нет пользователей в time_tracking_users. Сначала restore_tt_users_from_auth_db.py")
                 return 1
 
             user_index = build_user_index(tt_users)
-            unmatched = sorted({r.harvest_user_key for r in rows if match_auth_user_id(r, user_index) is None})
+            tt_by_auth = {int(u.auth_user_id): u for u in tt_users}
+
+            def preview_resolve(row: HarvestRow) -> int | None:
+                uid = match_auth_user_id(row, user_index)
+                if uid is not None:
+                    return uid
+                return match_auth_user_id(row, auth_index) if auth_index else None
+
+            unmatched = sorted({r.harvest_user_key for r in rows if preview_resolve(r) is None})
             if unmatched:
-                print("\nНе найдены в TT (display_name):")
+                print("\nНе найдены ни в TT (включая архив), ни в auth:")
                 for name in unmatched:
                     print(f"  - {name}")
-                print("Импорт продолжится только для сопоставленных пользователей.")
+                print("Их записи будут пропущены; клиент и проект всё равно создадутся.")
+            elif auth_index:
+                print("\nСопоставление: активные и архивные TT-пользователи + auth DB для уволенных.")
 
             stats = Counter()
             client_repo = ClientRepository(session)
@@ -364,18 +488,12 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
             project_cache: dict[tuple[str, str], str] = {}
             task_cache: dict[str, dict[str, str]] = {}
             client_currency: dict[str, str] = {}
+            granted_access: set[tuple[int, str]] = set()
             for hr in rows:
                 client_currency.setdefault(_norm(hr.client_name), hr.currency)
             granter: int | None = None
 
             for hr in rows:
-                auth_user_id = match_auth_user_id(hr, user_index)
-                if auth_user_id is None:
-                    stats["skipped_user"] += 1
-                    continue
-                if granter is None:
-                    granter = auth_user_id
-
                 ckey = _norm(hr.client_name)
                 if ckey not in client_cache:
                     existing = await find_client_by_name(session, hr.client_name)
@@ -396,6 +514,7 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
                         await seed_default_expense_categories_for_client(session, created.id)
                         client_cache[ckey] = created.id
                         stats["client_created"] += 1
+                        await session.flush()
                     else:
                         client_cache[ckey] = f"<new:{hr.client_name}>"
                         stats["client_created"] += 1
@@ -431,6 +550,7 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
                         await seed_default_common_tasks_for_project(session, created_p.id)
                         project_cache[pkey] = created_p.id
                         stats["project_created"] += 1
+                        await session.flush()
                     else:
                         project_cache[pkey] = f"<new:{hr.project_name}>"
                         stats["project_created"] += 1
@@ -460,14 +580,37 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
                 elif not task_id:
                     stats["task_created"] += 1
 
+                auth_user_id, tt_created = await resolve_auth_user_id(
+                    session, hr, user_index, auth_index, auth_by_id
+                )
+                if auth_user_id is None:
+                    stats["skipped_entry"] += 1
+                    continue
+                if tt_created:
+                    stats["tt_user_created"] += 1
+                if granter is None:
+                    u = tt_by_auth.get(auth_user_id)
+                    if u is None or not u.is_archived:
+                        granter = auth_user_id
+                if auth_user_id not in tt_by_auth and execute:
+                    refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(auth_user_id)
+                    if refreshed is not None:
+                        tt_by_auth[auth_user_id] = refreshed
+
                 description = hr.notes
                 if execute:
-                    await access_repo.grant_access_if_absent(
-                        auth_user_id,
-                        project_id,
-                        granted_by_auth_user_id=granter,
-                        projects=project_repo,
-                    )
+                    if granter is None:
+                        granter = auth_user_id
+                    access_key = (auth_user_id, project_id)
+                    if access_key not in granted_access:
+                        await access_repo.grant_access_if_absent(
+                            auth_user_id,
+                            project_id,
+                            granted_by_auth_user_id=granter,
+                            projects=project_repo,
+                        )
+                        granted_access.add(access_key)
+                        stats["project_access_granted"] += 1
                     if await entry_exists(
                         session,
                         auth_user_id=auth_user_id,
@@ -512,8 +655,10 @@ async def _run(*, path: Path, execute: bool, database_url: str) -> int:
                 f"Клиентов создано: {stats['client_created']}, уже было: {stats['client_exists']}; "
                 f"проектов создано: {stats['project_created']}, уже было: {stats['project_exists']}; "
                 f"задач создано: {stats['task_created']}; "
+                f"доступ к проекту выдан: {stats['project_access_granted']}; "
+                f"TT-пользователей из auth: {stats['tt_user_created']}; "
                 f"записей времени: {stats['entry_created'] or stats['entry_planned']} "
-                f"(пропуск дубликатов: {stats['entry_duplicate']}, без пользователя: {stats['skipped_user']}, "
+                f"(пропуск дубликатов: {stats['entry_duplicate']}, без пользователя: {stats['skipped_entry']}, "
                 f"ошибок: {stats['entry_error']})."
             )
     finally:
@@ -535,6 +680,12 @@ def main() -> int:
         default="",
         help="PostgreSQL URL (иначе TIME_TRACKING_DATABASE_URL или DATABASE_URL).",
     )
+    p.add_argument(
+        "--auth-db-url",
+        type=str,
+        default="",
+        help="Auth PostgreSQL URL для уволенных (env AUTH_DATABASE_URL).",
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
@@ -555,8 +706,11 @@ def main() -> int:
         return 1
 
     database_url = _resolve_database_url(args.database_url or None)
+    auth_db_url = (args.auth_db_url or os.environ.get("AUTH_DATABASE_URL") or "").strip()
     _configure_database_url(database_url)
-    return asyncio.run(_run(path=xlsx, execute=args.execute, database_url=database_url))
+    return asyncio.run(
+        _run(path=xlsx, execute=args.execute, database_url=database_url, auth_db_url=auth_db_url)
+    )
 
 
 if __name__ == "__main__":

@@ -16,11 +16,14 @@ docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.xlsx \
 **2. В контейнере** `time_tracking` — `--file` можно не указывать:
 
 ```bash
+export AUTH_DATABASE_URL="postgresql://user:pass@host:5432/kosta_auth"
+
 python scripts/import_harvest_time_report.py --dry-run
 python scripts/import_harvest_time_report.py --execute
 ```
 
-Скрипт сам ищет файл в `/tmp/harvest_time_report_from2023-01-23to2026-05-26.xlsx`.
+Уволенные сотрудники: скрипт ищет их в **архивных** TT-пользователях и в **auth DB** (`AUTH_DATABASE_URL`).
+Найденным выдаётся доступ к проекту и импортируются часы из Harvest.
 
 Явно:
 
