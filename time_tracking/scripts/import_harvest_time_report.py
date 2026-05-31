@@ -40,6 +40,7 @@ HARVEST_XLSX_NAME = "harvest_time_report_from2023-01-23to2026-05-26.xlsx"
 DEFAULT_XLSX = TT_ROOT / HARVEST_XLSX_NAME
 HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
+HARVEST_IMPORT_PROJECT_BILLABLE = Decimal("0.01")
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -310,6 +311,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
     from application.client_task_defaults import seed_default_common_tasks_for_project
+    from application.project_billable_rate_sync import project_uses_shared_billable
+    from application.project_partner_requirement import (
+        ensure_projects_have_partner_assignee,
+        job_title_indicates_partner,
+    )
     from application.time_rounding import seconds_from_hours
     from infrastructure.models import (
         TimeEntryModel,
@@ -333,6 +339,13 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
     print(f"Клиентов: {len({r.client_name for r in rows})}")
     print(f"Проектов: {len({(r.client_name, r.project_name) for r in rows})}")
     print(f"Пользователей Harvest: {len({r.harvest_user_key for r in rows})}")
+    expected_hours_total = sum((r.hours for r in rows), Decimal("0"))
+    expected_billable_total = sum((r.hours for r in rows if r.is_billable), Decimal("0"))
+    expected_non_billable_total = expected_hours_total - expected_billable_total
+    print(
+        f"Часы в файле Harvest: всего {expected_hours_total}, "
+        f"billable {expected_billable_total}, non-billable {expected_non_billable_total}"
+    )
 
     engine = create_async_engine(_make_async_url(database_url), echo=False)
     session_factory = async_sessionmaker(
@@ -518,6 +531,75 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
         )
         return uid, created, "harvest"
 
+    async def find_first_partner_auth_user_id(session: AsyncSession) -> int | None:
+        r = await session.execute(
+            select(TimeTrackingUserModel.auth_user_id, TimeTrackingUserModel.position).order_by(
+                TimeTrackingUserModel.is_archived.asc(),
+                TimeTrackingUserModel.auth_user_id.asc(),
+            )
+        )
+        for auth_user_id, position in r.all():
+            if job_title_indicates_partner(position):
+                return int(auth_user_id)
+        return None
+
+    async def finalize_imported_project(
+        session: AsyncSession,
+        *,
+        client_id: str,
+        project_id: str,
+        granter: int | None,
+        access_repo: UserProjectAccessRepository,
+        project_repo: ClientProjectRepository,
+        stats: Counter,
+    ) -> None:
+        row = await project_repo.get_by_id(client_id, project_id)
+        if row is None:
+            return
+        if not project_uses_shared_billable(row):
+            await project_repo.update(
+                client_id,
+                project_id,
+                {
+                    "billable_rate_type": "per_project",
+                    "project_billable_rate_amount": HARVEST_IMPORT_PROJECT_BILLABLE,
+                },
+            )
+            stats["project_billable_configured"] += 1
+        try:
+            await ensure_projects_have_partner_assignee(
+                session,
+                access_repo,
+                {project_id},
+                projects=project_repo,
+            )
+        except ValueError:
+            partner_uid = await find_first_partner_auth_user_id(session)
+            if partner_uid is None:
+                print(
+                    f"  ВНИМАНИЕ: проект «{row.name}» — нет партнёра в команде. "
+                    "Добавьте партнёра вручную, иначе редактирование состава может не сохраниться."
+                )
+                return
+            if granter is None:
+                granter = partner_uid
+            await access_repo.grant_access_if_absent(
+                partner_uid,
+                project_id,
+                granted_by_auth_user_id=granter,
+                projects=project_repo,
+            )
+            stats["project_partner_added"] += 1
+
+    def expected_hours_for_project(client_name: str, project_name: str) -> Decimal:
+        total = Decimal("0")
+        ckey = _norm(client_name)
+        pkey = _norm(project_name)
+        for r in rows:
+            if _norm(r.client_name) == ckey and _norm(r.project_name) == pkey:
+                total += r.hours
+        return total
+
     async def find_client_by_name(session: AsyncSession, name: str) -> TimeManagerClientModel | None:
         target = _norm(name)
         r = await session.execute(select(TimeManagerClientModel))
@@ -603,6 +685,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
             client_cache: dict[str, str] = {}
             project_cache: dict[tuple[str, str], str] = {}
+            project_meta: dict[str, tuple[str, str, str]] = {}
             task_cache: dict[str, dict[str, str]] = {}
             client_currency: dict[str, str] = {}
             granted_access: set[tuple[int, str]] = set()
@@ -646,6 +729,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     existing_p = await find_project(session, client_id, hr.project_name)
                     if existing_p:
                         project_cache[pkey] = existing_p.id
+                        project_meta[existing_p.id] = (client_id, hr.client_name, hr.project_name)
                         stats["project_exists"] += 1
                     elif execute:
                         proj_dates = [
@@ -663,9 +747,12 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                             report_visibility="managers_only",
                             project_type="time_and_materials",
                             currency=client_currency.get(ckey, hr.currency),
+                            billable_rate_type="per_project",
+                            project_billable_rate_amount=HARVEST_IMPORT_PROJECT_BILLABLE,
                         )
                         await seed_default_common_tasks_for_project(session, created_p.id)
                         project_cache[pkey] = created_p.id
+                        project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
                         stats["project_created"] += 1
                         await session.flush()
                     else:
@@ -777,6 +864,34 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     print(f"  - {name}")
 
             if execute:
+                for project_id, (client_id, _client_name, _project_name) in project_meta.items():
+                    await finalize_imported_project(
+                        session,
+                        client_id=client_id,
+                        project_id=project_id,
+                        granter=granter,
+                        access_repo=access_repo,
+                        project_repo=project_repo,
+                        stats=stats,
+                    )
+
+                print("\nСверка часов по проектам:")
+                db_hours_total = Decimal("0")
+                for project_id, (client_id, client_name, project_name) in project_meta.items():
+                    db_total, db_billable, db_non_billable = await entry_repo.aggregate_totals_for_project(
+                        project_id
+                    )
+                    exp_total = expected_hours_for_project(client_name, project_name)
+                    db_hours_total += db_total
+                    status = "OK" if db_total == exp_total else "РАСХОЖДЕНИЕ"
+                    print(
+                        f"  [{status}] {project_name}: файл {exp_total}, БД {db_total} "
+                        f"(billable {db_billable}, non-billable {db_non_billable})"
+                    )
+                print(f"\nИтого: файл {expected_hours_total}, БД {db_hours_total}")
+                if db_hours_total != expected_hours_total:
+                    print("ВНИМАНИЕ: сумма часов в БД не совпадает с файлом Harvest.")
+
                 await session.commit()
                 print("\nИмпорт выполнен.")
             else:
@@ -787,6 +902,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 f"проектов создано: {stats['project_created']}, уже было: {stats['project_exists']}; "
                 f"задач создано: {stats['task_created']}; "
                 f"доступ к проекту выдан: {stats['project_access_granted']}; "
+                f"партнёров добавлено: {stats['project_partner_added']}; "
                 f"TT из auth: {stats['tt_user_created']}, placeholder Harvest: {stats['tt_user_harvest_placeholder']}; "
                 f"записей времени: {stats['entry_created'] or stats['entry_planned']} "
                 f"(дубликаты: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
