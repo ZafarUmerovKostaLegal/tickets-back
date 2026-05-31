@@ -881,8 +881,9 @@ async def upload_card_attachment_nested(
     session: AsyncSession = Depends(get_session),
     file: UploadFile = File(..., description="Тело multipart, поле формы «file»"),
 ):
-    await _require_write(session, user_id, board_id)
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
     repo = KanbanRepository(session)
     await _ensure_card_on_board(repo, user_id, board_id, card_id, need_write=True)
     try:
@@ -894,7 +895,9 @@ async def upload_card_attachment_nested(
             mime_type=file.content_type,
         )
     except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e)) from e
+        msg = str(e)
+        status = 413 if "exceeds" in msg.lower() else 422
+        raise HTTPException(status_code=status, detail=msg) from e
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
@@ -909,7 +912,6 @@ async def delete_card_attachment_nested(
     user_id: Annotated[int, Depends(get_current_user_id)],
     session: AsyncSession = Depends(get_session),
 ):
-    await _require_write(session, user_id, board_id)
     repo = KanbanRepository(session)
     await _ensure_card_on_board(repo, user_id, board_id, card_id, need_write=True)
     ok = await repo.delete_card_attachment(user_id, card_id, attachment_id)

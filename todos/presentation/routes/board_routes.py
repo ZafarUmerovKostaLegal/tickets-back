@@ -394,6 +394,8 @@ async def upload_card_attachment(
     file: UploadFile = File(..., description="Тело multipart, поле формы «file»"),
 ):
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
     repo = KanbanRepository(session)
     try:
         row = await repo.add_card_attachment(
@@ -404,7 +406,9 @@ async def upload_card_attachment(
             mime_type=file.content_type,
         )
     except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e)) from e
+        msg = str(e)
+        status = 413 if "exceeds" in msg.lower() else 422
+        raise HTTPException(status_code=status, detail=msg) from e
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     await session.commit()
