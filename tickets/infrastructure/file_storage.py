@@ -1,3 +1,4 @@
+import re
 import uuid
 from pathlib import Path
 
@@ -18,11 +19,21 @@ def _validate_attachment(filename: str, content: bytes) -> None:
         raise ValueError("Empty file")
 
 
+def _safe_base(filename: str) -> str:
+    base = Path(filename or "").name
+    stem = Path(base).stem
+    ext = Path(base).suffix
+    stem = re.sub(r"[^\w.\-]+", "_", stem, flags=re.UNICODE).strip("._")[:80]
+    ext = re.sub(r"[^\w.]+", "", ext)[:16]
+    return f"{stem or 'file'}{ext}"
+
+
 def save_attachment(filename: str, content: bytes) -> str:
     _validate_attachment(filename, content)
     upload_dir = get_tickets_upload_dir()
-    ext = Path(filename).suffix if filename else ""
-    unique_name = f"{uuid.uuid4().hex}{ext}"
+    # Имя файла сохраняем «человекочитаемым» (UUID-префикс + исходное имя),
+    # чтобы при скачивании пользователь получал распознаваемый файл с расширением.
+    unique_name = f"{uuid.uuid4().hex}_{_safe_base(filename)}"
     path = upload_dir / unique_name
     path.write_bytes(content)
     return unique_name

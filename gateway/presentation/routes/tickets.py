@@ -149,14 +149,21 @@ async def get_tickets_ws_url():
 
 @router.get("/attachments/{filename}")
 async def get_ticket_attachment(filename: str):
+    import mimetypes
+
     settings = get_settings()
     base_dir = Path(settings.media_path) / "tickets"
-    path = base_dir / filename
+    # Защита от выхода за пределы каталога вложений.
+    safe_name = Path(filename).name
+    path = (base_dir / safe_name).resolve()
+    if not str(path).startswith(str(base_dir.resolve())):
+        raise HTTPException(status_code=404, detail="Attachment not found")
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment not found")
+    media_type, _ = mimetypes.guess_type(path.name)
     return FileResponse(
         path,
-        media_type="application/octet-stream",
+        media_type=media_type or "application/octet-stream",
         filename=path.name,
     )
 
