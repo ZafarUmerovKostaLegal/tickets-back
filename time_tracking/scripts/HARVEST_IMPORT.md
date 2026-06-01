@@ -37,17 +37,54 @@ python scripts/import_harvest_time_report.py --dry-run
 python scripts/import_harvest_time_report.py --execute --replace
 ```
 
-URL можно передать аргументами вместо env:
+URL можно передать **одной строкой** (без `\` в конце — иначе shell воспримет следующую строку как отдельную команду):
 
 ```powershell
-python scripts/import_harvest_time_report.py --execute --replace `
-  --database-url "postgresql://USER:PASS@HOST:5432/kosta_time_tracking" `
-  --auth-db-url "postgresql://USER:PASS@HOST:5432/kosta_auth"
+python scripts/import_harvest_time_report.py --execute --replace --database-url "postgresql://USER:PASS@HOST:5432/kosta_time_tracking" --auth-db-url "postgresql://USER:PASS@HOST:5432/kosta_auth"
 ```
 
 `AUTH_DATABASE_URL` необязателен: без него уволенные сотрудники получат placeholder-пользователя, записи всё равно импортируются.
 
 **Если нет доступа к БД с вашего ПК** — передайте админу сервера блок «На сервере (Docker)» ниже или попросите выдать VPN / `TIME_TRACKING_DATABASE_URL`.
+
+### Частые ошибки в терминале
+
+| Ошибка | Причина | Решение |
+|--------|---------|---------|
+| `git: not found`, `docker: not found` | Вы не на сервере / нет Docker | Запускайте **локально в PowerShell** на Windows, только `python ...` |
+| `sh: --database-url: not found` | Перенос `\` — аргументы на новой строке | Вся команда **в одну строку** |
+| `cd: can't cd to /path/to/tickets-back` | Placeholder из доки | `cd "D:\work\Kosta Legal\V3\tickets-back"` |
+| `Задайте URL PostgreSQL` | Нет URL БД | `--database-url "postgresql://..."` |
+| `socket.gaierror: Temporary failure in name resolution` | Неверный **host** в URL (часто буквально `HOST` из примера, или `time_tracking_db` вне Docker) | См. ниже |
+
+### Ошибка `socket.gaierror` (name resolution)
+
+Скрипт не может найти сервер PostgreSQL по имени хоста из `--database-url`.
+
+**Если вы внутри контейнера `time_tracking` (Portainer, `docker exec`):**
+
+Не передавайте `--database-url` — URL уже в переменных окружения контейнера:
+
+```bash
+python scripts/import_harvest_time_report.py --dry-run
+python scripts/import_harvest_time_report.py --execute --replace
+```
+
+Внутри Docker-сети хост БД: `time_tracking_db`, auth: `users_db`.
+
+**Если запускаете с Windows / вне Docker:**
+
+- Нельзя использовать `time_tracking_db` — это имя только внутри docker-compose.
+- Нужен реальный адрес: IP сервера, домен, `localhost` (если Postgres проброшен на порт).
+- Замените `USER`, `PASS`, `HOST` на настоящие значения — **не копируйте placeholder из доки**.
+
+Пример (одна строка):
+
+```powershell
+python scripts/import_harvest_time_report.py --execute --replace --database-url "postgresql://time_tracking:time_tracking@192.168.1.10:5432/kosta_time_tracking"
+```
+
+**Проверка хоста:** если `ping HOST` / `nslookup HOST` не работает — URL тоже не сработает.
 
 ---
 
