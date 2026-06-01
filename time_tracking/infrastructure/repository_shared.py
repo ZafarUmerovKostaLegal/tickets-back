@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -37,6 +37,19 @@ def _decimal_none(v: Any) -> Decimal | None:
     if isinstance(v, Decimal):
         return v
     return Decimal(str(v))
+
+
+def _date_none(v: Any) -> date | None:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    return date.fromisoformat(s[:10])
 
 
 def _to_decimal(v: Any) -> Decimal:

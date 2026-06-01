@@ -21,6 +21,7 @@ from infrastructure.models_invoices import InvoiceModel
 from infrastructure.repository_shared import (
     _PROJECT_TYPES,
     _REPORT_VISIBILITY,
+    _date_none,
     _decimal_none,
     _now_utc,
     _strip_opt,
@@ -791,9 +792,9 @@ class ClientProjectRepository:
         if "code" in patch:
             row.code = None if patch["code"] is None else self._normalize_code(str(patch["code"]))
         if "start_date" in patch:
-            row.start_date = patch["start_date"]
+            row.start_date = _date_none(patch["start_date"])
         if "end_date" in patch:
-            row.end_date = patch["end_date"]
+            row.end_date = _date_none(patch["end_date"])
         if "notes" in patch:
             row.notes = patch["notes"]
         if "report_visibility" in patch and patch["report_visibility"] is not None:

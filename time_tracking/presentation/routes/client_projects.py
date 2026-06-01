@@ -706,7 +706,7 @@ async def patch_client_project(
 ):
     await _require_client_mutable(session, client_id)
     repo = ClientProjectRepository(session)
-    patch = body.model_dump(exclude_unset=True, mode="json", by_alias=False)
+    patch = body.model_dump(exclude_unset=True, by_alias=False)
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
 
