@@ -69,9 +69,55 @@ def _shared_billable_config_changed(before: Any, after: Any) -> bool:
         "start_date",
         "end_date",
     ):
-        if getattr(before, field, None) != getattr(after, field, None):
+        b_val = getattr(before, field, None)
+        a_val = getattr(after, field, None)
+        if field == "project_billable_rate_amount":
+            if _d(b_val) != _d(a_val):
+                return True
+            continue
+        if field == "currency":
+            if normalize_currency(b_val) != normalize_currency(a_val):
+                return True
+            continue
+        if b_val != a_val:
             return True
     return False
+
+
+_BUDGET_ONLY_PATCH_KEYS = frozenset(
+    {
+        "budget_hours",
+        "budget_amount",
+        "progress_budget_amount",
+        "budget_type",
+        "budget_resets_every_month",
+        "budget_includes_expenses",
+        "send_budget_alerts",
+        "budget_alert_threshold_percent",
+        "fixed_fee_amount",
+    }
+)
+
+
+def patch_only_budget_fields(patch: dict[str, Any] | None) -> bool:
+    if not patch:
+        return False
+    keys = set(patch.keys())
+    return bool(keys) and keys <= _BUDGET_ONLY_PATCH_KEYS
+
+
+async def _delete_user_project_scoped_billable_rates(
+    session: AsyncSession,
+    auth_user_id: int,
+    project_id: str,
+) -> None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return
+    hr = HourlyRateRepository(session)
+    for row in await hr.list_by_user_and_kind(auth_user_id, "billable"):
+        if getattr(row, "applies_to_project_id", None) == pid:
+            await hr.delete(auth_user_id, row.id)
 
 
 async def upsert_user_project_scoped_billable_rate(
@@ -103,21 +149,36 @@ async def upsert_user_project_scoped_billable_rate(
         existing = [keeper]
     if existing:
         row = min(existing, key=lambda r: r.id)
-        await hr.update(
+        try:
+            await hr.update(
+                auth_user_id=auth_user_id,
+                rate_id=row.id,
+                patch={"amount": amount, "currency": cur, "valid_from": valid_from, "valid_to": valid_to},
+            )
+            return
+        except ValueError:
+            await _delete_user_project_scoped_billable_rates(session, auth_user_id, pid)
+    try:
+        await hr.create(
             auth_user_id=auth_user_id,
-            rate_id=row.id,
-            patch={"amount": amount, "currency": cur, "valid_from": valid_from, "valid_to": valid_to},
+            rate_kind="billable",
+            amount=amount,
+            currency=cur,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            applies_to_project_id=pid,
         )
-        return
-    await hr.create(
-        auth_user_id=auth_user_id,
-        rate_kind="billable",
-        amount=amount,
-        currency=cur,
-        valid_from=valid_from,
-        valid_to=valid_to,
-        applies_to_project_id=pid,
-    )
+    except ValueError:
+        await _delete_user_project_scoped_billable_rates(session, auth_user_id, pid)
+        await hr.create(
+            auth_user_id=auth_user_id,
+            rate_kind="billable",
+            amount=amount,
+            currency=cur,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            applies_to_project_id=pid,
+        )
 
 
 async def sync_project_billable_rates_to_assigned_users(
@@ -154,9 +215,12 @@ async def reapply_project_billable_mode(
     project_row: Any,
     *,
     project_row_before: Any | None = None,
+    patch: dict[str, Any] | None = None,
 ) -> None:
 
     if not (project_id and str(project_id).strip()):
+        return
+    if patch_only_budget_fields(patch):
         return
     pid = str(project_id).strip()
     old_shared = project_row_before is not None and project_uses_shared_billable(project_row_before)

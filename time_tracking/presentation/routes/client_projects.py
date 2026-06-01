@@ -735,6 +735,9 @@ async def patch_client_project(
     if "project_type" in patch and patch["project_type"] is not None:
         pt = patch["project_type"]
         patch["project_type"] = pt.value if hasattr(pt, "value") else str(pt)
+    if "currency" in patch and patch["currency"] is not None:
+        cur = patch["currency"]
+        patch["currency"] = cur.value if hasattr(cur, "value") else str(cur)
     if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
 
@@ -796,7 +799,11 @@ async def patch_client_project(
         if not updated:
             raise HTTPException(status_code=404, detail="Project not found")
         await reapply_project_billable_mode(
-            session, project_id, updated, project_row_before=row
+            session,
+            project_id,
+            updated,
+            project_row_before=row,
+            patch=patch,
         )
         await session.commit()
     except ValueError as e:
@@ -808,10 +815,22 @@ async def patch_client_project(
             status_code=409,
             detail="Another project with this code already exists for this client",
         ) from None
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось сохранить проект: {e}",
+        ) from e
 
-    await session.refresh(updated)
-    usage = await repo.time_entries_count(updated.id)
-    return _project_out(updated, usage)
+    try:
+        await session.refresh(updated)
+        usage = await repo.time_entries_count(updated.id)
+        return _project_out(updated, usage)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Проект сохранён, но ответ не сформирован: {e}",
+        ) from e
 
 
 @router.delete("/{client_id}/projects/{project_id}", status_code=204)

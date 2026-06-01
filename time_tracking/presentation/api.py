@@ -35,6 +35,7 @@ from infrastructure.schema_patches import (
 )
 from application.settings_sync import renormalize_time_entries_to_minute
 from presentation.deps import require_bearer_user
+from presentation.exception_handlers import register_exception_handlers
 from presentation.routes import (
     invoices,
     client_contacts,
@@ -94,6 +95,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+register_exception_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -8,6 +8,7 @@ ensure_service_in_path("time_tracking")
 
 from application.project_billable_rate_sync import (  # noqa: E402
     _shared_billable_config_changed,
+    patch_only_budget_fields,
     project_uses_shared_billable,
 )
 
@@ -39,3 +40,9 @@ def test_shared_billable_config_changed_when_rate_amount_changes():
     before = _proj(project_billable_rate_amount="0.01")
     after = _proj(project_billable_rate_amount="100")
     assert _shared_billable_config_changed(before, after) is True
+
+
+def test_patch_only_budget_fields():
+    assert patch_only_budget_fields({"budget_amount": "1000"}) is True
+    assert patch_only_budget_fields({"budget_amount": "1000", "name": "X"}) is False
+    assert patch_only_budget_fields({}) is False
