@@ -59,6 +59,21 @@ async def delete_billable_rates_scoped_to_project(session: AsyncSession, project
     )
 
 
+def _shared_billable_config_changed(before: Any, after: Any) -> bool:
+    if before is None or after is None:
+        return True
+    for field in (
+        "billable_rate_type",
+        "project_billable_rate_amount",
+        "currency",
+        "start_date",
+        "end_date",
+    ):
+        if getattr(before, field, None) != getattr(after, field, None):
+            return True
+    return False
+
+
 async def upsert_user_project_scoped_billable_rate(
     session: AsyncSession,
     *,
@@ -80,6 +95,12 @@ async def upsert_user_project_scoped_billable_rate(
         for r in await hr.list_by_user_and_kind(auth_user_id, "billable")
         if getattr(r, "applies_to_project_id", None) == pid
     ]
+    if len(existing) > 1:
+        keeper = min(existing, key=lambda r: r.id)
+        for dup in existing:
+            if dup.id != keeper.id:
+                await hr.delete(auth_user_id, dup.id)
+        existing = [keeper]
     if existing:
         row = min(existing, key=lambda r: r.id)
         await hr.update(
@@ -141,6 +162,7 @@ async def reapply_project_billable_mode(
     old_shared = project_row_before is not None and project_uses_shared_billable(project_row_before)
     new_shared = project_uses_shared_billable(project_row)
     if new_shared:
-        await sync_project_billable_rates_to_assigned_users(session, pid)
+        if not old_shared or _shared_billable_config_changed(project_row_before, project_row):
+            await sync_project_billable_rates_to_assigned_users(session, pid)
     elif old_shared:
         await delete_billable_rates_scoped_to_project(session, pid)

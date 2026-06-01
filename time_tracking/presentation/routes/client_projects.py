@@ -799,6 +799,9 @@ async def patch_client_project(
             session, project_id, updated, project_row_before=row
         )
         await session.commit()
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except IntegrityError:
         await session.rollback()
         raise HTTPException(

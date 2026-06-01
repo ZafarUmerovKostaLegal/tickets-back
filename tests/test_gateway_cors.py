@@ -46,3 +46,11 @@ def test_development_cors_allows_private_lan_when_enabled():
     import re
 
     assert re.match(regex, "http://192.168.1.10:5173")
+
+
+def test_production_gateway_base_url_upgraded_to_https():
+    settings = Settings(
+        ENVIRONMENT="production",
+        GATEWAY_BASE_URL="http://ticketsback.kostalegal.com",
+    )
+    assert settings.gateway_base_url == "https://ticketsback.kostalegal.com"

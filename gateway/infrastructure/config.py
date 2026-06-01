@@ -58,7 +58,10 @@ class Settings(BaseSettings):
 
     ws_internal_secret: str = ""
 
-    security_hsts_enabled: bool = False
+    security_hsts_enabled: bool = Field(
+        default=False,
+        validation_alias="SECURITY_HSTS_ENABLED",
+    )
 
     security_csp: str = ""
 
@@ -82,6 +85,17 @@ class Settings(BaseSettings):
         if v is None or (isinstance(v, str) and not v.strip()):
             return default
         return v
+
+    @field_validator("gateway_base_url", mode="after")
+    @classmethod
+    def _https_gateway_base_in_production(cls, v: str, info: ValidationInfo) -> str:
+        url = (v or "").strip()
+        if not url:
+            return url
+        env = str(info.data.get("environment") or "").strip().lower()
+        if env == "production" and url.startswith("http://"):
+            return "https://" + url[len("http://") :]
+        return url
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

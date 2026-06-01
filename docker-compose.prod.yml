@@ -8,10 +8,18 @@ services:
       - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
       - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-https://tickets.kostalegal.com}
       - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
+      - SECURITY_HSTS_ENABLED=${SECURITY_HSTS_ENABLED:-true}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+
+  auth:
+    environment:
+      - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
+      - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-https://tickets.kostalegal.com}
+      - AUTH_REDIRECT_URI=${AUTH_REDIRECT_URI:-https://ticketsback.kostalegal.com/api/v1/auth/azure/callback}
+      - AUTH_SESSION_COOKIE_SECURE=${AUTH_SESSION_COOKIE_SECURE:-true}
 
   contacts:
     restart: unless-stopped
