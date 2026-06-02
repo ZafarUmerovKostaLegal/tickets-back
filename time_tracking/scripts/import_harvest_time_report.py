@@ -982,10 +982,9 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 if not refreshed.is_archived:
                     stats["entry_error"] += 1
                     print(
-                        f"    ОШИБКА: {_harvest_display_name(sample)} "
-                        f"(auth_user_id={uid}) не в архиве"
+                        f"    ВНИМАНИЕ: {_harvest_display_name(sample)} "
+                        f"(auth_user_id={uid}) не в архиве — доступ всё равно будет выдан"
                     )
-                    continue
 
             if granter is None:
                 granter = uid
@@ -1011,6 +1010,45 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             )
             stats["project_team_members"] += 1
             print(f"    + {_harvest_display_name(sample)}: список TT, доступ, ставки")
+        await session.flush()
+
+    async def ensure_all_csv_users_have_project_access(
+        session: AsyncSession,
+        stats: Counter,
+    ) -> None:
+        """Гарантировать доступ к проекту всем сотрудникам из CSV (идемпотентно)."""
+        if not execute:
+            return
+        nonlocal granter
+        for project_id, (_client_id, client_name, project_name) in project_meta.items():
+            team = _harvest_users_for_project(rows, client_name, project_name)
+            for hkey, sample in team.items():
+                uid = harvest_user_auth_ids.get(hkey)
+                if uid is None:
+                    uid = _match_auth_user_id(sample, user_index)
+                if uid is None:
+                    uid = harvest_placeholder_ids.get(hkey)
+                if uid is None:
+                    stats["entry_error"] += 1
+                    print(
+                        f"  ОШИБКА доступа: {_harvest_display_name(sample)} — "
+                        f"не найден auth_user_id"
+                    )
+                    continue
+                if granter is None:
+                    granter = uid
+                access_key = (uid, project_id)
+                if access_key in granted_access:
+                    continue
+                await access_repo.grant_access_if_absent(
+                    uid,
+                    project_id,
+                    granted_by_auth_user_id=granter,
+                    projects=project_repo,
+                )
+                granted_access.add(access_key)
+                stats["project_access_granted"] += 1
+        await session.flush()
 
     def expected_hours_for_project(client_name: str, project_name: str) -> Decimal:
         total = Decimal("0")
@@ -1283,6 +1321,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             dry_run_placeholder_next = [0]
             harvest_only_names: set[str] = set()
             harvest_user_sources: dict[str, str] = {}
+            harvest_user_auth_ids: dict[str, int] = {}
 
             stats = Counter()
             client_repo = ClientRepository(session)
@@ -1367,6 +1406,26 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 elif user_source == "auth" and tt_created:
                     stats["tt_user_created"] += 1
                 harvest_user_sources[_key] = user_source
+                harvest_user_auth_ids[_key] = uid
+                tt_row = tt_by_auth.get(uid)
+                register_user_in_index(
+                    sample,
+                    auth_user_id=uid,
+                    display_name=(
+                        _harvest_display_name(sample)
+                        if tt_row is None
+                        else (tt_row.display_name or _harvest_display_name(sample))
+                    ),
+                    email=(
+                        str(auth_by_id.get(uid, {}).get("email") or "").strip()
+                        if user_source == "auth"
+                        else (
+                            (tt_row.email if tt_row else None)
+                            or _harvest_import_email(sample)
+                        )
+                    ),
+                    user_index=user_index,
+                )
 
             for hr in rows:
                 ckey = _norm(hr.client_name)
@@ -1546,6 +1605,8 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         stats=stats,
                     )
 
+                await ensure_all_csv_users_have_project_access(session, stats)
+
                 imported_project_ids = list(project_meta.keys())
                 print("\nСверка команды проекта (доступ + ставки из CSV):")
                 team_ok = True
@@ -1554,7 +1615,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     team = _harvest_users_for_project(rows, client_name, project_name)
                     print(f"  Проект «{project_name}» ({len(team)} чел.):")
                     for hkey, sample in sorted(team.items(), key=lambda x: x[0]):
-                        uid = user_index.get(hkey)
+                        uid = harvest_user_auth_ids.get(hkey) or _match_auth_user_id(sample, user_index)
                         name = _harvest_display_name(sample)
                         user_proj_rows = [
                             r
@@ -1565,16 +1626,27 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         ]
                         if uid is None:
                             team_ok = False
-                            print(f"    [ОТСУТСТВУЕТ] {name}: нет в TT")
+                            print(f"    [ОТСУТСТВУЕТ] {name}: нет auth_user_id")
                             continue
                         has_access = await access_repo.has_access(uid, project_id)
                         needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
-                        has_rate = bool(await hr_repo.list_by_user_and_kind(uid, "billable")) if needs_rate else True
-                        member_ok = has_access and has_rate
-                        if not member_ok:
+                        has_rate = (
+                            bool(await hr_repo.list_by_user_and_kind(uid, "billable"))
+                            if needs_rate
+                            else True
+                        )
+                        access_ok = has_access
+                        rate_ok = has_rate
+                        if not access_ok:
                             team_ok = False
-                        status = "OK" if member_ok else "РАСХОЖДЕНИЕ"
-                        rate_note = "ставка есть" if has_rate else "нет billable-ставки"
+                        if needs_rate and not rate_ok:
+                            team_ok = False
+                        status = "OK" if access_ok and rate_ok else "РАСХОЖДЕНИЕ"
+                        rate_note = (
+                            "ставка не требуется"
+                            if not needs_rate
+                            else ("ставка есть" if has_rate else "нет billable-ставки")
+                        )
                         access_note = "доступ есть" if has_access else "нет доступа"
                         print(f"    [{status}] {name}: {access_note}, {rate_note}")
 
@@ -1663,7 +1735,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 db_by_auth = await db_user_hours_for_projects(session, imported_project_ids)
                 for hkey in sorted(expected_users, key=lambda k: expected_users[k][0].lower()):
                     name, exp_total, exp_bill, exp_non, exp_rows = expected_users[hkey]
-                    uid = user_index.get(hkey) or user_index.get(_norm(hkey))
+                    uid = harvest_user_auth_ids.get(hkey) or user_index.get(hkey) or user_index.get(_norm(hkey))
                     if uid is None:
                         users_ok = False
                         print(f"  [ОТСУТСТВУЕТ] {name}: нет TT-пользователя")
@@ -1708,7 +1780,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     return 1
 
                 if not team_ok:
-                    print("ОШИБКА: не у всех сотрудников из CSV есть доступ к проекту и ставки.")
+                    print("ОШИБКА: не у всех сотрудников из CSV есть доступ к проекту и/или ставки.")
                     await session.rollback()
                     return 1
 
