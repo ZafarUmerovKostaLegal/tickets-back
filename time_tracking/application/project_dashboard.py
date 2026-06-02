@@ -88,6 +88,9 @@ async def build_client_project_dashboard(
     task_money: dict[str, dict[str, Decimal]] = defaultdict(
         lambda: {"billable": Decimal(0), "cost": Decimal(0)},
     )
+    task_user_hours: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    task_user_bill: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    task_user_cost: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     user_bill: defaultdict[int, Decimal] = defaultdict(lambda: Decimal(0))
     user_cost: defaultdict[int, Decimal] = defaultdict(lambda: Decimal(0))
 
@@ -101,6 +104,7 @@ async def build_client_project_dashboard(
             else ("__unassigned_billable__" if e.is_billable else "__unassigned_non_billable__")
         )
 
+        amt = Decimal(0)
         if e.is_billable:
             amt, _cur = _billable_amount_for_entry(
                 h,
@@ -127,6 +131,9 @@ async def build_client_project_dashboard(
             cost_any_incomplete = True
 
         task_money[tid]["cost"] += c_amt
+        task_user_hours[tid][uid] += h
+        task_user_bill[tid][uid] += amt
+        task_user_cost[tid][uid] += c_amt
 
     user_repo = TimeTrackingUserRepository(session)
     by_auth = {u.auth_user_id: u for u in await user_repo.list_users()}
@@ -135,6 +142,31 @@ async def build_client_project_dashboard(
         uid, _ = item
         u = by_auth.get(uid)
         return (u.display_name or u.email or str(uid)).lower() if u else str(uid).lower()
+
+    def _member_sort_key_uid(uid: int) -> str:
+        u = by_auth.get(uid)
+        return (u.display_name or u.email or str(uid)).lower() if u else str(uid).lower()
+
+    def _task_members(task_key: str) -> list[dict]:
+        hours_by_user = task_user_hours.get(task_key)
+        if not hours_by_user:
+            return []
+        members: list[dict] = []
+        for uid, hrs in sorted(hours_by_user.items(), key=lambda item: _member_sort_key_uid(item[0])):
+            if hrs <= 0:
+                continue
+            u = by_auth.get(uid)
+            label = (u.display_name or u.email or str(uid)) if u else str(uid)
+            members.append(
+                {
+                    "user_id": str(uid),
+                    "name": label,
+                    "hours": _hours_json(hrs),
+                    "billable_amount": float(_money(task_user_bill.get(task_key, {}).get(uid, _ZERO))),
+                    "internal_cost_amount": float(_money(task_user_cost.get(task_key, {}).get(uid, _ZERO))),
+                }
+            )
+        return members
 
     team: list[dict] = []
     for uid, (ut, ub, un) in sorted(by_user.items(), key=_member_sort_key):
@@ -192,6 +224,7 @@ async def build_client_project_dashboard(
                 "hours": _hours_json(hrs),
                 "billable_amount": float(_money(tm["billable"])),
                 "internal_cost_amount": float(_money(tm["cost"])),
+                "members": _task_members(str(tid)),
             }
         )
 
@@ -208,6 +241,7 @@ async def build_client_project_dashboard(
                 "hours": _hours_json(_ZERO),
                 "billable_amount": 0.0,
                 "internal_cost_amount": 0.0,
+                "members": [],
             }
         )
     task_rows.sort(key=lambda row: (not row["billable"], str(row["name"]).lower()))
@@ -227,6 +261,7 @@ async def build_client_project_dashboard(
                 "hours": _hours_json(hrs),
                 "billable_amount": float(_money(tm["billable"])),
                 "internal_cost_amount": float(_money(tm["cost"])),
+                "members": _task_members(synthetic),
             }
         )
 

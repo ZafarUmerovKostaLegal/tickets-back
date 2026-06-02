@@ -44,7 +44,6 @@ HARVEST_XLSX_NAME = f"{HARVEST_REPORT_BASENAME}.xlsx"
 DEFAULT_HARVEST_FILE = TT_ROOT / HARVEST_CSV_NAME
 HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
-HARVEST_IMPORT_PROJECT_BILLABLE = Decimal("0.01")
 HARVEST_HOURS_QUANT = Decimal("0.01")
 HARVEST_EXTRA_REQUIRED_TASKS = ("My mehnat registration",)
 
@@ -262,21 +261,25 @@ def _harvest_user_rate_intervals(
     return intervals
 
 
-def _user_needs_harvest_import_rates(
-    *,
-    auth_user_id: int,
-    user_source: str,
-    is_tt_archived: bool,
-    auth_is_archived: bool | None,
-) -> bool:
-    """Ставки из Harvest — для уволенных/архивных и placeholder-пользователей."""
-    if user_source == "harvest" or auth_user_id >= HARVEST_IMPORT_AUTH_ID_FLOOR:
-        return True
-    if is_tt_archived:
-        return True
-    if auth_is_archived:
-        return True
-    return False
+def _harvest_users_for_project(
+    all_rows: list[HarvestRow],
+    client_name: str,
+    project_name: str,
+) -> dict[str, HarvestRow]:
+    ckey = _norm(client_name)
+    pkey = _norm(project_name)
+    out: dict[str, HarvestRow] = {}
+    for r in all_rows:
+        if _norm(r.client_name) == ckey and _norm(r.project_name) == pkey:
+            out.setdefault(r.harvest_user_key, r)
+    return out
+
+
+def _user_needs_billable_rate_from_csv(user_rows: list[HarvestRow]) -> bool:
+    return any(
+        r.is_billable and r.billable_rate is not None and r.billable_rate > 0
+        for r in user_rows
+    )
 
 
 def _harvest_seconds_for_hours(hours: Decimal) -> int:
@@ -541,10 +544,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
     from application.hourly_rate_logic import normalize_currency
-    from application.project_billable_rate_sync import (
-        _delete_user_project_scoped_billable_rates,
-        project_uses_shared_billable,
-    )
+    from application.project_billable_rate_sync import _delete_user_project_scoped_billable_rates
     from application.project_partner_requirement import (
         ensure_projects_have_partner_assignee,
         job_title_indicates_partner,
@@ -832,16 +832,6 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
         row = await project_repo.get_by_id(client_id, project_id)
         if row is None:
             return
-        if not project_uses_shared_billable(row):
-            await project_repo.update(
-                client_id,
-                project_id,
-                {
-                    "billable_rate_type": "per_project",
-                    "project_billable_rate_amount": HARVEST_IMPORT_PROJECT_BILLABLE,
-                },
-            )
-            stats["project_billable_configured"] += 1
         try:
             await ensure_projects_have_partner_assignee(
                 session,
@@ -867,26 +857,15 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             )
             stats["project_partner_added"] += 1
 
-    async def ensure_departed_user_harvest_rates(
+    async def ensure_harvest_user_rates_from_csv(
         session: AsyncSession,
         *,
         harvest_user_key: str,
         sample_row: HarvestRow,
         auth_user_id: int,
-        user_source: str,
         project_ids: list[str],
         stats: Counter,
     ) -> None:
-        tt_row = tt_by_auth.get(auth_user_id)
-        auth_rec = auth_by_id.get(auth_user_id)
-        if not _user_needs_harvest_import_rates(
-            auth_user_id=auth_user_id,
-            user_source=user_source,
-            is_tt_archived=bool(tt_row and tt_row.is_archived),
-            auth_is_archived=bool(auth_rec.get("is_archived")) if auth_rec else None,
-        ):
-            return
-
         user_rows = [r for r in rows if r.harvest_user_key == harvest_user_key]
         billable_intervals = _harvest_user_rate_intervals(user_rows)
         cost_intervals = _harvest_user_rate_intervals(
@@ -953,6 +932,85 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 for amt, cur, vf, vt in billable_intervals
             )
             print(f"  ставки {display}: {parts}")
+
+    async def ensure_harvest_project_team_from_csv(
+        session: AsyncSession,
+        *,
+        client_name: str,
+        project_name: str,
+        project_id: str,
+        stats: Counter,
+    ) -> None:
+        """Все сотрудники из CSV: TT-пользователь, доступ к проекту, ставки."""
+        nonlocal granter
+        team = _harvest_users_for_project(rows, client_name, project_name)
+        if not team:
+            return
+        if not execute:
+            stats["project_team_members"] += len(team)
+            return
+
+        print(f"\n  Команда проекта «{project_name}» ({len(team)} чел. из CSV):")
+        for hkey, sample in sorted(team.items(), key=lambda x: x[0]):
+            uid, _created, user_source = await resolve_auth_user_id(
+                session,
+                sample,
+                user_index,
+                auth_index,
+                auth_by_id,
+                tt_by_auth,
+                harvest_placeholder_ids,
+                dry_run_placeholder_next,
+            )
+            if user_source == "harvest":
+                harvest_only_names.add(hkey)
+
+            email = (
+                str(auth_by_id.get(uid, {}).get("email") or "").strip()
+                if user_source == "auth"
+                else _harvest_import_email(sample)
+            )
+            await ensure_harvest_tt_user_archived(
+                session,
+                uid,
+                display_name=_harvest_display_name(sample),
+                email=email or None,
+            )
+            refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(uid)
+            if refreshed is not None:
+                tt_by_auth[uid] = refreshed
+                if not refreshed.is_archived:
+                    stats["entry_error"] += 1
+                    print(
+                        f"    ОШИБКА: {_harvest_display_name(sample)} "
+                        f"(auth_user_id={uid}) не в архиве"
+                    )
+                    continue
+
+            if granter is None:
+                granter = uid
+
+            access_key = (uid, project_id)
+            if access_key not in granted_access:
+                await access_repo.grant_access_if_absent(
+                    uid,
+                    project_id,
+                    granted_by_auth_user_id=granter,
+                    projects=project_repo,
+                )
+                granted_access.add(access_key)
+                stats["project_access_granted"] += 1
+
+            await ensure_harvest_user_rates_from_csv(
+                session,
+                harvest_user_key=hkey,
+                sample_row=sample,
+                auth_user_id=uid,
+                project_ids=[project_id],
+                stats=stats,
+            )
+            stats["project_team_members"] += 1
+            print(f"    + {_harvest_display_name(sample)}: список TT, доступ, ставки")
 
     def expected_hours_for_project(client_name: str, project_name: str) -> Decimal:
         total = Decimal("0")
@@ -1257,8 +1315,10 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             project_meta: dict[str, tuple[str, str, str]] = {}
             task_cache: dict[str, dict[str, str]] = {}
             projects_tasks_initialized: set[str] = set()
+            projects_team_initialized: set[str] = set()
             client_currency: dict[str, str] = {}
             granted_access: set[tuple[int, str]] = set()
+            granter: int | None = None
             for hr in rows:
                 client_currency.setdefault(_norm(hr.client_name), hr.currency)
 
@@ -1307,8 +1367,6 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 elif user_source == "auth" and tt_created:
                     stats["tt_user_created"] += 1
                 harvest_user_sources[_key] = user_source
-
-            granter: int | None = None
 
             for hr in rows:
                 ckey = _norm(hr.client_name)
@@ -1364,8 +1422,8 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                             report_visibility="managers_only",
                             project_type="time_and_materials",
                             currency=client_currency.get(ckey, hr.currency),
-                            billable_rate_type="per_project",
-                            project_billable_rate_amount=HARVEST_IMPORT_PROJECT_BILLABLE,
+                            billable_rate_type=None,
+                            project_billable_rate_amount=None,
                         )
                         project_cache[pkey] = created_p.id
                         project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
@@ -1392,6 +1450,16 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     if execute:
                         extra = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
                         print(f"  Задачи проекта «{hr.project_name}»: из CSV + обязательные: {extra}")
+
+                if project_id not in projects_team_initialized:
+                    await ensure_harvest_project_team_from_csv(
+                        session,
+                        client_name=hr.client_name,
+                        project_name=hr.project_name,
+                        project_id=project_id,
+                        stats=stats,
+                    )
+                    projects_team_initialized.add(project_id)
 
                 tmap = task_cache[project_id]
                 tname = _norm(hr.task_name)
@@ -1426,16 +1494,6 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 if execute:
                     if granter is None:
                         granter = auth_user_id
-                    access_key = (auth_user_id, project_id)
-                    if access_key not in granted_access:
-                        await access_repo.grant_access_if_absent(
-                            auth_user_id,
-                            project_id,
-                            granted_by_auth_user_id=granter,
-                            projects=project_repo,
-                        )
-                        granted_access.add(access_key)
-                        stats["project_access_granted"] += 1
                     import_ref = hr.import_ref(harvest_source_name)
                     if await entry_exists_by_import_ref(session, import_ref):
                         stats["entry_duplicate"] += 1
@@ -1489,20 +1547,36 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     )
 
                 imported_project_ids = list(project_meta.keys())
-                print("\nСтавки billable для архивных/уволенных сотрудников (колонка Billable Rate):")
-                for hkey, sample in sorted(unique_by_harvest_user.items(), key=lambda x: x[0]):
-                    uid = user_index.get(hkey)
-                    if uid is None:
-                        continue
-                    await ensure_departed_user_harvest_rates(
-                        session,
-                        harvest_user_key=hkey,
-                        sample_row=sample,
-                        auth_user_id=uid,
-                        user_source=harvest_user_sources.get(hkey, "tt"),
-                        project_ids=imported_project_ids,
-                        stats=stats,
-                    )
+                print("\nСверка команды проекта (доступ + ставки из CSV):")
+                team_ok = True
+                hr_repo = HourlyRateRepository(session)
+                for project_id, (_client_id, client_name, project_name) in project_meta.items():
+                    team = _harvest_users_for_project(rows, client_name, project_name)
+                    print(f"  Проект «{project_name}» ({len(team)} чел.):")
+                    for hkey, sample in sorted(team.items(), key=lambda x: x[0]):
+                        uid = user_index.get(hkey)
+                        name = _harvest_display_name(sample)
+                        user_proj_rows = [
+                            r
+                            for r in rows
+                            if r.harvest_user_key == hkey
+                            and _norm(r.client_name) == _norm(client_name)
+                            and _norm(r.project_name) == _norm(project_name)
+                        ]
+                        if uid is None:
+                            team_ok = False
+                            print(f"    [ОТСУТСТВУЕТ] {name}: нет в TT")
+                            continue
+                        has_access = await access_repo.has_access(uid, project_id)
+                        needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
+                        has_rate = bool(await hr_repo.list_by_user_and_kind(uid, "billable")) if needs_rate else True
+                        member_ok = has_access and has_rate
+                        if not member_ok:
+                            team_ok = False
+                        status = "OK" if member_ok else "РАСХОЖДЕНИЕ"
+                        rate_note = "ставка есть" if has_rate else "нет billable-ставки"
+                        access_note = "доступ есть" if has_access else "нет доступа"
+                        print(f"    [{status}] {name}: {access_note}, {rate_note}")
 
                 await session.flush()
 
@@ -1633,6 +1707,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     await session.rollback()
                     return 1
 
+                if not team_ok:
+                    print("ОШИБКА: не у всех сотрудников из CSV есть доступ к проекту и ставки.")
+                    await session.rollback()
+                    return 1
+
                 if not users_ok:
                     print("ОШИБКА: пользователи или их часы/строки не совпадают с Harvest.")
                     await session.rollback()
@@ -1666,6 +1745,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 f"Клиентов создано: {stats['client_created']}, уже было: {stats['client_exists']}; "
                 f"проектов создано: {stats['project_created']}, уже было: {stats['project_exists']}; "
                 f"задач создано: {stats['task_created']}; "
+                f"сотрудников в команде проекта: {stats['project_team_members']}; "
                 f"доступ к проекту выдан: {stats['project_access_granted']}; "
                 f"партнёров добавлено: {stats['project_partner_added']}; "
                 f"TT из auth: {stats['tt_user_created']}, placeholder Harvest: {stats['tt_user_harvest_placeholder']}; "

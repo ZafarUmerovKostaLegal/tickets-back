@@ -6,17 +6,24 @@ from decimal import Decimal
 from scripts.import_harvest_time_report import (
     HarvestRow,
     _harvest_user_rate_intervals,
-    _user_needs_harvest_import_rates,
-    HARVEST_IMPORT_AUTH_ID_FLOOR,
+    _harvest_users_for_project,
+    _user_needs_billable_rate_from_csv,
 )
 
 
-def _row(work_date: date, rate: str, *, billable: bool = True) -> HarvestRow:
+def _row(
+    work_date: date,
+    rate: str,
+    *,
+    billable: bool = True,
+    client: str = "EVYAP",
+    project: str = "Company Establishment",
+) -> HarvestRow:
     return HarvestRow(
         source_row_number=1,
         work_date=work_date,
-        client_name="C",
-        project_name="P",
+        client_name=client,
+        project_name=project,
         project_code=None,
         task_name="Task",
         notes=None,
@@ -66,22 +73,17 @@ def test_rate_intervals_skips_non_billable_zero() -> None:
     ]
 
 
-def test_user_needs_rates_for_harvest_and_archived() -> None:
-    assert _user_needs_harvest_import_rates(
-        auth_user_id=HARVEST_IMPORT_AUTH_ID_FLOOR,
-        user_source="harvest",
-        is_tt_archived=True,
-        auth_is_archived=None,
-    )
-    assert _user_needs_harvest_import_rates(
-        auth_user_id=1,
-        user_source="auth",
-        is_tt_archived=True,
-        auth_is_archived=False,
-    )
-    assert not _user_needs_harvest_import_rates(
-        auth_user_id=1,
-        user_source="tt",
-        is_tt_archived=False,
-        auth_is_archived=False,
-    )
+def test_users_for_project_unique() -> None:
+    rows = [
+        _row(date(2023, 1, 1), "120", client="C1", project="P1"),
+        _row(date(2023, 1, 2), "120", client="C1", project="P1"),
+        _row(date(2023, 1, 1), "100", client="C1", project="P2"),
+    ]
+    team = _harvest_users_for_project(rows, "C1", "P1")
+    assert len(team) == 1
+    assert "aliye ablyalimova" in team
+
+
+def test_needs_billable_rate_only_when_billable_hours() -> None:
+    assert _user_needs_billable_rate_from_csv([_row(date(2023, 1, 1), "120")])
+    assert not _user_needs_billable_rate_from_csv([_row(date(2023, 1, 1), "0", billable=False)])
