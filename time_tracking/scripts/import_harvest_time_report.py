@@ -130,6 +130,26 @@ def _billable_default_for_harvest_task(task_key: str, project_rows: list[Harvest
     return True
 
 
+def _expected_hours_by_harvest_user(
+    all_rows: list[HarvestRow],
+) -> dict[str, tuple[str, Decimal, Decimal, Decimal, int]]:
+    acc: dict[str, list] = {}
+    for r in all_rows:
+        key = r.harvest_user_key
+        if key not in acc:
+            acc[key] = [_harvest_display_name(r), Decimal("0"), Decimal("0"), Decimal("0"), 0]
+        acc[key][1] += r.hours
+        if r.is_billable:
+            acc[key][2] += r.hours
+        else:
+            acc[key][3] += r.hours
+        acc[key][4] += 1
+    return {
+        k: (str(v[0]), v[1], v[2], v[3], int(v[4]))
+        for k, v in acc.items()
+    }
+
+
 def _expected_task_hours_map(project_rows: list[HarvestRow]) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
     acc: dict[str, list[Decimal]] = defaultdict(
         lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
@@ -197,6 +217,68 @@ def _parse_hours(raw: object) -> Decimal | None:
     return _quantize_harvest_hours(h)
 
 
+def _parse_money_rate(raw: object) -> Decimal | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        val = Decimal(str(raw).strip())
+    except Exception:
+        return None
+    return val.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _harvest_user_rate_intervals(
+    user_rows: list[HarvestRow],
+    *,
+    rate_attr: str = "billable_rate",
+    billable_only: bool = True,
+) -> list[tuple[Decimal, str, date, date]]:
+    """Непересекающиеся интервалы ставок по датам работ из Harvest."""
+    by_date: dict[date, tuple[Decimal, str]] = {}
+    for r in user_rows:
+        if billable_only and not r.is_billable:
+            continue
+        rate = getattr(r, rate_attr, None)
+        if rate is None or rate <= 0:
+            continue
+        by_date[r.work_date] = (rate, r.currency)
+    if not by_date:
+        return []
+    dates = sorted(by_date)
+    intervals: list[tuple[Decimal, str, date, date]] = []
+    start = dates[0]
+    cur_amt, cur_cur = by_date[start]
+    prev = start
+    for work_date in dates[1:]:
+        amt, cur = by_date[work_date]
+        if amt == cur_amt and cur == cur_cur:
+            prev = work_date
+            continue
+        intervals.append((cur_amt, cur_cur, start, prev))
+        start = work_date
+        prev = work_date
+        cur_amt, cur_cur = amt, cur
+    intervals.append((cur_amt, cur_cur, start, prev))
+    return intervals
+
+
+def _user_needs_harvest_import_rates(
+    *,
+    auth_user_id: int,
+    user_source: str,
+    is_tt_archived: bool,
+    auth_is_archived: bool | None,
+) -> bool:
+    """Ставки из Harvest — для уволенных/архивных и placeholder-пользователей."""
+    if user_source == "harvest" or auth_user_id >= HARVEST_IMPORT_AUTH_ID_FLOOR:
+        return True
+    if is_tt_archived:
+        return True
+    if auth_is_archived:
+        return True
+    return False
+
+
 def _harvest_seconds_for_hours(hours: Decimal) -> int:
     return int((_quantize_harvest_hours(hours) * Decimal(3600)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -215,6 +297,8 @@ class HarvestRow:
     first_name: str
     last_name: str
     employee_id: str | None
+    billable_rate: Decimal | None
+    cost_rate: Decimal | None
     currency: str
     external_reference_url: str | None
 
@@ -255,6 +339,8 @@ def _row_from_harvest_fields(
     first_name: str,
     last_name: str,
     employee_id_raw: object,
+    billable_rate_raw: object,
+    cost_rate_raw: object,
     currency_raw: object,
     external_url_raw: object,
 ) -> HarvestRow | None:
@@ -283,6 +369,8 @@ def _row_from_harvest_fields(
         first_name=first_name,
         last_name=last_name,
         employee_id=_optional_text(str(employee_id_raw or "")),
+        billable_rate=_parse_money_rate(billable_rate_raw),
+        cost_rate=_parse_money_rate(cost_rate_raw),
         currency=_parse_currency(currency_raw),
         external_reference_url=_optional_text(str(external_url_raw or "")),
     )
@@ -308,6 +396,8 @@ def _load_rows_from_csv(path: Path) -> list[HarvestRow]:
                 first_name=_csv_field(row, "First Name"),
                 last_name=_csv_field(row, "Last Name"),
                 employee_id_raw=_csv_field(row, "Employee Id"),
+                billable_rate_raw=_csv_field(row, "Billable Rate"),
+                cost_rate_raw=_csv_field(row, "Cost Rate"),
                 currency_raw=_csv_field(row, "Currency"),
                 external_url_raw=_csv_field(row, "External Reference URL"),
             )
@@ -337,6 +427,8 @@ def _load_rows_from_xlsx(path: Path) -> list[HarvestRow]:
                 first_name=str(row[10] or ""),
                 last_name=str(row[11] or ""),
                 employee_id_raw=row[12] if len(row) > 12 else None,
+                billable_rate_raw=row[15] if len(row) > 15 else None,
+                cost_rate_raw=row[17] if len(row) > 17 else None,
                 currency_raw=row[19] if len(row) > 19 else None,
                 external_url_raw=row[20] if len(row) > 20 else None,
             )
@@ -448,7 +540,11 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
-    from application.project_billable_rate_sync import project_uses_shared_billable
+    from application.hourly_rate_logic import normalize_currency
+    from application.project_billable_rate_sync import (
+        _delete_user_project_scoped_billable_rates,
+        project_uses_shared_billable,
+    )
     from application.project_partner_requirement import (
         ensure_projects_have_partner_assignee,
         job_title_indicates_partner,
@@ -464,6 +560,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
     from infrastructure.repository_access import UserProjectAccessRepository
     from infrastructure.repository_clients import ClientProjectRepository, ClientRepository, ClientTaskRepository
     from infrastructure.repository_entries import TimeEntryRepository
+    from infrastructure.repository_rates import HourlyRateRepository, _rate_currency_key
     from infrastructure.repositories import TimeTrackingUserRepository
 
     rows = _load_rows(path)
@@ -537,10 +634,10 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             index=user_index,
         )
 
-    async def ensure_tt_user_from_auth(session: AsyncSession, auth_user: dict) -> bool:
+    async def ensure_tt_user_for_harvest_import(session: AsyncSession, auth_user: dict) -> bool:
+        """Создать или обновить TT-пользователя из auth; для Harvest всегда is_archived=True."""
         tur = TimeTrackingUserRepository(session)
-        if await tur.get_by_auth_user_id(auth_user["auth_user_id"]):
-            return False
+        existing = await tur.get_by_auth_user_id(auth_user["auth_user_id"])
         pos = (str(auth_user.get("position") or "").strip()) or "Harvest import"
         await tur.upsert_user(
             auth_user_id=auth_user["auth_user_id"],
@@ -549,12 +646,38 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             picture=auth_user.get("picture"),
             role=str(auth_user.get("role") or ""),
             is_blocked=bool(auth_user.get("is_blocked", False)),
-            is_archived=bool(auth_user.get("is_archived", True)),
+            is_archived=True,
             position=pos,
-            update_position=True,
+            update_position=existing is None,
         )
         await session.flush()
-        return True
+        return existing is None
+
+    async def ensure_harvest_tt_user_archived(
+        session: AsyncSession,
+        auth_user_id: int,
+        *,
+        display_name: str | None,
+        email: str | None,
+    ) -> None:
+        if not execute:
+            return
+        tur = TimeTrackingUserRepository(session)
+        row = await tur.get_by_auth_user_id(auth_user_id)
+        if row is None:
+            return
+        await tur.upsert_user(
+            auth_user_id=auth_user_id,
+            email=(email or row.email or "").strip(),
+            display_name=display_name or row.display_name,
+            picture=row.picture,
+            role=row.role or "",
+            is_blocked=bool(row.is_blocked),
+            is_archived=True,
+            position=row.position,
+            update_position=False,
+        )
+        await session.flush()
 
     async def ensure_harvest_placeholder_user(
         session: AsyncSession,
@@ -567,10 +690,25 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
     ) -> tuple[int, bool]:
         email = _harvest_import_email(row)
         display_name = _harvest_display_name(row)
+        tur = TimeTrackingUserRepository(session)
 
         existing = await find_tt_user_by_email(session, email)
         if existing is not None:
             uid = int(existing.auth_user_id)
+            if execute and not existing.is_archived:
+                await tur.upsert_user(
+                    auth_user_id=uid,
+                    email=existing.email,
+                    display_name=existing.display_name or display_name,
+                    picture=existing.picture,
+                    role=existing.role or "",
+                    is_blocked=bool(existing.is_blocked),
+                    is_archived=True,
+                    position=existing.position,
+                    update_position=False,
+                )
+                await session.flush()
+                existing = await tur.get_by_auth_user_id(uid)
             register_user_in_index(
                 row,
                 auth_user_id=uid,
@@ -578,7 +716,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 email=email,
                 user_index=user_index,
             )
-            tt_by_auth[uid] = existing
+            tt_by_auth[uid] = existing if existing is not None else await tur.get_by_auth_user_id(uid)
             harvest_placeholder_ids[row.harvest_user_key] = uid
             return uid, False
 
@@ -599,7 +737,6 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             )
             return uid, False
 
-        tur = TimeTrackingUserRepository(session)
         uid = await next_harvest_auth_user_id(session)
         await tur.upsert_user(
             auth_user_id=uid,
@@ -647,7 +784,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 if auth_user is not None:
                     created = False
                     if execute:
-                        created = await ensure_tt_user_from_auth(session, auth_user)
+                        created = await ensure_tt_user_for_harvest_import(session, auth_user)
                         register_user_in_index(
                             row,
                             auth_user_id=uid,
@@ -729,6 +866,93 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 projects=project_repo,
             )
             stats["project_partner_added"] += 1
+
+    async def ensure_departed_user_harvest_rates(
+        session: AsyncSession,
+        *,
+        harvest_user_key: str,
+        sample_row: HarvestRow,
+        auth_user_id: int,
+        user_source: str,
+        project_ids: list[str],
+        stats: Counter,
+    ) -> None:
+        tt_row = tt_by_auth.get(auth_user_id)
+        auth_rec = auth_by_id.get(auth_user_id)
+        if not _user_needs_harvest_import_rates(
+            auth_user_id=auth_user_id,
+            user_source=user_source,
+            is_tt_archived=bool(tt_row and tt_row.is_archived),
+            auth_is_archived=bool(auth_rec.get("is_archived")) if auth_rec else None,
+        ):
+            return
+
+        user_rows = [r for r in rows if r.harvest_user_key == harvest_user_key]
+        billable_intervals = _harvest_user_rate_intervals(user_rows)
+        cost_intervals = _harvest_user_rate_intervals(
+            user_rows, rate_attr="cost_rate", billable_only=False
+        )
+        if not billable_intervals and not cost_intervals:
+            return
+
+        hr = HourlyRateRepository(session)
+        display = _harvest_display_name(sample_row)
+
+        for project_id in project_ids:
+            await _delete_user_project_scoped_billable_rates(session, auth_user_id, project_id)
+
+        currencies = {normalize_currency(c) for _, c, _, _ in billable_intervals}
+        for row in await hr.list_by_user_and_kind(auth_user_id, "billable"):
+            if getattr(row, "applies_to_project_id", None):
+                continue
+            if _rate_currency_key(row) in currencies:
+                await hr.delete(auth_user_id, row.id)
+
+        cost_currencies = {normalize_currency(c) for _, c, _, _ in cost_intervals}
+        for row in await hr.list_by_user_and_kind(auth_user_id, "cost"):
+            if getattr(row, "applies_to_project_id", None):
+                continue
+            if _rate_currency_key(row) in cost_currencies:
+                await hr.delete(auth_user_id, row.id)
+
+        for amt, cur, vf, vt in billable_intervals:
+            try:
+                await hr.create(
+                    auth_user_id=auth_user_id,
+                    rate_kind="billable",
+                    amount=amt,
+                    currency=cur,
+                    valid_from=vf,
+                    valid_to=vt,
+                    applies_to_project_id=None,
+                )
+                stats["hourly_rate_billable"] += 1
+            except ValueError as e:
+                stats["hourly_rate_error"] += 1
+                print(f"  ОШИБКА billable-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
+
+        for amt, cur, vf, vt in cost_intervals:
+            try:
+                await hr.create(
+                    auth_user_id=auth_user_id,
+                    rate_kind="cost",
+                    amount=amt,
+                    currency=cur,
+                    valid_from=vf,
+                    valid_to=vt,
+                    applies_to_project_id=None,
+                )
+                stats["hourly_rate_cost"] += 1
+            except ValueError as e:
+                stats["hourly_rate_error"] += 1
+                print(f"  ОШИБКА cost-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
+
+        if billable_intervals:
+            parts = ", ".join(
+                f"{amt} {normalize_currency(cur)} ({vf}–{vt})"
+                for amt, cur, vf, vt in billable_intervals
+            )
+            print(f"  ставки {display}: {parts}")
 
     def expected_hours_for_project(client_name: str, project_name: str) -> Decimal:
         total = Decimal("0")
@@ -930,6 +1154,53 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 )
         return out
 
+    async def db_user_hours_for_projects(
+        session: AsyncSession,
+        project_ids: list[str],
+    ) -> dict[int, tuple[Decimal, Decimal, Decimal, int]]:
+        if not project_ids:
+            return {}
+        q = (
+            select(
+                TimeEntryModel.auth_user_id,
+                func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("billable"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("non_billable"),
+                func.count(TimeEntryModel.id).label("rows"),
+            )
+            .where(
+                TimeEntryModel.project_id.in_(project_ids),
+                TimeEntryModel.voided_at.is_(None),
+            )
+            .group_by(TimeEntryModel.auth_user_id)
+        )
+        r = await session.execute(q)
+        out: dict[int, tuple[Decimal, Decimal, Decimal, int]] = {}
+        for row in r.all():
+            out[int(row.auth_user_id)] = (
+                _quantize_harvest_hours(Decimal(str(row.total))),
+                _quantize_harvest_hours(Decimal(str(row.billable))),
+                _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                int(row.rows or 0),
+            )
+        return out
+
+    async def db_user_hours_for_project(
+        session: AsyncSession,
+        project_id: str,
+    ) -> dict[int, tuple[Decimal, Decimal, Decimal, int]]:
+        return await db_user_hours_for_projects(session, [project_id])
+
     async def entry_exists_by_import_ref(session: AsyncSession, import_ref: str) -> bool:
         r = await session.execute(
             select(TimeEntryModel.id).where(
@@ -953,6 +1224,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
             harvest_placeholder_ids: dict[str, int] = {}
             dry_run_placeholder_next = [0]
             harvest_only_names: set[str] = set()
+            harvest_user_sources: dict[str, str] = {}
 
             stats = Counter()
             client_repo = ClientRepository(session)
@@ -1006,6 +1278,27 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                     harvest_placeholder_ids,
                     dry_run_placeholder_next,
                 )
+                if execute:
+                    email = (
+                        str(auth_by_id.get(uid, {}).get("email") or "").strip()
+                        if user_source == "auth"
+                        else _harvest_import_email(sample)
+                    )
+                    await ensure_harvest_tt_user_archived(
+                        session,
+                        uid,
+                        display_name=_harvest_display_name(sample),
+                        email=email or None,
+                    )
+                    refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(uid)
+                    if refreshed is not None:
+                        tt_by_auth[uid] = refreshed
+                        if not refreshed.is_archived:
+                            stats["entry_error"] += 1
+                            print(
+                                f"  ОШИБКА: пользователь {_harvest_display_name(sample)} "
+                                f"(auth_user_id={uid}) не в архиве после импорта"
+                            )
                 if user_source == "harvest":
                     harvest_only_names.add(sample.harvest_user_key)
                     if tt_created and execute:
@@ -1013,6 +1306,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         print(f"  + создан TT-пользователь Harvest: {_harvest_display_name(sample)}")
                 elif user_source == "auth" and tt_created:
                     stats["tt_user_created"] += 1
+                harvest_user_sources[_key] = user_source
 
             granter: int | None = None
 
@@ -1194,6 +1488,22 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         stats=stats,
                     )
 
+                imported_project_ids = list(project_meta.keys())
+                print("\nСтавки billable для архивных/уволенных сотрудников (колонка Billable Rate):")
+                for hkey, sample in sorted(unique_by_harvest_user.items(), key=lambda x: x[0]):
+                    uid = user_index.get(hkey)
+                    if uid is None:
+                        continue
+                    await ensure_departed_user_harvest_rates(
+                        session,
+                        harvest_user_key=hkey,
+                        sample_row=sample,
+                        auth_user_id=uid,
+                        user_source=harvest_user_sources.get(hkey, "tt"),
+                        project_ids=imported_project_ids,
+                        stats=stats,
+                    )
+
                 await session.flush()
 
                 print(
@@ -1272,6 +1582,42 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                             f"флаг задачи={'billable' if db_flag else 'non-billable'}"
                         )
 
+                print("\nСверка по пользователям (строки CSV = записи TT, часы 1:1):")
+                users_ok = True
+                expected_users = _expected_hours_by_harvest_user(rows)
+                imported_project_ids = list(project_meta.keys())
+                db_by_auth = await db_user_hours_for_projects(session, imported_project_ids)
+                for hkey in sorted(expected_users, key=lambda k: expected_users[k][0].lower()):
+                    name, exp_total, exp_bill, exp_non, exp_rows = expected_users[hkey]
+                    uid = user_index.get(hkey) or user_index.get(_norm(hkey))
+                    if uid is None:
+                        users_ok = False
+                        print(f"  [ОТСУТСТВУЕТ] {name}: нет TT-пользователя")
+                        continue
+                    tt_row = tt_by_auth.get(uid)
+                    if tt_row is None:
+                        tt_row = await TimeTrackingUserRepository(session).get_by_auth_user_id(uid)
+                    if tt_row is None or not tt_row.is_archived:
+                        users_ok = False
+                        print(f"  [НЕ В АРХИВЕ] {name} (auth_user_id={uid})")
+                    db_total, db_bill, db_non, db_rows = db_by_auth.get(
+                        uid, (Decimal("0"), Decimal("0"), Decimal("0"), 0)
+                    )
+                    user_ok = (
+                        db_total == _quantize_harvest_hours(exp_total)
+                        and db_bill == _quantize_harvest_hours(exp_bill)
+                        and db_non == _quantize_harvest_hours(exp_non)
+                        and db_rows == exp_rows
+                    )
+                    if not user_ok:
+                        users_ok = False
+                    status = "OK" if user_ok else "РАСХОЖДЕНИЕ"
+                    print(
+                        f"  [{status}] {name}: файл {exp_rows} строк / {exp_total} ч "
+                        f"(b {exp_bill}, nb {exp_non}), "
+                        f"БД {db_rows} строк / {db_total} ч (b {db_bill}, nb {db_non})"
+                    )
+
                 print(
                     f"\nИтого: файл {expected_hours_total} "
                     f"(billable {expected_billable_total}, non-billable {expected_non_billable_total}), "
@@ -1284,6 +1630,16 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
 
                 if not tasks_ok:
                     print("ОШИБКА: часы или billable-флаг задач не совпадают с Harvest.")
+                    await session.rollback()
+                    return 1
+
+                if not users_ok:
+                    print("ОШИБКА: пользователи или их часы/строки не совпадают с Harvest.")
+                    await session.rollback()
+                    return 1
+
+                if stats["hourly_rate_error"] > 0:
+                    print(f"\nОШИБКА: не удалось выставить ставок: {stats['hourly_rate_error']}")
                     await session.rollback()
                     return 1
 
@@ -1313,6 +1669,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                 f"доступ к проекту выдан: {stats['project_access_granted']}; "
                 f"партнёров добавлено: {stats['project_partner_added']}; "
                 f"TT из auth: {stats['tt_user_created']}, placeholder Harvest: {stats['tt_user_harvest_placeholder']}; "
+                f"billable-ставок: {stats['hourly_rate_billable']}, cost-ставок: {stats['hourly_rate_cost']}; "
                 f"записей времени: {stats['entry_created'] or stats['entry_planned']} "
                 f"(дубликаты: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
             )

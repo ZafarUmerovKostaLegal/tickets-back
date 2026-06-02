@@ -129,8 +129,19 @@ python scripts/import_harvest_time_report.py --execute --replace
 - **Task**, **Notes** → задача и описание
 - **Hours** → часы (как в файле, 2 знака)
 - **Billable?** (`Yes`/`No`) → billable / non-billable
-- **First Name** + **Last Name** → пользователь (создаётся placeholder, если нет в системе)
+- **First Name** + **Last Name** → пользователь в TT (**в архиве**), доступ к проекту, все строки CSV
 - **Currency** → валюта клиента/проекта
+- **Billable Rate** / **Cost Rate** → почасовые ставки для архивных/уволенных сотрудников (колонки 15 и 17 CSV)
+
+### Пользователи (архив + без пробелов)
+
+- Все **12** имён из CSV создаются/обновляются в `time_tracking_users` с **`is_archived=true`**
+- Если сотрудника нет в auth — placeholder `harvest.*@import.kostalegal.local`
+- Если есть в auth — подтягивается из auth DB, но в TT всё равно **архив**
+- Для **архивных**, **уволенных** (auth `is_archived`) и **placeholder Harvest** выставляются **billable-ставки** из колонки **Billable Rate** (интервалы по датам работ; при смене тарифа — несколько интервалов, напр. 120 → 180 EUR)
+- Ставки проекта `0.01` (per_project) для этих пользователей заменяются глобальными ставками из Harvest
+- **312 строк = 312 записей времени** — скрипт откатывает импорт, если хоть одна строка не попала в БД
+- Сверка по каждому пользователю: число строк и часы (total / billable / non-billable) как в CSV
 
 ### Задачи проекта (как в Harvest)
 
