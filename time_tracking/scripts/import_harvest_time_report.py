@@ -543,7 +543,15 @@ async def _load_auth_users_for_import(auth_db_url: str) -> tuple[dict[str, int],
     return index, by_id
 
 
-async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str = "", replace: bool = False) -> int:
+async def _run(
+    *,
+    path: Path,
+    execute: bool,
+    database_url: str,
+    auth_db_url: str = "",
+    replace: bool = False,
+    team_only: bool = False,
+) -> int:
     from sqlalchemy import and_, case, delete, func, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -1585,7 +1593,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         tt_by_auth[auth_user_id] = refreshed
 
                 description = hr.notes
-                if execute:
+                if execute and not team_only:
                     if granter is None:
                         granter = auth_user_id
                     import_ref = hr.import_ref(harvest_source_name)
@@ -1620,7 +1628,7 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                             f"  ОШИБКА записи {hr.work_date} {_harvest_display_name(hr)} "
                             f"({hr.hours} ч): {e}"
                         )
-                else:
+                elif not execute:
                     stats["entry_planned"] += 1
 
             if harvest_only_names:
@@ -1686,6 +1694,24 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         print(f"    [{status}] {name}: {access_note}, {rate_note}")
 
                 await session.flush()
+
+                if team_only:
+                    if not team_ok:
+                        print(
+                            "\nВНИМАНИЕ: для части сотрудников остался [РАСХОЖДЕНИЕ] выше. "
+                            "Остальные сохранены."
+                        )
+                    await session.commit()
+                    print(
+                        "\nГотово (режим --team-only): записи времени НЕ трогались.\n"
+                        f"  TT-пользователей создано из auth: {stats['tt_user_created']}, "
+                        f"архивных placeholder: {stats['tt_user_harvest_placeholder']};\n"
+                        f"  доступ к проекту выдан: {stats['project_access_granted']}; "
+                        f"партнёров добавлено: {stats['project_partner_added']};\n"
+                        f"  ставок billable: {stats['hourly_rate_billable']}, "
+                        f"cost: {stats['hourly_rate_cost']}."
+                    )
+                    return 0
 
                 print(
                     f"\nЗаписей времени: создано {stats['entry_created']}, "
@@ -1899,6 +1925,15 @@ def main() -> int:
         action="store_true",
         help="Удалить старые записи времени по проектам из файла перед импортом (чистый 1:1).",
     )
+    p.add_argument(
+        "--team-only",
+        action="store_true",
+        help=(
+            "Только команда: завести пользователей (отсутствующих — архивными), "
+            "выдать доступ к проекту и ставки. Записи времени НЕ трогаются, откатов нет. "
+            "Запускать вместе с --execute."
+        ),
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
@@ -1928,6 +1963,7 @@ def main() -> int:
             database_url=database_url,
             auth_db_url=auth_db_url,
             replace=args.replace,
+            team_only=args.team_only,
         )
     )
 
