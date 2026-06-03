@@ -358,6 +358,18 @@ class UserUpsertBody(BaseModel):
     weekly_capacity_hours: Optional[Decimal] = Field(None, alias="weeklyCapacityHours")
 
 
+class ManualTimeTrackingUserCreateBody(BaseModel):
+
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str = Field(..., min_length=1, max_length=255, alias="displayName")
+    email: Optional[str] = Field(None, max_length=255)
+    position: Optional[str] = Field(None, max_length=256)
+    is_archived: bool = Field(True, alias="isArchived")
+    weekly_capacity_hours: Optional[Decimal] = Field(None, alias="weeklyCapacityHours")
+
+
 def _user_payload_bool(user: dict, snake: str, camel: str) -> bool:
 
     v = user.get(snake)
@@ -608,6 +620,15 @@ async def upsert_user(
 
     payload = _self_time_tracking_user_upsert_payload(user, body)
     return await _tt_json("POST", "/users", json=payload)
+
+
+@router.post("/users/manual", status_code=201)
+async def create_manual_time_tracking_user(
+    body: ManualTimeTrackingUserCreateBody,
+    _: dict = Depends(require_manage_role),
+):
+    payload = _alias_free_payload(body, "manual tt user create")
+    return await _tt_json("POST", "/users/manual", json=payload)
 
 
 @router.get("/clients")

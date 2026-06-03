@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models import TimeTrackingUserModel
@@ -21,6 +21,17 @@ class TimeTrackingUserRepository:
     async def get_by_auth_user_id(self, auth_user_id: int) -> TimeTrackingUserModel | None:
         r = await self._session.execute(
             select(TimeTrackingUserModel).where(TimeTrackingUserModel.auth_user_id == auth_user_id)
+        )
+        return r.scalars().one_or_none()
+
+    async def get_by_email(self, email: str) -> TimeTrackingUserModel | None:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        r = await self._session.execute(
+            select(TimeTrackingUserModel).where(
+                func.lower(TimeTrackingUserModel.email) == normalized
+            )
         )
         return r.scalars().one_or_none()
 

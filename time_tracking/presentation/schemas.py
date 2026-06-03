@@ -37,6 +37,32 @@ class UserResponse(BaseModel):
     )
     created_at: datetime
     updated_at: Optional[datetime] = None
+    is_manual: bool = Field(
+        False,
+        alias="isManual",
+        description="Создан в учёте времени без регистрации в auth",
+    )
+
+
+class ManualTimeTrackingUserCreateBody(BaseModel):
+
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str = Field(..., min_length=1, max_length=255, alias="displayName")
+    email: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Необязательно; иначе служебный email manual.*@manual.kostalegal.local",
+    )
+    position: Optional[str] = Field(None, max_length=256)
+    is_archived: bool = Field(True, alias="isArchived")
+    weekly_capacity_hours: Optional[Decimal] = Field(
+        None,
+        gt=0,
+        le=168,
+        alias="weeklyCapacityHours",
+    )
 
 
 class WeeklyCapacityPatchBody(BaseModel):

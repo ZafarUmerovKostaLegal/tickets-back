@@ -205,6 +205,15 @@ def ensure_delete_tt_user_allowed(viewer: dict) -> None:
     raise HTTPException(status_code=403, detail="Удаление из учёта времени — только для администраторов")
 
 
+def ensure_create_manual_tt_user_allowed(viewer: dict) -> None:
+    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Добавлять сотрудников без регистрации могут только администратор или партнёр",
+    )
+
+
 async def ensure_can_list_project_assignees(
     session: AsyncSession,
     viewer: dict,

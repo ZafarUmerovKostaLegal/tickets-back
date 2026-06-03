@@ -1,6 +1,6 @@
 # Импорт Harvest — time tracking
 
-**Источник данных (1:1):** `harvest_time_report_from2023-01-23to2026-05-26.csv`  
+**Источник данных (1:1):** `harvest_time_report_from2023-01-23to2026-06-02.csv`  
 (точный CSV-экспорт Harvest; xlsx с тем же именем — запасной вариант)
 
 Каждая строка CSV = одна запись времени с теми же Hours и Billable?.
@@ -20,7 +20,7 @@ pip install -r time_tracking/requirements.txt
 
 **2. CSV уже в репозитории:**
 
-`time_tracking/harvest_time_report_from2023-01-23to2026-05-26.csv` — указывать `--file` не обязательно.
+`time_tracking/harvest_time_report_from2023-01-23to2026-06-02.csv` — указывать `--file` не обязательно.
 
 **3. Проверка без записи в БД:**
 
@@ -95,8 +95,8 @@ python scripts/import_harvest_time_report.py --execute --replace --database-url 
 ```bash
 cd /path/to/tickets-back
 
-docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.csv \
-  $(docker compose ps -q time_tracking):/tmp/harvest_time_report_from2023-01-23to2026-05-26.csv
+docker cp timetrackinck/harvest_time_report_from2023-01-23to2026-06-02.csv \
+  $(docker compose ps -q time_tracking):/tmp/harvest_time_report_from2023-01-23to2026-06-02.csv
 ```
 
 **2. В контейнере** `time_tracking`:
@@ -116,9 +116,9 @@ python scripts/import_harvest_time_report.py --execute --replace
 
 | Путь | Описание |
 |------|----------|
-| `time_tracking/harvest_time_report_from2023-01-23to2026-05-26.csv` | в репозитории (основной) |
-| `/tmp/harvest_time_report_from2023-01-23to2026-05-26.csv` | после `docker cp` |
-| `timetrackinck/harvest_time_report_from2023-01-23to2026-05-26.csv` | на хосте сервера |
+| `time_tracking/harvest_time_report_from2023-01-23to2026-06-02.csv` | в репозитории (основной) |
+| `/tmp/harvest_time_report_from2023-01-23to2026-06-02.csv` | после `docker cp` |
+| `timetrackinck/harvest_time_report_from2023-01-23to2026-06-02.csv` | на хосте сервера |
 
 ---
 
@@ -148,9 +148,11 @@ python scripts/import_harvest_time_report.py --execute --replace
 
 | Раздел Harvest | Задачи | Часы |
 |----------------|--------|------|
-| Billable tasks | Drafting, Document Review, Emails, Telephone calls, Research, Meetings, Document Submission, My mehnat registration | **370.84** |
-| Non-billable tasks | Kosta Legal Internal | **8.71** |
-| **Итого** | | **379.55** |
+| Billable tasks | Drafting, Document Review, Emails, Telephone calls, Research, Meetings, Document Submission, My mehnat registration | **376.20** |
+| Non-billable tasks | Kosta Legal Internal | **8.99** |
+| **Итого** | | **385.19** |
+
+Сумма billable из отчёта Harvest (Billable Amount): **€53 848.00** — совпадает с расчётом по индивидуальным ставкам.
 
 `billable_by_default` задачи выводится из CSV: non-billable только если все часы по задаче non-billable (как **Kosta Legal Internal**).
 

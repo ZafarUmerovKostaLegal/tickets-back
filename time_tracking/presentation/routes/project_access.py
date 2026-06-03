@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access_control import ensure_time_entry_subject_allowed
 from application.auth_user_directory import ensure_time_tracking_user_from_auth
+from application.manual_tt_users import is_manual_tt_auth_user_id
 from application.project_billable_rate_sync import (
     project_uses_shared_billable,
     sync_project_billable_rates_to_assigned_users,
@@ -13,7 +14,7 @@ from application.project_billable_rate_sync import (
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from infrastructure.database import get_session
-from infrastructure.repositories import ClientProjectRepository, UserProjectAccessRepository
+from infrastructure.repositories import ClientProjectRepository, TimeTrackingUserRepository, UserProjectAccessRepository
 from presentation.deps import require_bearer_user
 from presentation.schemas import ProjectAccessOut, ProjectAccessPutBody
 
@@ -25,6 +26,14 @@ async def _ensure_user(
     authorization: str | None,
     auth_user_id: int,
 ) -> None:
+    tur = TimeTrackingUserRepository(session)
+    if await tur.get_by_auth_user_id(auth_user_id) is not None:
+        return
+    if is_manual_tt_auth_user_id(auth_user_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Пользователь учёта времени без auth не найден — создайте его через POST /users/manual",
+        )
     try:
         await ensure_time_tracking_user_from_auth(session, authorization, auth_user_id)
     except ValueError as e:

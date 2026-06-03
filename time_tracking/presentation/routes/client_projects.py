@@ -635,7 +635,8 @@ async def create_client_project(
                 body.initial_time_tracking_user_billable_hourly_amounts
             )
             for uid in initial:
-                await ensure_time_tracking_user_from_auth(session, authorization, uid)
+                if await TimeTrackingUserRepository(session).get_by_auth_user_id(uid) is None:
+                    await ensure_time_tracking_user_from_auth(session, authorization, uid)
                 applied_project_scoped_rate = False
                 amt = None
                 if not project_uses_shared_billable(row):

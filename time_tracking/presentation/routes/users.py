@@ -13,12 +13,14 @@ from application.access_control import (
     ensure_can_list_all_tt_users,
     ensure_can_view_colleague_directory,
     ensure_can_read_tt_user_row,
+    ensure_create_manual_tt_user_allowed,
     ensure_delete_tt_user_allowed,
     ensure_managed_scope_allowed,
     ensure_upsert_user_allowed,
     ensure_weekly_capacity_patch_allowed,
     ensure_can_grant_time_entry_edit_unlock,
 )
+from application.manual_tt_users import create_manual_tt_user, is_manual_tt_auth_user_id
 from application.project_partner_requirement import (
     ensure_projects_have_partner_assignee,
     user_satisfies_partner_rule,
@@ -32,6 +34,7 @@ from infrastructure.repositories import (
 from infrastructure.repository_time_entry_unlocks import TimeEntryEditUnlockRepository
 from presentation.deps import require_bearer_user
 from presentation.schemas import (
+    ManualTimeTrackingUserCreateBody,
     UserResponse,
     UserUpsertBody,
     WeeklyCapacityPatchBody,
@@ -70,6 +73,7 @@ def _user_response_directory(
         weekly_capacity_hours=row.weekly_capacity_hours,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        is_manual=is_manual_tt_auth_user_id(int(row.auth_user_id)),
     )
 
 
@@ -186,6 +190,46 @@ async def list_users_in_manager_scope(
             )
         )
     return out
+
+
+@router.post(
+    "/manual",
+    response_model=UserResponse,
+    status_code=201,
+    summary="Добавить сотрудника в учёт времени без регистрации в auth",
+)
+async def create_manual_tt_user_endpoint(
+    body: ManualTimeTrackingUserCreateBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> UserResponse:
+    ensure_create_manual_tt_user_allowed(viewer)
+    try:
+        row = await create_manual_tt_user(
+            session,
+            display_name=body.display_name,
+            email=body.email,
+            position=body.position,
+            is_archived=body.is_archived,
+            weekly_capacity_hours=body.weekly_capacity_hours,
+        )
+        await session.commit()
+        await session.refresh(row)
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except IntegrityError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(getattr(e, "orig", None) or e)) from e
+    except DBAPIError as e:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail=str(getattr(e, "orig", None) or e)) from e
+    pos = row.position
+    if pos is not None and str(pos).strip():
+        pos = str(pos).strip()
+    else:
+        pos = None
+    return _user_response_directory(row, position=pos)
 
 
 @router.get("/{auth_user_id}", response_model=UserResponse, summary="Один пользователь учёта времени")

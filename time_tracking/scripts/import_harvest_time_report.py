@@ -38,7 +38,8 @@ from openpyxl import load_workbook
 
 TT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TT_ROOT.parent
-HARVEST_REPORT_BASENAME = "harvest_time_report_from2023-01-23to2026-05-26"
+HARVEST_REPORT_BASENAME = "harvest_time_report_from2023-01-23to2026-06-02"
+HARVEST_REPORT_BASENAME_FALLBACKS = ("harvest_time_report_from2023-01-23to2026-05-26",)
 HARVEST_CSV_NAME = f"{HARVEST_REPORT_BASENAME}.csv"
 HARVEST_XLSX_NAME = f"{HARVEST_REPORT_BASENAME}.xlsx"
 DEFAULT_HARVEST_FILE = TT_ROOT / HARVEST_CSV_NAME
@@ -59,7 +60,11 @@ def _harvest_file_candidates(preferred: Path) -> list[Path]:
             out.append(p)
 
     add(preferred)
-    for name in (HARVEST_CSV_NAME, HARVEST_XLSX_NAME):
+    names = [HARVEST_CSV_NAME, HARVEST_XLSX_NAME]
+    for base in HARVEST_REPORT_BASENAME_FALLBACKS:
+        names.append(f"{base}.csv")
+        names.append(f"{base}.xlsx")
+    for name in names:
         add(TT_ROOT / name)
         add(Path("/tmp") / name)
         add(REPO_ROOT / "timetrackinck" / name)
