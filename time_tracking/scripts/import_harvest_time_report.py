@@ -1354,6 +1354,36 @@ async def _run(*, path: Path, execute: bool, database_url: str, auth_db_url: str
                         )
                 await session.flush()
 
+            # Всегда (даже без --replace): убрать прежние Harvest-импорты этих проектов,
+            # сделанные из ДРУГОГО файла отчёта (например, при переименовании отчёта).
+            # Иначе записи задвоятся и сверка часов не сойдётся. Ручные записи (без
+            # префикса harvest-import:) не трогаем.
+            if execute and not replace:
+                current_prefix = f"harvest-import:{harvest_source_name}:"
+                pairs = sorted({(r.client_name, r.project_name) for r in rows})
+                stale_total = 0
+                for client_name, project_name in pairs:
+                    existing_client = await find_client_by_name(session, client_name)
+                    if existing_client is None:
+                        continue
+                    existing_project = await find_project(session, existing_client.id, project_name)
+                    if existing_project is None:
+                        continue
+                    result = await session.execute(
+                        delete(TimeEntryModel).where(
+                            TimeEntryModel.project_id == existing_project.id,
+                            TimeEntryModel.external_reference_url.like("harvest-import:%"),
+                            TimeEntryModel.external_reference_url.notlike(f"{current_prefix}%"),
+                        )
+                    )
+                    stale_total += int(result.rowcount or 0)
+                if stale_total:
+                    print(
+                        f"Удалены устаревшие Harvest-записи из других файлов отчёта: "
+                        f"{stale_total} шт. (повторный импорт даст чистый 1:1)."
+                    )
+                await session.flush()
+
             client_cache: dict[str, str] = {}
             project_cache: dict[tuple[str, str], str] = {}
             project_meta: dict[str, tuple[str, str, str]] = {}

@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access_control import ensure_time_entry_subject_allowed
 from infrastructure.database import get_session
-from infrastructure.repositories import HourlyRateRepository, TimeTrackingUserRepository
+from infrastructure.repositories import (
+    ClientProjectRepository,
+    HourlyRateRepository,
+    TimeTrackingUserRepository,
+)
 from presentation.deps import require_bearer_user
 from presentation.schemas import HourlyRateCreateBody, HourlyRateOut, HourlyRatePatchBody
 
@@ -45,6 +49,11 @@ async def get_hourly_rate(
 async def list_hourly_rates(
     auth_user_id: int,
     kind: RateKindQuery = Query(..., alias="kind"),
+    project_id: str | None = Query(
+        None,
+        alias="projectId",
+        description="Фильтр по проекту: ставки только этого проекта. 'global' — только общие (без привязки).",
+    ),
     session: AsyncSession = Depends(get_session),
     viewer: dict = Depends(require_bearer_user),
 ) -> list[HourlyRateOut]:
@@ -54,6 +63,11 @@ async def list_hourly_rates(
         return []
     repo = HourlyRateRepository(session)
     rows = await repo.list_by_user_and_kind(auth_user_id, kind.value)
+    pid = (project_id or "").strip()
+    if pid.lower() == "global":
+        rows = [r for r in rows if not (getattr(r, "applies_to_project_id", None) or None)]
+    elif pid:
+        rows = [r for r in rows if (getattr(r, "applies_to_project_id", None) or None) == pid]
     return [HourlyRateOut.model_validate(r) for r in rows]
 
 
@@ -66,6 +80,11 @@ async def create_hourly_rate(
 ) -> HourlyRateOut:
     await ensure_time_entry_subject_allowed(session, viewer, auth_user_id, write=True)
     await _ensure_user(session, auth_user_id)
+    project_id = (body.applies_to_project_id or "").strip() or None
+    if project_id is not None:
+        projects = ClientProjectRepository(session)
+        if await projects.get_by_id_global(project_id) is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
     repo = HourlyRateRepository(session)
     try:
         row = await repo.create(
@@ -75,6 +94,7 @@ async def create_hourly_rate(
             currency=body.currency,
             valid_from=body.valid_from,
             valid_to=body.valid_to,
+            applies_to_project_id=project_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

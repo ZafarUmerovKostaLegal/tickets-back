@@ -45,9 +45,10 @@ router = APIRouter(prefix="/api/v1/users", tags=["time_tracking"])
 async def list_hourly_rates_under_users(
     user_id: int,
     kind: str = Query(..., description="billable | cost"),
+    project_id: str | None = Query(None, alias="projectId"),
     user: dict = Depends(get_current_user),
 ):
-    return await hourly_rates_list_gateway(user_id, kind, user)
+    return await hourly_rates_list_gateway(user_id, kind, user, project_id=project_id)
 
 
 @router.get("/{user_id}/hourly-rates/{rate_id}")

@@ -108,6 +108,10 @@ class HourlyRateOut(BaseModel):
     currency: str
     valid_from: Optional[date] = None
     valid_to: Optional[date] = None
+    applies_to_project_id: Optional[str] = Field(
+        None,
+        description="Если задан — ставка действует только в этом проекте (имеет приоритет над общей).",
+    )
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -120,6 +124,11 @@ class HourlyRateCreateBody(BaseModel):
     currency: str = "USD"
     valid_from: Optional[date] = Field(None, alias="validFrom")
     valid_to: Optional[date] = Field(None, alias="validTo")
+    applies_to_project_id: Optional[str] = Field(
+        None,
+        alias="appliesToProjectId",
+        description="Привязать ставку к проекту; внутри проекта допускается несколько непересекающихся периодов.",
+    )
 
 
 class HourlyRatePatchBody(BaseModel):

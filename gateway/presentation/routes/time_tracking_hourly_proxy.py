@@ -91,6 +91,7 @@ class HourlyRateCreateBody(BaseModel):
     currency: str = "USD"
     valid_from: Optional[date] = Field(None, alias="validFrom")
     valid_to: Optional[date] = Field(None, alias="validTo")
+    applies_to_project_id: Optional[str] = Field(None, alias="appliesToProjectId")
 
 
 class HourlyRatePatchBody(BaseModel):
@@ -102,7 +103,12 @@ class HourlyRatePatchBody(BaseModel):
     valid_to: Optional[date] = Field(None, alias="validTo")
 
 
-async def hourly_rates_list_gateway(auth_user_id: int, kind: str, user: dict) -> Any:
+async def hourly_rates_list_gateway(
+    auth_user_id: int,
+    kind: str,
+    user: dict,
+    project_id: str | None = None,
+) -> Any:
     if kind not in ("billable", "cost"):
         raise HTTPException(status_code=400, detail="kind must be billable or cost")
     if kind == "cost":
@@ -110,10 +116,14 @@ async def hourly_rates_list_gateway(auth_user_id: int, kind: str, user: dict) ->
     else:
         _ensure_billable_rates_view(user)
     base = _time_tracking_base()
+    params: dict[str, str] = {"kind": kind}
+    pid = (project_id or "").strip()
+    if pid:
+        params["projectId"] = pid
     r = await send_upstream_request(
         "GET",
         f"{base}/users/{auth_user_id}/hourly-rates",
-        params={"kind": kind},
+        params=params,
         headers=merge_upstream_headers(),
         timeout=10.0,
         unavailable_status=503,

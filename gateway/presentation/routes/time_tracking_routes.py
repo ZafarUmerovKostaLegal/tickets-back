@@ -440,9 +440,14 @@ def _self_time_tracking_user_upsert_payload(user: dict, body: UserUpsertBody) ->
 async def list_hourly_rates(
     auth_user_id: int,
     kind: str = Query(..., description="billable | cost"),
+    project_id: str | None = Query(
+        None,
+        alias="projectId",
+        description="Ставки конкретного проекта; 'global' — только общие.",
+    ),
     user: dict = Depends(get_current_user),
 ):
-    return await hourly_rates_list_gateway(auth_user_id, kind, user)
+    return await hourly_rates_list_gateway(auth_user_id, kind, user, project_id=project_id)
 
 
 @router.get("/users/{auth_user_id}/hourly-rates/{rate_id}")
