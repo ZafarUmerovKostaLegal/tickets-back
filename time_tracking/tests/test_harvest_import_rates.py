@@ -7,6 +7,8 @@ from scripts.import_harvest_time_report import (
     HarvestRow,
     _harvest_user_rate_intervals,
     _harvest_users_for_project,
+    _parse_hours,
+    _parse_money_rate,
     _user_needs_billable_rate_from_csv,
 )
 
@@ -87,3 +89,17 @@ def test_users_for_project_unique() -> None:
 def test_needs_billable_rate_only_when_billable_hours() -> None:
     assert _user_needs_billable_rate_from_csv([_row(date(2023, 1, 1), "120")])
     assert not _user_needs_billable_rate_from_csv([_row(date(2023, 1, 1), "0", billable=False)])
+
+
+def test_parse_money_rate_handles_thousands_separator() -> None:
+    # UZS-отчёты пишут ставку как "2,300,000.0"
+    assert _parse_money_rate("2,300,000.0") == Decimal("2300000.0000")
+    assert _parse_money_rate("120.0") == Decimal("120.0000")
+    assert _parse_money_rate("") is None
+    assert _parse_money_rate(None) is None
+
+
+def test_parse_hours_handles_thousands_separator() -> None:
+    assert _parse_hours("0.17") == Decimal("0.17")
+    assert _parse_hours("1,234.5") == Decimal("1234.50")
+    assert _parse_hours("") is None

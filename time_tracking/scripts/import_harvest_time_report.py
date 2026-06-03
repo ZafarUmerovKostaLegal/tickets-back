@@ -209,11 +209,18 @@ def _quantize_harvest_hours(h: Decimal) -> Decimal:
     return h.quantize(HARVEST_HOURS_QUANT, rounding=ROUND_HALF_UP)
 
 
+def _clean_numeric_text(raw: object) -> str:
+    # Harvest экспортирует числа с разделителем тысяч запятой и точкой-десятичным
+    # (например "2,300,000.0" для UZS). Убираем запятые-разделители тысяч.
+    return str(raw if raw is not None else "").strip().replace(",", "")
+
+
 def _parse_hours(raw: object) -> Decimal | None:
-    if raw is None or raw == "":
+    text = _clean_numeric_text(raw)
+    if not text:
         return None
     try:
-        h = Decimal(str(raw))
+        h = Decimal(text)
     except Exception:
         return None
     if h <= 0:
@@ -222,10 +229,11 @@ def _parse_hours(raw: object) -> Decimal | None:
 
 
 def _parse_money_rate(raw: object) -> Decimal | None:
-    if raw is None or raw == "":
+    text = _clean_numeric_text(raw)
+    if not text:
         return None
     try:
-        val = Decimal(str(raw).strip())
+        val = Decimal(text)
     except Exception:
         return None
     return val.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
