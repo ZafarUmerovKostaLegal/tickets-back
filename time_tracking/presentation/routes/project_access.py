@@ -67,12 +67,23 @@ async def put_project_access(
     repo = UserProjectAccessRepository(session)
     projects = ClientProjectRepository(session)
     try:
+        old_pids = await repo.list_project_ids(auth_user_id)
+        old_set = set(old_pids)
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for raw in body.project_ids:
+            pid = (raw or "").strip()
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            normalized.append(pid)
+        new_set = set(normalized)
+        newly_added = [p for p in normalized if p not in old_set]
+        delta_pids = old_set.symmetric_difference(new_set)
+
         raw_rates = body.project_billable_hourly_amounts_by_project_id or {}
         rates_norm = {(k or "").strip(): v for k, v in raw_rates.items() if (k or "").strip()}
-        for pid in body.project_ids:
-            pid_key = (pid or "").strip()
-            if not pid_key:
-                continue
+        for pid_key in normalized:
             proj_row = await projects.get_by_id_global(pid_key)
             if not proj_row or project_uses_shared_billable(proj_row):
                 continue
@@ -88,18 +99,18 @@ async def put_project_access(
                     valid_to=proj_row.end_date,
                 )
         await validate_hourly_rates_for_project_access(
-            session, auth_user_id=auth_user_id, project_ids=list(body.project_ids)
+            session, auth_user_id=auth_user_id, project_ids=newly_added
         )
-        affected = await repo.replace_all(
+        await repo.replace_all(
             auth_user_id,
-            list(body.project_ids),
+            normalized,
             granted_by_auth_user_id=body.granted_by_auth_user_id,
             projects=projects,
         )
         await ensure_projects_have_partner_assignee(
-            session, repo, affected, projects=projects, authorization=authorization
+            session, repo, delta_pids, projects=projects, authorization=authorization
         )
-        for pid in affected:
+        for pid in delta_pids:
             await sync_project_billable_rates_to_assigned_users(session, pid)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
