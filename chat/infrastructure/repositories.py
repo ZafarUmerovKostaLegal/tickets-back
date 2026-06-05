@@ -10,11 +10,13 @@ from infrastructure.models import (
     KOSTA_DAILY_SLUG,
     MEMBER_ROLE_ADMIN,
     MEMBER_ROLE_MEMBER,
+    REACTION_MAX_EMOJI_LEN,
     ROOM_TYPE_COMPANY,
     ROOM_TYPE_DM,
     ROOM_TYPE_GROUP,
     ChatMessageAttachmentModel,
     ChatMessageModel,
+    ChatMessageReactionModel,
     ChatReadStateModel,
     ChatRoomMemberModel,
     ChatRoomModel,
@@ -459,6 +461,67 @@ class ChatRepository:
             added.append(raw)
         await self._session.flush()
         return added
+
+
+    async def reactions_for_message_ids(
+        self, message_ids: list[int]
+    ) -> dict[int, list[ChatMessageReactionModel]]:
+        out: dict[int, list[ChatMessageReactionModel]] = {}
+        if not message_ids:
+            return out
+        r = await self._session.execute(
+            select(ChatMessageReactionModel)
+            .where(ChatMessageReactionModel.message_id.in_(message_ids))
+            .order_by(ChatMessageReactionModel.message_id, ChatMessageReactionModel.emoji, ChatMessageReactionModel.id)
+        )
+        for rx in r.scalars().all():
+            out.setdefault(rx.message_id, []).append(rx)
+        return out
+
+    async def toggle_reaction(
+        self,
+        user_id: int,
+        message_id: int,
+        emoji: str,
+    ) -> list[ChatMessageReactionModel] | None:
+        """Toggle a reaction. Returns updated list of reactions for the message, or None if not allowed."""
+        emoji = emoji.strip()[:REACTION_MAX_EMOJI_LEN]
+        if not emoji:
+            return None
+        r = await self._session.execute(
+            select(ChatMessageModel).where(ChatMessageModel.id == message_id)
+        )
+        msg = r.scalars().one_or_none()
+        if not msg:
+            return None
+        if await self.is_member(user_id, msg.room_id) is None:
+            return None
+        existing_r = await self._session.execute(
+            select(ChatMessageReactionModel).where(
+                ChatMessageReactionModel.message_id == message_id,
+                ChatMessageReactionModel.user_id == user_id,
+                ChatMessageReactionModel.emoji == emoji,
+            )
+        )
+        existing = existing_r.scalars().one_or_none()
+        if existing:
+            await self._session.delete(existing)
+        else:
+            self._session.add(
+                ChatMessageReactionModel(
+                    message_id=message_id,
+                    user_id=user_id,
+                    emoji=emoji,
+                    created_at=_utc_now(),
+                )
+            )
+        await self._session.flush()
+        updated = await self._session.execute(
+            select(ChatMessageReactionModel)
+            .where(ChatMessageReactionModel.message_id == message_id)
+            .order_by(ChatMessageReactionModel.emoji, ChatMessageReactionModel.id)
+        )
+        return list(updated.scalars().all())
 
 
 class HealthRepository:

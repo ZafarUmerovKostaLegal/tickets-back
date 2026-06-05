@@ -23,11 +23,35 @@ async def _ensure_reply_column(conn) -> None:
     )
 
 
+async def _ensure_reactions_table(conn) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_message_reactions (
+                id BIGSERIAL PRIMARY KEY,
+                message_id BIGINT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                emoji VARCHAR(8) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                CONSTRAINT uq_chat_reaction_per_user UNIQUE (message_id, user_id, emoji)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_chat_message_reactions_message_id ON chat_message_reactions(message_id)")
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_chat_message_reactions_user_id ON chat_message_reactions(user_id)")
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_reply_column(conn)
+        await _ensure_reactions_table(conn)
     yield
 
 

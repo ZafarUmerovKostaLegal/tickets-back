@@ -17,6 +17,14 @@ class AttachmentOut(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
 
 
+class ReactionCountOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    emoji: str
+    count: int
+    user_ids: list[int] = Field(default_factory=list, alias="userIds")
+
+
 class ReplyToOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -38,6 +46,7 @@ class MessageOut(BaseModel):
     is_deleted: bool = Field(False, alias="isDeleted")
     attachments: list[AttachmentOut] = Field(default_factory=list)
     reply_to: ReplyToOut | None = Field(None, alias="replyTo")
+    reactions: list[ReactionCountOut] = Field(default_factory=list)
 
 
 class RoomMemberOut(BaseModel):
@@ -68,6 +77,12 @@ class RoomsListOut(BaseModel):
 class MessagesListOut(BaseModel):
     items: list[MessageOut]
     has_more: bool = Field(False, alias="hasMore")
+
+
+class ToggleReactionBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    emoji: str = Field(..., min_length=1, max_length=8)
 
 
 class PostMessageBody(BaseModel):
@@ -133,7 +148,23 @@ def reply_to_out(msg) -> ReplyToOut:
     )
 
 
-def message_to_out(msg, attachments=None, *, reply_to: ReplyToOut | None = None) -> MessageOut:
+def reactions_to_out(reactions: list) -> list[ReactionCountOut]:
+    grouped: dict[str, list[int]] = {}
+    for rx in reactions:
+        grouped.setdefault(rx.emoji, []).append(rx.user_id)
+    return [
+        ReactionCountOut(emoji=emoji, count=len(uids), user_ids=uids)
+        for emoji, uids in grouped.items()
+    ]
+
+
+def message_to_out(
+    msg,
+    attachments=None,
+    *,
+    reply_to: ReplyToOut | None = None,
+    reactions: list | None = None,
+) -> MessageOut:
     deleted = msg.deleted_at is not None
     atts = [] if deleted else [attachment_to_out(a) for a in (attachments or [])]
     return MessageOut(
@@ -146,6 +177,7 @@ def message_to_out(msg, attachments=None, *, reply_to: ReplyToOut | None = None)
         is_deleted=deleted,
         attachments=atts,
         reply_to=reply_to,
+        reactions=reactions_to_out(reactions or []),
     )
 
 
@@ -153,7 +185,9 @@ def messages_to_out_list(
     items,
     atts_by_msg: dict,
     replies_by_id: dict,
+    reactions_by_msg: dict | None = None,
 ) -> list[MessageOut]:
+    rxmap = reactions_by_msg or {}
     out: list[MessageOut] = []
     for m in items:
         reply_out = None
@@ -162,7 +196,12 @@ def messages_to_out_list(
             parent = replies_by_id.get(int(rid))
             if parent is not None:
                 reply_out = reply_to_out(parent)
-        out.append(message_to_out(m, atts_by_msg.get(m.id), reply_to=reply_out))
+        out.append(message_to_out(
+            m,
+            atts_by_msg.get(m.id),
+            reply_to=reply_out,
+            reactions=rxmap.get(m.id),
+        ))
     return out
 
 

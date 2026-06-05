@@ -77,6 +77,25 @@ class ChatMessageAttachmentModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+REACTION_MAX_EMOJI_LEN = 8
+
+
+class ChatMessageReactionModel(Base):
+    __tablename__ = "chat_message_reactions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    emoji: Mapped[str] = mapped_column(String(REACTION_MAX_EMOJI_LEN), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "user_id", "emoji", name="uq_chat_reaction_per_user"),
+    )
+
+
 class ChatReadStateModel(Base):
     __tablename__ = "chat_read_state"
 

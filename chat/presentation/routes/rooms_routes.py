@@ -162,12 +162,14 @@ async def list_messages(
     has_more = len(items) > limit
     if has_more:
         items = items[:limit]
-    atts_by_msg = await repo.attachments_for_message_ids([m.id for m in items])
+    msg_ids = [m.id for m in items]
+    atts_by_msg = await repo.attachments_for_message_ids(msg_ids)
     reply_ids = [int(m.reply_to_message_id) for m in items if m.reply_to_message_id is not None]
     replies_by_id = await repo.messages_by_ids(reply_ids)
+    reactions_by_msg = await repo.reactions_for_message_ids(msg_ids)
     await session.commit()
     return MessagesListOut(
-        items=messages_to_out_list(items, atts_by_msg, replies_by_id),
+        items=messages_to_out_list(items, atts_by_msg, replies_by_id, reactions_by_msg),
         has_more=has_more,
     )
 
