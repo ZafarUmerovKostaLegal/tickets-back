@@ -171,19 +171,43 @@ class ChatRepository:
         items.reverse()
         return items
 
+    async def get_message_in_room(self, message_id: int, room_id: int) -> ChatMessageModel | None:
+        r = await self._session.execute(
+            select(ChatMessageModel).where(
+                ChatMessageModel.id == message_id,
+                ChatMessageModel.room_id == room_id,
+            )
+        )
+        return r.scalars().one_or_none()
+
+    async def messages_by_ids(self, message_ids: list[int]) -> dict[int, ChatMessageModel]:
+        if not message_ids:
+            return {}
+        r = await self._session.execute(
+            select(ChatMessageModel).where(ChatMessageModel.id.in_(message_ids))
+        )
+        return {m.id: m for m in r.scalars().all()}
+
     async def create_message(
         self,
         user_id: int,
         room_id: int,
         body: str,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> ChatMessageModel | None:
         if await self.is_member(user_id, room_id) is None:
             return None
+        if reply_to_message_id is not None:
+            parent = await self.get_message_in_room(reply_to_message_id, room_id)
+            if parent is None:
+                return None
         now = _utc_now()
         msg = ChatMessageModel(
             room_id=room_id,
             author_user_id=user_id,
             body=body,
+            reply_to_message_id=reply_to_message_id,
             created_at=now,
             edited_at=None,
             deleted_at=None,

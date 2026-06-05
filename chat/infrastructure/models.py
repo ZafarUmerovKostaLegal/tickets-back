@@ -52,6 +52,12 @@ class ChatMessageModel(Base):
     )
     author_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    reply_to_message_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

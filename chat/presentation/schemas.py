@@ -17,6 +17,15 @@ class AttachmentOut(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
 
 
+class ReplyToOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_id: int = Field(..., alias="messageId")
+    author_user_id: int = Field(..., alias="authorUserId")
+    body: str = ""
+    is_deleted: bool = Field(False, alias="isDeleted")
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -28,6 +37,7 @@ class MessageOut(BaseModel):
     edited_at: datetime | None = Field(None, alias="editedAt")
     is_deleted: bool = Field(False, alias="isDeleted")
     attachments: list[AttachmentOut] = Field(default_factory=list)
+    reply_to: ReplyToOut | None = Field(None, alias="replyTo")
 
 
 class RoomMemberOut(BaseModel):
@@ -61,7 +71,10 @@ class MessagesListOut(BaseModel):
 
 
 class PostMessageBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     body: str = Field(..., min_length=1, max_length=4000)
+    reply_to_message_id: int | None = Field(None, alias="replyToMessageId")
 
 
 class PatchMessageBody(BaseModel):
@@ -107,7 +120,20 @@ def attachment_to_out(att) -> AttachmentOut:
     )
 
 
-def message_to_out(msg, attachments=None) -> MessageOut:
+def reply_to_out(msg) -> ReplyToOut:
+    deleted = msg.deleted_at is not None
+    body = "" if deleted else (msg.body or "")
+    if len(body) > 500:
+        body = body[:497] + "…"
+    return ReplyToOut(
+        message_id=msg.id,
+        author_user_id=msg.author_user_id,
+        body=body,
+        is_deleted=deleted,
+    )
+
+
+def message_to_out(msg, attachments=None, *, reply_to: ReplyToOut | None = None) -> MessageOut:
     deleted = msg.deleted_at is not None
     atts = [] if deleted else [attachment_to_out(a) for a in (attachments or [])]
     return MessageOut(
@@ -119,7 +145,25 @@ def message_to_out(msg, attachments=None) -> MessageOut:
         edited_at=msg.edited_at,
         is_deleted=deleted,
         attachments=atts,
+        reply_to=reply_to,
     )
+
+
+def messages_to_out_list(
+    items,
+    atts_by_msg: dict,
+    replies_by_id: dict,
+) -> list[MessageOut]:
+    out: list[MessageOut] = []
+    for m in items:
+        reply_out = None
+        rid = getattr(m, "reply_to_message_id", None)
+        if rid is not None:
+            parent = replies_by_id.get(int(rid))
+            if parent is not None:
+                reply_out = reply_to_out(parent)
+        out.append(message_to_out(m, atts_by_msg.get(m.id), reply_to=reply_out))
+    return out
 
 
 def room_to_out(row) -> RoomOut:

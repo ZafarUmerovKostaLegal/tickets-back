@@ -24,6 +24,8 @@ from presentation.schemas import (
     RoomOut,
     RoomsListOut,
     message_to_out,
+    messages_to_out_list,
+    reply_to_out,
     room_to_out,
 )
 
@@ -161,9 +163,11 @@ async def list_messages(
     if has_more:
         items = items[:limit]
     atts_by_msg = await repo.attachments_for_message_ids([m.id for m in items])
+    reply_ids = [int(m.reply_to_message_id) for m in items if m.reply_to_message_id is not None]
+    replies_by_id = await repo.messages_by_ids(reply_ids)
     await session.commit()
     return MessagesListOut(
-        items=[message_to_out(m, atts_by_msg.get(m.id)) for m in items],
+        items=messages_to_out_list(items, atts_by_msg, replies_by_id),
         has_more=has_more,
     )
 
@@ -182,10 +186,20 @@ async def post_message(
     if len(text) > settings.max_message_length:
         raise HTTPException(status_code=400, detail="Message too long")
     repo = ChatRepository(session)
-    msg = await repo.create_message(user_id, room_id, text)
+    reply_id = body.reply_to_message_id
+    if reply_id is not None:
+        parent = await repo.get_message_in_room(reply_id, room_id)
+        if not parent:
+            raise HTTPException(status_code=400, detail="Reply target message not found in this room")
+    msg = await repo.create_message(user_id, room_id, text, reply_to_message_id=reply_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Room not found")
-    out = message_to_out(msg)
+    reply_out = None
+    if reply_id is not None:
+        parent = await repo.get_message_in_room(reply_id, room_id)
+        if parent:
+            reply_out = reply_to_out(parent)
+    out = message_to_out(msg, reply_to=reply_out)
     recipients = await repo.member_user_ids(room_id)
     await session.commit()
     await push_chat_event(
@@ -203,6 +217,7 @@ async def post_message_with_file(
     user_id: Annotated[int, Depends(get_current_user_id)],
     file: UploadFile = File(...),
     body: Optional[str] = Form(None),
+    reply_to_message_id: Optional[int] = Form(None, alias="replyToMessageId"),
     session: AsyncSession = Depends(get_session),
 ):
     settings = get_settings()
@@ -217,7 +232,12 @@ async def post_message_with_file(
         raise HTTPException(status_code=413, detail=f"File size exceeds {mb}MB")
 
     repo = ChatRepository(session)
-    msg = await repo.create_message(user_id, room_id, text)
+    reply_id = reply_to_message_id
+    if reply_id is not None:
+        parent = await repo.get_message_in_room(reply_id, room_id)
+        if not parent:
+            raise HTTPException(status_code=400, detail="Reply target message not found in this room")
+    msg = await repo.create_message(user_id, room_id, text, reply_to_message_id=reply_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Room not found")
     try:
@@ -236,7 +256,12 @@ async def post_message_with_file(
         size_bytes=size,
         storage_key=storage_key,
     )
-    out = message_to_out(msg, [att])
+    reply_out = None
+    if reply_id is not None:
+        parent = await repo.get_message_in_room(reply_id, room_id)
+        if parent:
+            reply_out = reply_to_out(parent)
+    out = message_to_out(msg, [att], reply_to=reply_out)
     recipients = await repo.member_user_ids(room_id)
     await session.commit()
     await push_chat_event(
