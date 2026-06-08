@@ -1874,6 +1874,13 @@ async def _run(
                         for pid, meta in project_meta.items()
                         if (meta[1], meta[2]) in batch_set
                     }
+                    if not scope_meta and active_rows:
+                        print(
+                            "ОШИБКА пакета: строки есть, но проект не создан в БД "
+                            f"({batch_pairs[0][0]} / {batch_pairs[0][1]})."
+                        )
+                        await session.rollback()
+                        return 1
                     for project_id, (client_id, _cn, _pn) in scope_meta.items():
                         await finalize_imported_project(
                             session,
@@ -1884,6 +1891,8 @@ async def _run(
                             project_repo=project_repo,
                             stats=stats,
                         )
+
+                    await session.flush()
 
                     batch_hours_ok = True
                     batch_tasks_ok = True
@@ -1970,6 +1979,10 @@ async def _run(
 
                     if not batch_hours_ok:
                         print("ОШИБКА пакета: часы по проектам не совпадают.")
+                        print(
+                            "Подсказка: проверьте строки «ОШИБКА записи» / «нет задачи» выше; "
+                            "при повторном запуске уже загруженные проекты пропускаются (--progress)."
+                        )
                         await session.rollback()
                         return 1
                     if not batch_tasks_ok:
