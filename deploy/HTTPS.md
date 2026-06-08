@@ -73,3 +73,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 | `curl http://ticketsback.kostalegal.com/health` | 301 → https |
 
 Внутренние URL микросервисов (`http://correspondence:1249`) менять **не нужно** — это Docker-сеть.
+
+---
+
+## 502 Bad Gateway после смены IP сервера
+
+См. **[deploy/MIGRATION.md](MIGRATION.md)** — gateway часто переезжает, а nginx на старом хосте остаётся с `proxy_pass http://127.0.0.1:1234`.
+
+Кратко: на сервере с nginx замените upstream на IP нового хоста (`192.168.230.81:1234`) и `sudo systemctl reload nginx`.

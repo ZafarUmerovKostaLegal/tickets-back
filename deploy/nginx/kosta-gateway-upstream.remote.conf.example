@@ -1,0 +1,10 @@
+# Скопируйте поверх kosta-gateway-upstream.conf на сервере, где крутится nginx
+# для ticketsback.kostalegal.com, если контейнеры gateway переехали на другой хост:
+#
+#   sudo cp kosta-gateway-upstream.remote.conf.example /etc/nginx/conf.d/kosta-gateway-upstream.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+upstream kosta_gateway {
+    server 192.168.230.81:1234;
+    keepalive 32;
+}
