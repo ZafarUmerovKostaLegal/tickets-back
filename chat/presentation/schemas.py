@@ -346,7 +346,7 @@ def messages_to_out_list(
 
 
 def _room_can_post(room, member_role: str) -> bool:
-    if room.room_type in (ROOM_TYPE_COMPANY, ROOM_TYPE_CHANNEL):
+    if room.room_type == ROOM_TYPE_CHANNEL:
         return member_role == MEMBER_ROLE_ADMIN
     return True
 
