@@ -13,6 +13,7 @@ from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
 from presentation.schemas import (
     AddRoomMembersBody,
+    CreateChannelRoomBody,
     CreateDmRoomBody,
     CreateGroupRoomBody,
     MarkReadBody,
@@ -29,6 +30,41 @@ from presentation.schemas import (
     room_to_out,
 )
 
+
+async def _enrich_messages(repo: ChatRepository, items, user_id: int):
+    msg_ids = [m.id for m in items]
+    atts_by_msg = await repo.attachments_for_message_ids(msg_ids)
+    reply_ids = [int(m.reply_to_message_id) for m in items if m.reply_to_message_id is not None]
+    replies_by_id = await repo.messages_by_ids(reply_ids)
+    reactions_by_msg = await repo.reactions_for_message_ids(msg_ids)
+    polls_by_msg = await repo.polls_for_message_ids(msg_ids)
+    poll_ids = [p.id for p in polls_by_msg.values()]
+    votes_by_poll = await repo.votes_for_poll_ids(poll_ids)
+    return messages_to_out_list(
+        items,
+        atts_by_msg,
+        replies_by_id,
+        reactions_by_msg,
+        polls_by_msg,
+        votes_by_poll,
+        viewer_id=user_id,
+    )
+
+
+async def _room_out_for_user(repo: ChatRepository, user_id: int, room_id: int) -> RoomOut | None:
+    rows = await repo.list_rooms_for_user(user_id)
+    msg_ids: list[int] = []
+    for row in rows:
+        if row.room.id == room_id and row.last_message:
+            msg_ids.append(row.last_message.id)
+    polls_by_msg = await repo.polls_for_message_ids(msg_ids)
+    poll_ids = [p.id for p in polls_by_msg.values()]
+    votes_by_poll = await repo.votes_for_poll_ids(poll_ids)
+    for row in rows:
+        if row.room.id == room_id:
+            return room_to_out(row, polls_by_msg=polls_by_msg, votes_by_poll=votes_by_poll, viewer_id=user_id)
+    return None
+
 router = APIRouter(prefix="/rooms", tags=["chat-rooms"])
 
 
@@ -39,8 +75,15 @@ async def list_rooms(
 ):
     repo = ChatRepository(session)
     rows = await repo.list_rooms_for_user(user_id)
+    msg_ids = [r.last_message.id for r in rows if r.last_message]
+    polls_by_msg = await repo.polls_for_message_ids(msg_ids)
+    poll_ids = [p.id for p in polls_by_msg.values()]
+    votes_by_poll = await repo.votes_for_poll_ids(poll_ids)
     await session.commit()
-    return RoomsListOut(items=[room_to_out(r) for r in rows])
+    return RoomsListOut(items=[
+        room_to_out(r, polls_by_msg=polls_by_msg, votes_by_poll=votes_by_poll, viewer_id=user_id)
+        for r in rows
+    ])
 
 
 @router.post("", response_model=RoomOut, status_code=201)
@@ -56,11 +99,43 @@ async def create_group_room(
         member_user_ids=body.member_user_ids,
     )
     await session.commit()
-    rows = await repo.list_rooms_for_user(user_id)
-    for row in rows:
-        if row.room.id == room.id:
-            return room_to_out(row)
+    out = await _room_out_for_user(repo, user_id, room.id)
+    if out:
+        recipients = await repo.member_user_ids(room.id)
+        await push_chat_event(
+            recipient_user_ids=[u for u in recipients if u != user_id],
+            room_id=room.id,
+            event="room_created",
+            payload={"room_id": room.id, "room_type": room.room_type},
+        )
+        return out
     raise HTTPException(status_code=500, detail="Room created but not listed")
+
+
+@router.post("/channel", response_model=RoomOut, status_code=201)
+async def create_channel_room(
+    body: CreateChannelRoomBody,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = ChatRepository(session)
+    room = await repo.create_channel_room(
+        user_id,
+        title=body.title,
+        member_user_ids=body.member_user_ids,
+    )
+    await session.commit()
+    out = await _room_out_for_user(repo, user_id, room.id)
+    if out:
+        recipients = await repo.member_user_ids(room.id)
+        await push_chat_event(
+            recipient_user_ids=[u for u in recipients if u != user_id],
+            room_id=room.id,
+            event="room_created",
+            payload={"room_id": room.id, "room_type": room.room_type},
+        )
+        return out
+    raise HTTPException(status_code=500, detail="Channel created but not listed")
 
 
 @router.post("/dm", response_model=RoomOut, status_code=201)
@@ -74,10 +149,9 @@ async def create_or_get_dm_room(
     if not room:
         raise HTTPException(status_code=400, detail="Cannot create DM with yourself")
     await session.commit()
-    rows = await repo.list_rooms_for_user(user_id)
-    for row in rows:
-        if row.room.id == room.id:
-            return room_to_out(row)
+    out = await _room_out_for_user(repo, user_id, room.id)
+    if out:
+        return out
     raise HTTPException(status_code=500, detail="DM room not listed")
 
 
@@ -93,11 +167,10 @@ async def get_room(
     room = await repo.get_room(room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
-    rows = await repo.list_rooms_for_user(user_id)
     await session.commit()
-    for row in rows:
-        if row.room.id == room_id:
-            return room_to_out(row)
+    out = await _room_out_for_user(repo, user_id, room_id)
+    if out:
+        return out
     raise HTTPException(status_code=404, detail="Room not found")
 
 
@@ -162,14 +235,9 @@ async def list_messages(
     has_more = len(items) > limit
     if has_more:
         items = items[:limit]
-    msg_ids = [m.id for m in items]
-    atts_by_msg = await repo.attachments_for_message_ids(msg_ids)
-    reply_ids = [int(m.reply_to_message_id) for m in items if m.reply_to_message_id is not None]
-    replies_by_id = await repo.messages_by_ids(reply_ids)
-    reactions_by_msg = await repo.reactions_for_message_ids(msg_ids)
     await session.commit()
     return MessagesListOut(
-        items=messages_to_out_list(items, atts_by_msg, replies_by_id, reactions_by_msg),
+        items=await _enrich_messages(repo, items, user_id),
         has_more=has_more,
     )
 
@@ -188,6 +256,10 @@ async def post_message(
     if len(text) > settings.max_message_length:
         raise HTTPException(status_code=400, detail="Message too long")
     repo = ChatRepository(session)
+    if await repo.is_member(user_id, room_id) is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not await repo.can_user_post(user_id, room_id):
+        raise HTTPException(status_code=403, detail="Only admins can post in this channel")
     reply_id = body.reply_to_message_id
     if reply_id is not None:
         parent = await repo.get_message_in_room(reply_id, room_id)
@@ -196,12 +268,7 @@ async def post_message(
     msg = await repo.create_message(user_id, room_id, text, reply_to_message_id=reply_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Room not found")
-    reply_out = None
-    if reply_id is not None:
-        parent = await repo.get_message_in_room(reply_id, room_id)
-        if parent:
-            reply_out = reply_to_out(parent)
-    out = message_to_out(msg, reply_to=reply_out)
+    out = (await _enrich_messages(repo, [msg], user_id))[0]
     recipients = await repo.member_user_ids(room_id)
     await session.commit()
     await push_chat_event(
@@ -234,6 +301,10 @@ async def post_message_with_file(
         raise HTTPException(status_code=413, detail=f"File size exceeds {mb}MB")
 
     repo = ChatRepository(session)
+    if await repo.is_member(user_id, room_id) is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not await repo.can_user_post(user_id, room_id):
+        raise HTTPException(status_code=403, detail="Only admins can post in this channel")
     reply_id = reply_to_message_id
     if reply_id is not None:
         parent = await repo.get_message_in_room(reply_id, room_id)
@@ -258,12 +329,7 @@ async def post_message_with_file(
         size_bytes=size,
         storage_key=storage_key,
     )
-    reply_out = None
-    if reply_id is not None:
-        parent = await repo.get_message_in_room(reply_id, room_id)
-        if parent:
-            reply_out = reply_to_out(parent)
-    out = message_to_out(msg, [att], reply_to=reply_out)
+    out = (await _enrich_messages(repo, [msg], user_id))[0]
     recipients = await repo.member_user_ids(room_id)
     await session.commit()
     await push_chat_event(

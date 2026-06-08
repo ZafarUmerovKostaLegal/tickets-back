@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.database import Base
@@ -8,11 +8,19 @@ from infrastructure.database import Base
 ROOM_TYPE_COMPANY = "company"
 ROOM_TYPE_GROUP = "group"
 ROOM_TYPE_DM = "dm"
+ROOM_TYPE_CHANNEL = "channel"
 
 KOSTA_DAILY_SLUG = "kosta-daily"
 
 MEMBER_ROLE_MEMBER = "member"
 MEMBER_ROLE_ADMIN = "admin"
+
+MESSAGE_KIND_TEXT = "text"
+MESSAGE_KIND_POLL = "poll"
+MESSAGE_KIND_QUIZ = "quiz"
+
+POLL_KIND_POLL = "poll"
+POLL_KIND_QUIZ = "quiz"
 
 
 class ChatRoomModel(Base):
@@ -51,6 +59,7 @@ class ChatMessageModel(Base):
         BigInteger, ForeignKey("chat_rooms.id", ondelete="CASCADE"), nullable=False, index=True
     )
     author_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    message_kind: Mapped[str] = mapped_column(String(16), nullable=False, default=MESSAGE_KIND_TEXT, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     reply_to_message_id: Mapped[int | None] = mapped_column(
         BigInteger,
@@ -93,6 +102,40 @@ class ChatMessageReactionModel(Base):
 
     __table_args__ = (
         UniqueConstraint("message_id", "user_id", "emoji", name="uq_chat_reaction_per_user"),
+    )
+
+
+class ChatPollModel(Base):
+    __tablename__ = "chat_polls"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default=POLL_KIND_POLL)
+    question: Mapped[str] = mapped_column(String(500), nullable=False)
+    options_json: Mapped[str] = mapped_column(Text, nullable=False)
+    allows_multiple: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    correct_option_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    explanation: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatPollVoteModel(Base):
+    __tablename__ = "chat_poll_votes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    poll_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_polls.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    option_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("poll_id", "user_id", "option_index", name="uq_chat_poll_vote"),
     )
 
 
