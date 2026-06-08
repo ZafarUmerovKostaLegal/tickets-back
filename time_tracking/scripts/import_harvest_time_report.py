@@ -2547,20 +2547,32 @@ def main() -> int:
     database_url = _resolve_database_url(args.database_url or None)
     auth_db_url = (args.auth_db_url or os.environ.get("AUTH_DATABASE_URL") or "").strip()
     _configure_database_url(database_url)
-    return asyncio.run(
-        _run(
-            path=harvest_file,
-            execute=args.execute,
-            database_url=database_url,
-            auth_db_url=auth_db_url,
-            replace=args.replace,
-            team_only=args.team_only,
-            batch_size=args.batch_size,
-            checkpoint_file=args.checkpoint,
-            reset_checkpoint=args.reset_checkpoint,
-            progress_only=args.progress,
+    try:
+        return asyncio.run(
+            _run(
+                path=harvest_file,
+                execute=args.execute,
+                database_url=database_url,
+                auth_db_url=auth_db_url,
+                replace=args.replace,
+                team_only=args.team_only,
+                batch_size=args.batch_size,
+                checkpoint_file=args.checkpoint,
+                reset_checkpoint=args.reset_checkpoint,
+                progress_only=args.progress,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        ckpt = args.checkpoint or _default_checkpoint_path(harvest_file)
+        print(
+            "\n\nОстановлено пользователем (Ctrl+C). "
+            "Это не ошибка импорта."
+        )
+        if args.batch_size > 0 and ckpt.is_file():
+            print(f"Прогресс сохранён в: {ckpt}")
+            print("Продолжить: та же команда с --execute --batch-size 1")
+            print("Статус:   добавьте --progress")
+        return 130
 
 
 if __name__ == "__main__":
