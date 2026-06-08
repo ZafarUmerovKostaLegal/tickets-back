@@ -1436,6 +1436,147 @@ async def _run(
                 )
         return out
 
+    harvest_file_prefix = f"harvest-import:{harvest_source_name}:"
+
+    async def aggregate_harvest_file_hours_for_project(
+        session: AsyncSession,
+        project_id: str,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        q = (
+            select(
+                func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("billable"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("non_billable"),
+            )
+            .where(
+                TimeEntryModel.project_id == project_id,
+                TimeEntryModel.voided_at.is_(None),
+                TimeEntryModel.external_reference_url.like(f"{harvest_file_prefix}%"),
+            )
+        )
+        row = (await session.execute(q)).one()
+        return (
+            _quantize_harvest_hours(Decimal(str(row.total))),
+            _quantize_harvest_hours(Decimal(str(row.billable))),
+            _quantize_harvest_hours(Decimal(str(row.non_billable))),
+        )
+
+    async def db_task_breakdown_harvest_file_for_project(
+        session: AsyncSession,
+        project_id: str,
+    ) -> dict[str, tuple[str, Decimal, Decimal, Decimal, bool]]:
+        q = (
+            select(
+                TimeManagerClientTaskModel.name,
+                func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("billable"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("non_billable"),
+                TimeManagerClientTaskModel.billable_by_default,
+            )
+            .select_from(TimeManagerClientTaskModel)
+            .outerjoin(
+                TimeEntryModel,
+                and_(
+                    TimeEntryModel.task_id == TimeManagerClientTaskModel.id,
+                    TimeEntryModel.voided_at.is_(None),
+                    TimeEntryModel.external_reference_url.like(f"{harvest_file_prefix}%"),
+                ),
+            )
+            .where(TimeManagerClientTaskModel.project_id == project_id)
+            .group_by(
+                TimeManagerClientTaskModel.id,
+                TimeManagerClientTaskModel.name,
+                TimeManagerClientTaskModel.billable_by_default,
+            )
+        )
+        return await _rows_to_task_breakdown(session, q)
+
+    async def _rows_to_task_breakdown(session, q):
+        r = await session.execute(q)
+        out: dict[str, tuple[str, Decimal, Decimal, Decimal, bool]] = {}
+        for row in r.all():
+            key = _norm(str(row.name))
+            if key in out:
+                prev = out[key]
+                out[key] = (
+                    prev[0],
+                    prev[1] + _quantize_harvest_hours(Decimal(str(row.total))),
+                    prev[2] + _quantize_harvest_hours(Decimal(str(row.billable))),
+                    prev[3] + _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                    bool(row.billable_by_default),
+                )
+            else:
+                out[key] = (
+                    str(row.name),
+                    _quantize_harvest_hours(Decimal(str(row.total))),
+                    _quantize_harvest_hours(Decimal(str(row.billable))),
+                    _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                    bool(row.billable_by_default),
+                )
+        return out
+
+    async def db_user_hours_harvest_file_for_projects(
+        session: AsyncSession,
+        project_ids: list[str],
+    ) -> dict[int, tuple[Decimal, Decimal, Decimal, int]]:
+        if not project_ids:
+            return {}
+        q = (
+            select(
+                TimeEntryModel.auth_user_id,
+                func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("billable"),
+                func.coalesce(
+                    func.sum(
+                        case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                    ),
+                    0,
+                ).label("non_billable"),
+                func.count(TimeEntryModel.id).label("rows"),
+            )
+            .where(
+                TimeEntryModel.project_id.in_(project_ids),
+                TimeEntryModel.voided_at.is_(None),
+                TimeEntryModel.external_reference_url.like(f"{harvest_file_prefix}%"),
+            )
+            .group_by(TimeEntryModel.auth_user_id)
+        )
+        r = await session.execute(q)
+        out: dict[int, tuple[Decimal, Decimal, Decimal, int]] = {}
+        for row in r.all():
+            out[int(row.auth_user_id)] = (
+                _quantize_harvest_hours(Decimal(str(row.total))),
+                _quantize_harvest_hours(Decimal(str(row.billable))),
+                _quantize_harvest_hours(Decimal(str(row.non_billable))),
+                int(row.rows or 0),
+            )
+        return out
+
     async def db_user_hours_for_projects(
         session: AsyncSession,
         project_ids: list[str],
@@ -1676,6 +1817,19 @@ async def _run(
                             print(
                                 f"Удалены старые записи: {client_name} / {project_name} — {deleted} шт."
                             )
+                    elif batch_size > 0:
+                        result = await session.execute(
+                            delete(TimeEntryModel).where(
+                                TimeEntryModel.project_id == existing_project.id,
+                                TimeEntryModel.external_reference_url.like("harvest-import:%"),
+                            )
+                        )
+                        removed = int(result.rowcount or 0)
+                        if removed:
+                            print(
+                                f"Удалены Harvest-записи перед импортом: "
+                                f"{client_name} / {project_name} — {removed} шт."
+                            )
                     else:
                         result = await session.execute(
                             delete(TimeEntryModel).where(
@@ -1901,12 +2055,9 @@ async def _run(
                     hr_repo = HourlyRateRepository(session)
 
                     for project_id, (_client_id, client_name, project_name) in scope_meta.items():
-                        db_total, db_billable, db_non_billable = await entry_repo.aggregate_totals_for_project(
-                            project_id
+                        db_total, db_billable, db_non_billable = await aggregate_harvest_file_hours_for_project(
+                            session, project_id
                         )
-                        db_total = _quantize_harvest_hours(Decimal(str(db_total)))
-                        db_billable = _quantize_harvest_hours(Decimal(str(db_billable)))
-                        db_non_billable = _quantize_harvest_hours(Decimal(str(db_non_billable)))
                         exp_total, exp_billable, exp_non_billable = expected_hours_breakdown_for_project(
                             client_name, project_name
                         )
@@ -1923,7 +2074,7 @@ async def _run(
 
                         proj_rows = rows_for_project(client_name, project_name)
                         expected_tasks = _expected_task_hours_map(proj_rows)
-                        db_tasks = await db_task_breakdown_for_project(session, project_id)
+                        db_tasks = await db_task_breakdown_harvest_file_for_project(session, project_id)
                         for key in expected_tasks:
                             exp_total_t, exp_bill_t, exp_non_t = expected_tasks[key]
                             exp_total_t = _quantize_harvest_hours(exp_total_t)
@@ -1960,7 +2111,9 @@ async def _run(
                                 batch_team_ok = False
 
                     expected_users = _expected_hours_by_harvest_user(active_rows)
-                    db_by_auth = await db_user_hours_for_projects(session, list(scope_meta.keys()))
+                    db_by_auth = await db_user_hours_harvest_file_for_projects(
+                        session, list(scope_meta.keys())
+                    )
                     for hkey, (name, exp_total, exp_bill, exp_non, exp_rows) in expected_users.items():
                         uid = harvest_user_auth_ids.get(hkey) or user_index.get(hkey)
                         if uid is None:
