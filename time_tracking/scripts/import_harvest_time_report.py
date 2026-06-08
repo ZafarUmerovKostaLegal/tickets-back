@@ -9,6 +9,13 @@
   python time_tracking/scripts/import_harvest_time_report.py --dry-run
   python time_tracking/scripts/import_harvest_time_report.py --execute
 
+Пакетный импорт (можно остановить Ctrl+C и продолжить позже):
+
+  python time_tracking/scripts/import_harvest_time_report.py --file report.csv --execute --batch-size 1
+  python time_tracking/scripts/import_harvest_time_report.py --file report.csv --progress
+
+Checkpoint: {csv}.harvest-import.checkpoint.json — список загруженных проектов и %.
+
 По умолчанию ищется CSV (точный экспорт Harvest):
   harvest_time_report_from2023-01-23to2026-05-26.csv
 Затем xlsx с тем же именем.
@@ -24,15 +31,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
+import json
 import os
 import re
 import sys
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from typing import Any
 
 from openpyxl import load_workbook
 
@@ -47,6 +57,109 @@ HARVEST_IMPORT_EMAIL_DOMAIN = "import.kostalegal.local"
 HARVEST_IMPORT_AUTH_ID_FLOOR = 2_000_000_000
 HARVEST_HOURS_QUANT = Decimal("0.01")
 HARVEST_EXTRA_REQUIRED_TASKS = ("My mehnat registration",)
+
+CHECKPOINT_VERSION = 1
+PROJECT_KEY_SEP = "\x1f"
+
+
+def _project_key(client_name: str, project_name: str) -> str:
+    return f"{client_name}{PROJECT_KEY_SEP}{project_name}"
+
+
+def _project_key_parts(key: str) -> tuple[str, str]:
+    client, project = key.split(PROJECT_KEY_SEP, 1)
+    return client, project
+
+
+def _default_checkpoint_path(source_file: Path) -> Path:
+    return source_file.with_name(f"{source_file.name}.harvest-import.checkpoint.json")
+
+
+def _file_fingerprint(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_checkpoint(
+    checkpoint_path: Path,
+    source_file: Path,
+    *,
+    reset: bool = False,
+) -> dict[str, Any]:
+    if reset and checkpoint_path.is_file():
+        checkpoint_path.unlink()
+    if not checkpoint_path.is_file():
+        return {
+            "version": CHECKPOINT_VERSION,
+            "source_file": source_file.name,
+            "source_fingerprint": _file_fingerprint(source_file),
+            "completed_project_keys": [],
+            "updated_at": None,
+        }
+    data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    if data.get("version") != CHECKPOINT_VERSION:
+        raise SystemExit(
+            f"Неподдерживаемая версия checkpoint {checkpoint_path} "
+            f"(version={data.get('version')}). Удалите файл или используйте --reset-checkpoint."
+        )
+    if data.get("source_file") != source_file.name:
+        raise SystemExit(
+            f"Checkpoint {checkpoint_path} для другого файла "
+            f"({data.get('source_file')!r}, ожидался {source_file.name!r}). "
+            "Используйте --reset-checkpoint."
+        )
+    fp = _file_fingerprint(source_file)
+    if data.get("source_fingerprint") and data.get("source_fingerprint") != fp:
+        raise SystemExit(
+            f"CSV изменился после последнего импорта (checkpoint {checkpoint_path}). "
+            "Используйте --reset-checkpoint для начала заново."
+        )
+    data.setdefault("completed_project_keys", [])
+    return data
+
+
+def _save_checkpoint(checkpoint_path: Path, data: dict[str, Any]) -> None:
+    data = dict(data)
+    data["version"] = CHECKPOINT_VERSION
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    checkpoint_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _print_import_progress(
+    checkpoint_path: Path,
+    source_file: Path,
+    all_project_pairs: list[tuple[str, str]],
+) -> None:
+    data = _load_checkpoint(checkpoint_path, source_file, reset=False)
+    completed = set(data.get("completed_project_keys") or [])
+    total = len(all_project_pairs)
+    done = sum(1 for p in all_project_pairs if _project_key(*p) in completed)
+    pending = total - done
+    pct = (100.0 * done / total) if total else 100.0
+    print(f"Файл: {source_file.name}")
+    print(f"Checkpoint: {checkpoint_path}")
+    print(f"Проектов всего: {total}")
+    print(f"Загружено: {done} ({pct:.1f}%)")
+    print(f"Осталось: {pending}")
+    if completed:
+        print("\nПоследние 5 завершённых проектов:")
+        for key in list(completed)[-5:]:
+            c, p = _project_key_parts(key)
+            print(f"  - {c} / {p}")
+
+
+def _format_progress(done: int, total: int, client_name: str, project_name: str) -> str:
+    pct = (100.0 * done / total) if total else 100.0
+    return (
+        f"Прогресс: {done}/{total} проектов ({pct:.1f}%) — "
+        f"готово: {client_name} / {project_name}"
+    )
 
 
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
@@ -326,6 +439,13 @@ class HarvestRow:
         return f"harvest-import:{file_name}:{self.source_row_number}"
 
 
+def _sorted_project_pairs(rows: list[HarvestRow]) -> list[tuple[str, str]]:
+    return sorted(
+        {(r.client_name, r.project_name) for r in rows},
+        key=lambda p: (_norm(p[0]), _norm(p[1])),
+    )
+
+
 def _csv_field(row: dict[str, str], name: str) -> str:
     if name in row:
         return str(row[name] or "").strip()
@@ -559,6 +679,10 @@ async def _run(
     auth_db_url: str = "",
     replace: bool = False,
     team_only: bool = False,
+    batch_size: int = 0,
+    checkpoint_file: Path | None = None,
+    reset_checkpoint: bool = False,
+    progress_only: bool = False,
 ) -> int:
     from sqlalchemy import and_, case, delete, func, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -603,6 +727,47 @@ async def _run(
         f"Часы в файле Harvest: всего {expected_hours_total}, "
         f"billable {expected_billable_total}, non-billable {expected_non_billable_total}"
     )
+
+    all_project_pairs = _sorted_project_pairs(rows)
+    checkpoint_path = checkpoint_file or _default_checkpoint_path(path)
+    if progress_only:
+        _print_import_progress(checkpoint_path, path, all_project_pairs)
+        return 0
+
+    checkpoint_data: dict[str, Any] | None = None
+    completed_project_keys: set[str] = set()
+    pending_project_pairs = all_project_pairs
+    if batch_size > 0:
+        checkpoint_data = _load_checkpoint(checkpoint_path, path, reset=reset_checkpoint)
+        completed_project_keys = set(checkpoint_data.get("completed_project_keys") or [])
+        pending_project_pairs = [
+            p for p in all_project_pairs if _project_key(*p) not in completed_project_keys
+        ]
+        total_projects = len(all_project_pairs)
+        done_count = total_projects - len(pending_project_pairs)
+        done_pct = (100.0 * done_count / total_projects) if total_projects else 100.0
+        print(
+            f"\nПакетный режим: batch-size={batch_size}, checkpoint={checkpoint_path.name}"
+        )
+        print(
+            f"Проектов: {done_count}/{total_projects} уже загружено ({done_pct:.1f}%), "
+            f"осталось {len(pending_project_pairs)}"
+        )
+        if execute and not pending_project_pairs:
+            print("Все проекты уже импортированы. Для повтора: --reset-checkpoint")
+            return 0
+        if not execute:
+            print(
+                f"Dry-run: будет обработано {len(pending_project_pairs)} проектов "
+                f"({sum(1 for r in rows if (r.client_name, r.project_name) in set(pending_project_pairs))} строк)."
+            )
+
+    import_batches: list[list[tuple[str, str]]] = [all_project_pairs]
+    if batch_size > 0:
+        import_batches = [
+            pending_project_pairs[i : i + batch_size]
+            for i in range(0, len(pending_project_pairs), batch_size)
+        ]
 
     engine = create_async_engine(_make_async_url(database_url), echo=False)
     session_factory = async_sessionmaker(
@@ -1351,7 +1516,7 @@ async def _run(
             entry_repo = TimeEntryRepository(session)
             access_repo = UserProjectAccessRepository(session)
 
-            if execute and replace:
+            if execute and replace and batch_size <= 0:
                 pairs = sorted({(r.client_name, r.project_name) for r in rows})
                 for client_name, project_name in pairs:
                     existing_client = await find_client_by_name(session, client_name)
@@ -1374,7 +1539,7 @@ async def _run(
             # сделанные из ДРУГОГО файла отчёта (например, при переименовании отчёта).
             # Иначе записи задвоятся и сверка часов не сойдётся. Ручные записи (без
             # префикса harvest-import:) не трогаем.
-            if execute and not replace:
+            if execute and not replace and batch_size <= 0:
                 current_prefix = f"harvest-import:{harvest_source_name}:"
                 pairs = sorted({(r.client_name, r.project_name) for r in rows})
                 stale_total = 0
@@ -1413,8 +1578,14 @@ async def _run(
                 client_currency.setdefault(_norm(hr.client_name), hr.currency)
 
             # Сначала гарантируем TT-пользователя для каждого имени из Harvest (даже без регистрации в auth).
+            pending_set = set(pending_project_pairs) if batch_size > 0 else None
+            user_setup_rows = [
+                r
+                for r in rows
+                if pending_set is None or (r.client_name, r.project_name) in pending_set
+            ]
             unique_by_harvest_user: dict[str, HarvestRow] = {}
-            for hr in rows:
+            for hr in user_setup_rows:
                 unique_by_harvest_user.setdefault(hr.harvest_user_key, hr)
             print(f"\nПользователи Harvest (уникальных): {len(unique_by_harvest_user)}")
             for _key, sample in sorted(unique_by_harvest_user.items(), key=lambda x: x[0]):
@@ -1478,166 +1649,378 @@ async def _run(
                     user_index=user_index,
                 )
 
-            for hr in rows:
-                ckey = _norm(hr.client_name)
-                if ckey not in client_cache:
-                    existing = await find_client_by_name(session, hr.client_name)
-                    if existing:
-                        client_cache[ckey] = existing.id
-                        stats["client_exists"] += 1
-                    elif execute:
-                        created = await client_repo.create(
-                            name=hr.client_name,
-                            address=None,
-                            currency=client_currency.get(ckey, "EUR"),
-                            invoice_due_mode="custom",
-                            invoice_due_days_after_issue=30,
-                            tax_percent=None,
-                            tax2_percent=None,
-                            discount_percent=None,
-                        )
-                        await seed_default_expense_categories_for_client(session, created.id)
-                        client_cache[ckey] = created.id
-                        stats["client_created"] += 1
-                        await session.flush()
-                    else:
-                        client_cache[ckey] = f"<new:{hr.client_name}>"
-                        stats["client_created"] += 1
+            total_projects = len(all_project_pairs)
+            projects_done_checkpoint = len(completed_project_keys)
 
-                client_id = client_cache[ckey]
-                if client_id.startswith("<new:"):
-                    stats["entry_planned"] += 1
-                    continue
-
-                pkey = (client_id, _norm(hr.project_name))
-                if pkey not in project_cache:
-                    existing_p = await find_project(session, client_id, hr.project_name)
-                    if existing_p:
-                        project_cache[pkey] = existing_p.id
-                        project_meta[existing_p.id] = (client_id, hr.client_name, hr.project_name)
-                        stats["project_exists"] += 1
-                    elif execute:
-                        proj_dates = [
-                            r.work_date
-                            for r in rows
-                            if _norm(r.client_name) == ckey and _norm(r.project_name) == _norm(hr.project_name)
-                        ]
-                        created_p = await project_repo.create(
-                            client_id=client_id,
-                            name=hr.project_name,
-                            code=hr.project_code,
-                            start_date=min(proj_dates) if proj_dates else hr.work_date,
-                            end_date=max(proj_dates) if proj_dates else None,
-                            notes="Imported from Harvest",
-                            report_visibility="managers_only",
-                            project_type="time_and_materials",
-                            currency=client_currency.get(ckey, hr.currency),
-                            billable_rate_type=None,
-                            project_billable_rate_amount=None,
-                        )
-                        project_cache[pkey] = created_p.id
-                        project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
-                        stats["project_created"] += 1
-                        await session.flush()
-                    else:
-                        project_cache[pkey] = f"<new:{hr.project_name}>"
-                        stats["project_created"] += 1
-
-                project_id = project_cache[pkey]
-                if project_id.startswith("<new:"):
-                    stats["entry_planned"] += 1
-                    continue
-
-                if project_id not in projects_tasks_initialized:
-                    proj_rows = rows_for_project(hr.client_name, hr.project_name)
-                    task_cache[project_id] = await ensure_harvest_project_tasks(
-                        session,
-                        project_id,
-                        proj_rows,
-                        task_repo,
-                    )
-                    projects_tasks_initialized.add(project_id)
-                    if execute:
-                        extra = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
-                        print(f"  Задачи проекта «{hr.project_name}»: из CSV + обязательные: {extra}")
-
-                if project_id not in projects_team_initialized:
-                    await ensure_harvest_project_team_from_csv(
-                        session,
-                        client_name=hr.client_name,
-                        project_name=hr.project_name,
-                        project_id=project_id,
-                        stats=stats,
-                    )
-                    projects_team_initialized.add(project_id)
-
-                tmap = task_cache[project_id]
-                tname = _norm(hr.task_name)
-                task_id = tmap.get(tname)
-                if not task_id:
-                    stats["entry_error"] += 1
-                    print(f"  ОШИБКА: нет задачи «{hr.task_name}» в проекте {hr.project_name}")
-                    continue
-
-                auth_user_id, _tt_created, user_source = await resolve_auth_user_id(
-                    session,
-                    hr,
-                    user_index,
-                    auth_index,
-                    auth_by_id,
-                    tt_by_auth,
-                    harvest_placeholder_ids,
-                    dry_run_placeholder_next,
-                )
-                if user_source == "harvest":
-                    harvest_only_names.add(hr.harvest_user_key)
-                if granter is None:
-                    u = tt_by_auth.get(auth_user_id)
-                    if u is None or not u.is_archived:
-                        granter = auth_user_id
-                if auth_user_id not in tt_by_auth and execute:
-                    refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(auth_user_id)
-                    if refreshed is not None:
-                        tt_by_auth[auth_user_id] = refreshed
-
-                description = hr.notes
-                if execute and not team_only:
-                    if granter is None:
-                        granter = auth_user_id
-                    import_ref = hr.import_ref(harvest_source_name)
-                    if await entry_exists_by_import_ref(session, import_ref):
-                        stats["entry_duplicate"] += 1
+            async def _cleanup_projects_before_import(
+                batch_pairs: list[tuple[str, str]],
+            ) -> None:
+                current_prefix = f"harvest-import:{harvest_source_name}:"
+                for client_name, project_name in batch_pairs:
+                    existing_client = await find_client_by_name(session, client_name)
+                    if existing_client is None:
                         continue
-                    sec = _harvest_seconds_for_hours(hr.hours)
-                    try:
-                        entry_id = str(uuid.uuid4())
-                        file_hours = hr.hours
-                        session.add(
-                            TimeEntryModel(
-                                id=entry_id,
-                                auth_user_id=auth_user_id,
-                                work_date=hr.work_date,
-                                duration_seconds=sec,
-                                hours=file_hours,
-                                rounded_hours=file_hours,
-                                is_billable=hr.is_billable,
-                                project_id=project_id,
-                                task_id=task_id,
-                                description=description,
-                                external_reference_url=import_ref,
-                                created_at=_now_utc(),
-                                updated_at=None,
+                    existing_project = await find_project(
+                        session, existing_client.id, project_name
+                    )
+                    if existing_project is None:
+                        continue
+                    if replace:
+                        result = await session.execute(
+                            delete(TimeEntryModel).where(
+                                TimeEntryModel.project_id == existing_project.id
                             )
                         )
-                        stats["entry_created"] += 1
-                    except ValueError as e:
-                        stats["entry_error"] += 1
-                        print(
-                            f"  ОШИБКА записи {hr.work_date} {_harvest_display_name(hr)} "
-                            f"({hr.hours} ч): {e}"
+                        deleted = int(result.rowcount or 0)
+                        if deleted:
+                            print(
+                                f"Удалены старые записи: {client_name} / {project_name} — {deleted} шт."
+                            )
+                    else:
+                        result = await session.execute(
+                            delete(TimeEntryModel).where(
+                                TimeEntryModel.project_id == existing_project.id,
+                                TimeEntryModel.external_reference_url.like("harvest-import:%"),
+                                TimeEntryModel.external_reference_url.notlike(f"{current_prefix}%"),
+                            )
                         )
-                elif not execute:
-                    stats["entry_planned"] += 1
+                        stale = int(result.rowcount or 0)
+                        if stale:
+                            print(
+                                f"Удалены устаревшие Harvest-записи: {client_name} / {project_name} — {stale} шт."
+                            )
+                await session.flush()
+
+            for batch_index, batch_pairs in enumerate(import_batches, 1):
+                batch_set = set(batch_pairs)
+                active_rows = (
+                    [r for r in rows if (r.client_name, r.project_name) in batch_set]
+                    if batch_size > 0
+                    else rows
+                )
+                batch_project_meta: dict[str, tuple[str, str, str]] = {}
+
+                if batch_size > 0 and execute:
+                    print(
+                        f"\n=== Пакет {batch_index}/{len(import_batches)}: "
+                        f"{len(batch_pairs)} проект(ов), {len(active_rows)} строк ==="
+                    )
+                    await _cleanup_projects_before_import(batch_pairs)
+
+                for hr in active_rows:
+                    ckey = _norm(hr.client_name)
+                    if ckey not in client_cache:
+                        existing = await find_client_by_name(session, hr.client_name)
+                        if existing:
+                            client_cache[ckey] = existing.id
+                            stats["client_exists"] += 1
+                        elif execute:
+                            created = await client_repo.create(
+                                name=hr.client_name,
+                                address=None,
+                                currency=client_currency.get(ckey, "EUR"),
+                                invoice_due_mode="custom",
+                                invoice_due_days_after_issue=30,
+                                tax_percent=None,
+                                tax2_percent=None,
+                                discount_percent=None,
+                            )
+                            await seed_default_expense_categories_for_client(session, created.id)
+                            client_cache[ckey] = created.id
+                            stats["client_created"] += 1
+                            await session.flush()
+                        else:
+                            client_cache[ckey] = f"<new:{hr.client_name}>"
+                            stats["client_created"] += 1
+
+                    client_id = client_cache[ckey]
+                    if client_id.startswith("<new:"):
+                        stats["entry_planned"] += 1
+                        continue
+
+                    pkey = (client_id, _norm(hr.project_name))
+                    if pkey not in project_cache:
+                        existing_p = await find_project(session, client_id, hr.project_name)
+                        if existing_p:
+                            project_cache[pkey] = existing_p.id
+                            project_meta[existing_p.id] = (client_id, hr.client_name, hr.project_name)
+                            stats["project_exists"] += 1
+                        elif execute:
+                            proj_dates = [
+                                r.work_date
+                                for r in rows
+                                if _norm(r.client_name) == ckey and _norm(r.project_name) == _norm(hr.project_name)
+                            ]
+                            created_p = await project_repo.create(
+                                client_id=client_id,
+                                name=hr.project_name,
+                                code=hr.project_code,
+                                start_date=min(proj_dates) if proj_dates else hr.work_date,
+                                end_date=max(proj_dates) if proj_dates else None,
+                                notes="Imported from Harvest",
+                                report_visibility="managers_only",
+                                project_type="time_and_materials",
+                                currency=client_currency.get(ckey, hr.currency),
+                                billable_rate_type=None,
+                                project_billable_rate_amount=None,
+                            )
+                            project_cache[pkey] = created_p.id
+                            project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
+                            stats["project_created"] += 1
+                            await session.flush()
+                        else:
+                            project_cache[pkey] = f"<new:{hr.project_name}>"
+                            stats["project_created"] += 1
+
+                    project_id = project_cache[pkey]
+                    if project_id.startswith("<new:"):
+                        stats["entry_planned"] += 1
+                        continue
+
+                    if project_id not in projects_tasks_initialized:
+                        proj_rows = rows_for_project(hr.client_name, hr.project_name)
+                        task_cache[project_id] = await ensure_harvest_project_tasks(
+                            session,
+                            project_id,
+                            proj_rows,
+                            task_repo,
+                        )
+                        projects_tasks_initialized.add(project_id)
+                        if execute:
+                            extra = ", ".join(HARVEST_EXTRA_REQUIRED_TASKS)
+                            print(f"  Задачи проекта «{hr.project_name}»: из CSV + обязательные: {extra}")
+
+                    if project_id not in projects_team_initialized:
+                        await ensure_harvest_project_team_from_csv(
+                            session,
+                            client_name=hr.client_name,
+                            project_name=hr.project_name,
+                            project_id=project_id,
+                            stats=stats,
+                        )
+                        projects_team_initialized.add(project_id)
+
+                    tmap = task_cache[project_id]
+                    tname = _norm(hr.task_name)
+                    task_id = tmap.get(tname)
+                    if not task_id:
+                        stats["entry_error"] += 1
+                        print(f"  ОШИБКА: нет задачи «{hr.task_name}» в проекте {hr.project_name}")
+                        continue
+
+                    auth_user_id, _tt_created, user_source = await resolve_auth_user_id(
+                        session,
+                        hr,
+                        user_index,
+                        auth_index,
+                        auth_by_id,
+                        tt_by_auth,
+                        harvest_placeholder_ids,
+                        dry_run_placeholder_next,
+                    )
+                    if user_source == "harvest":
+                        harvest_only_names.add(hr.harvest_user_key)
+                    if granter is None:
+                        u = tt_by_auth.get(auth_user_id)
+                        if u is None or not u.is_archived:
+                            granter = auth_user_id
+                    if auth_user_id not in tt_by_auth and execute:
+                        refreshed = await TimeTrackingUserRepository(session).get_by_auth_user_id(auth_user_id)
+                        if refreshed is not None:
+                            tt_by_auth[auth_user_id] = refreshed
+
+                    description = hr.notes
+                    if execute and not team_only:
+                        if granter is None:
+                            granter = auth_user_id
+                        import_ref = hr.import_ref(harvest_source_name)
+                        if await entry_exists_by_import_ref(session, import_ref):
+                            stats["entry_duplicate"] += 1
+                            continue
+                        sec = _harvest_seconds_for_hours(hr.hours)
+                        try:
+                            entry_id = str(uuid.uuid4())
+                            file_hours = hr.hours
+                            session.add(
+                                TimeEntryModel(
+                                    id=entry_id,
+                                    auth_user_id=auth_user_id,
+                                    work_date=hr.work_date,
+                                    duration_seconds=sec,
+                                    hours=file_hours,
+                                    rounded_hours=file_hours,
+                                    is_billable=hr.is_billable,
+                                    project_id=project_id,
+                                    task_id=task_id,
+                                    description=description,
+                                    external_reference_url=import_ref,
+                                    created_at=_now_utc(),
+                                    updated_at=None,
+                                )
+                            )
+                            stats["entry_created"] += 1
+                        except ValueError as e:
+                            stats["entry_error"] += 1
+                            print(
+                                f"  ОШИБКА записи {hr.work_date} {_harvest_display_name(hr)} "
+                                f"({hr.hours} ч): {e}"
+                            )
+                    elif not execute:
+                        stats["entry_planned"] += 1
+
+                if batch_size > 0 and execute:
+                    scope_meta = {
+                        pid: meta
+                        for pid, meta in project_meta.items()
+                        if (meta[1], meta[2]) in batch_set
+                    }
+                    for project_id, (client_id, _cn, _pn) in scope_meta.items():
+                        await finalize_imported_project(
+                            session,
+                            client_id=client_id,
+                            project_id=project_id,
+                            granter=granter,
+                            access_repo=access_repo,
+                            project_repo=project_repo,
+                            stats=stats,
+                        )
+
+                    batch_hours_ok = True
+                    batch_tasks_ok = True
+                    batch_users_ok = True
+                    batch_team_ok = True
+                    hr_repo = HourlyRateRepository(session)
+
+                    for project_id, (_client_id, client_name, project_name) in scope_meta.items():
+                        db_total, db_billable, db_non_billable = await entry_repo.aggregate_totals_for_project(
+                            project_id
+                        )
+                        db_total = _quantize_harvest_hours(Decimal(str(db_total)))
+                        db_billable = _quantize_harvest_hours(Decimal(str(db_billable)))
+                        db_non_billable = _quantize_harvest_hours(Decimal(str(db_non_billable)))
+                        exp_total, exp_billable, exp_non_billable = expected_hours_breakdown_for_project(
+                            client_name, project_name
+                        )
+                        if not (
+                            db_total == exp_total
+                            and db_billable == exp_billable
+                            and db_non_billable == exp_non_billable
+                        ):
+                            batch_hours_ok = False
+                            print(
+                                f"  [РАСХОЖДЕНИЕ] {client_name} / {project_name}: "
+                                f"файл {exp_total}, БД {db_total}"
+                            )
+
+                        proj_rows = rows_for_project(client_name, project_name)
+                        expected_tasks = _expected_task_hours_map(proj_rows)
+                        db_tasks = await db_task_breakdown_for_project(session, project_id)
+                        for key in expected_tasks:
+                            exp_total_t, exp_bill_t, exp_non_t = expected_tasks[key]
+                            exp_total_t = _quantize_harvest_hours(exp_total_t)
+                            exp_bill_t = _quantize_harvest_hours(exp_bill_t)
+                            exp_non_t = _quantize_harvest_hours(exp_non_t)
+                            exp_billable_flag = _billable_default_for_harvest_task(key, proj_rows)
+                            if key not in db_tasks:
+                                batch_tasks_ok = False
+                                continue
+                            _name, db_t, db_b, db_n, db_flag = db_tasks[key]
+                            if not (
+                                db_t == exp_total_t
+                                and db_b == exp_bill_t
+                                and db_n == exp_non_t
+                                and db_flag == exp_billable_flag
+                            ):
+                                batch_tasks_ok = False
+
+                        team = _harvest_users_for_project(rows, client_name, project_name)
+                        for hkey, sample in team.items():
+                            uid = harvest_user_auth_ids.get(hkey) or _match_auth_user_id(sample, user_index)
+                            if uid is None:
+                                batch_team_ok = False
+                                continue
+                            user_proj_rows = [
+                                r
+                                for r in proj_rows
+                                if r.harvest_user_key == hkey
+                            ]
+                            if not await access_repo.has_access(uid, project_id):
+                                batch_team_ok = False
+                            needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
+                            if needs_rate and not await hr_repo.list_by_user_and_kind(uid, "billable"):
+                                batch_team_ok = False
+
+                    expected_users = _expected_hours_by_harvest_user(active_rows)
+                    db_by_auth = await db_user_hours_for_projects(session, list(scope_meta.keys()))
+                    for hkey, (name, exp_total, exp_bill, exp_non, exp_rows) in expected_users.items():
+                        uid = harvest_user_auth_ids.get(hkey) or user_index.get(hkey)
+                        if uid is None:
+                            batch_users_ok = False
+                            continue
+                        db_total, db_bill, db_non, db_rows = db_by_auth.get(
+                            uid, (Decimal("0"), Decimal("0"), Decimal("0"), 0)
+                        )
+                        if not (
+                            db_total == _quantize_harvest_hours(exp_total)
+                            and db_bill == _quantize_harvest_hours(exp_bill)
+                            and db_non == _quantize_harvest_hours(exp_non)
+                            and db_rows == exp_rows
+                        ):
+                            batch_users_ok = False
+
+                    if not batch_hours_ok:
+                        print("ОШИБКА пакета: часы по проектам не совпадают.")
+                        await session.rollback()
+                        return 1
+                    if not batch_tasks_ok:
+                        print("ОШИБКА пакета: задачи не совпадают.")
+                        await session.rollback()
+                        return 1
+                    if not batch_team_ok:
+                        print("ОШИБКА пакета: команда/ставки не совпадают.")
+                        await session.rollback()
+                        return 1
+                    if not batch_users_ok:
+                        print("ОШИБКА пакета: пользователи/строки не совпадают.")
+                        await session.rollback()
+                        return 1
+
+                    await session.commit()
+                    assert checkpoint_data is not None
+                    completed_list = list(checkpoint_data.get("completed_project_keys") or [])
+                    completed_set = set(completed_list)
+                    for client_name, project_name in batch_pairs:
+                        completed_set.add(_project_key(client_name, project_name))
+                    checkpoint_data["completed_project_keys"] = sorted(completed_set)
+                    _save_checkpoint(checkpoint_path, checkpoint_data)
+                    projects_done_checkpoint = len(completed_set)
+                    last_client, last_project = batch_pairs[-1]
+                    print(
+                        _format_progress(
+                            projects_done_checkpoint,
+                            total_projects,
+                            last_client,
+                            last_project,
+                        )
+                    )
+
+            if batch_size > 0:
+                if execute:
+                    print(
+                        f"\nПакетный импорт завершён: {projects_done_checkpoint}/{total_projects} проектов "
+                        f"({100.0 * projects_done_checkpoint / total_projects:.1f}%)."
+                    )
+                    print(
+                        f"Записей времени всего: {stats['entry_created']} "
+                        f"(дубликаты: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
+                    )
+                else:
+                    print("\nDry-run пакетного режима завершён. Для записи: --execute")
+                if harvest_only_names:
+                    print("\nСозданы/использованы TT-пользователи Harvest (нет в auth/TT):")
+                    for name in sorted(harvest_only_names):
+                        print(f"  - {name}")
+                return 0
 
             if harvest_only_names:
                 print("\nСозданы/использованы TT-пользователи Harvest (нет в auth/TT):")
@@ -1942,10 +2325,44 @@ def main() -> int:
             "Запускать вместе с --execute."
         ),
     )
-    g = p.add_mutually_exclusive_group(required=True)
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Импортировать по N проектов за раз с commit и checkpoint после каждого пакета. "
+            "N=1 — по одному проекту (можно прервать и продолжить). 0 — всё за один проход."
+        ),
+    )
+    p.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Путь к JSON checkpoint (по умолчанию: {csv}.harvest-import.checkpoint.json).",
+    )
+    p.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Удалить checkpoint и начать импорт проектов заново.",
+    )
+    p.add_argument(
+        "--progress",
+        action="store_true",
+        help="Показать прогресс по checkpoint и выйти (без импорта).",
+    )
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
     args = p.parse_args()
+
+    if args.progress:
+        pass
+    elif args.dry_run == args.execute:
+        p.error("укажите ровно одно: --dry-run или --execute (или --progress)")
+
+    if args.batch_size < 0:
+        p.error("--batch-size must be >= 0")
 
     harvest_file = _resolve_harvest_file(args.file)
     if harvest_file is None:
@@ -1972,6 +2389,10 @@ def main() -> int:
             auth_db_url=auth_db_url,
             replace=args.replace,
             team_only=args.team_only,
+            batch_size=args.batch_size,
+            checkpoint_file=args.checkpoint,
+            reset_checkpoint=args.reset_checkpoint,
+            progress_only=args.progress,
         )
     )
 
