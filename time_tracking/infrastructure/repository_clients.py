@@ -586,6 +586,17 @@ class ClientProjectRepository:
         )
         return r.scalars().one_or_none()
 
+    async def list_by_ids_global(self, project_ids: list[str]) -> list[TimeManagerClientProjectModel]:
+        ids = [x.strip() for x in project_ids if x and str(x).strip()]
+        if not ids:
+            return []
+        r = await self._session.execute(
+            select(TimeManagerClientProjectModel).where(
+                TimeManagerClientProjectModel.id.in_(ids),
+            )
+        )
+        return list(r.scalars().all())
+
     async def get_by_id_global(self, project_id: str) -> TimeManagerClientProjectModel | None:
         r = await self._session.execute(
             select(TimeManagerClientProjectModel).where(TimeManagerClientProjectModel.id == project_id)

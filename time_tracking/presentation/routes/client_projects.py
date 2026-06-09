@@ -114,6 +114,11 @@ async def list_all_projects_for_expenses(
 @_global_projects_router.get("/projects")
 async def list_all_client_projects(
     include_archived: bool = Query(False, alias="includeArchived"),
+    include_budget_metrics: bool = Query(
+        False,
+        alias="includeBudgetMetrics",
+        description="Тяжёлый расчёт бюджета по всем списаниям; для списка лучше false + /projects/budget-metrics",
+    ),
     limit: int | None = Query(None, ge=1, le=500, description="Если задано — пагинированный ответ"),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -126,10 +131,29 @@ async def list_all_client_projects(
         rows, total = await repo.list_all_global_paginated(
             include_archived=include_archived, limit=limit, offset=offset
         )
-    out = await _client_projects_to_out(session, repo, rows)
+    out = await _client_projects_to_out(
+        session,
+        repo,
+        rows,
+        include_budget_metrics=include_budget_metrics,
+    )
     if limit is None:
         return out
     return {"items": out, "total": total, "limit": limit, "offset": offset}
+
+
+@_global_projects_router.get("/projects/budget-metrics")
+async def get_projects_budget_metrics(
+    ids: str = Query(..., description="ID проектов через запятую (до 80)"),
+    session: AsyncSession = Depends(get_session),
+):
+    id_list = [x.strip() for x in ids.split(",") if x.strip()][:80]
+    if not id_list:
+        return {}
+    repo = ClientProjectRepository(session)
+    rows = await repo.list_by_ids_global(id_list)
+    budget_map = await _project_budget_metrics(session, rows)
+    return _budget_metrics_payload(budget_map)
 
 
 @_global_projects_router.get(
@@ -342,10 +366,16 @@ async def _client_projects_to_out(
     session: AsyncSession,
     repo: ClientProjectRepository,
     rows: list,
+    *,
+    include_budget_metrics: bool = True,
 ) -> list[TimeManagerClientProjectOut]:
     pids = [r.id for r in rows]
     usage_map = await repo.time_entries_counts_by_project_ids(pids)
-    budget_map = await _project_budget_metrics(session, rows)
+    budget_map = (
+        await _project_budget_metrics(session, rows)
+        if include_budget_metrics
+        else {}
+    )
     out: list[TimeManagerClientProjectOut] = []
     for r in rows:
         row_out = _project_out(r, usage_map.get(r.id, 0))
@@ -357,6 +387,20 @@ async def _client_projects_to_out(
         row_out.logged_hours_value = bm.get("logged_hours_value")
         row_out.has_budget_configured = bm.get("has_budget_configured")
         out.append(row_out)
+    return out
+
+
+def _budget_metrics_payload(budget_map: dict[str, dict]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for pid, bm in budget_map.items():
+        out[pid] = {
+            "budgetDisplayValue": bm.get("budget_display_value"),
+            "budgetSpentValue": bm.get("budget_spent_value"),
+            "budgetRemainingValue": bm.get("budget_remaining_value"),
+            "budgetProgressPercent": bm.get("budget_progress_percent"),
+            "loggedHoursValue": bm.get("logged_hours_value"),
+            "hasBudgetConfigured": bm.get("has_budget_configured"),
+        }
     return out
 
 

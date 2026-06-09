@@ -875,17 +875,32 @@ async def list_projects_for_expenses(
 @router.get("/projects")
 async def list_all_projects(
     include_archived: bool = Query(False, alias="includeArchived"),
+    include_budget_metrics: bool = Query(False, alias="includeBudgetMetrics"),
     limit: Optional[int] = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
     _: dict = Depends(get_current_user),
 ):
     params: dict[str, str] = {
         "includeArchived": "true" if include_archived else "false",
+        "includeBudgetMetrics": "true" if include_budget_metrics else "false",
     }
     if limit is not None:
         params["limit"] = str(limit)
         params["offset"] = str(offset)
-    return await _tt_json("GET", "/projects", params=params)
+    return await _tt_json("GET", "/projects", params=params, timeout=30.0)
+
+
+@router.get("/projects/budget-metrics")
+async def get_projects_budget_metrics(
+    ids: str = Query(..., description="Comma-separated project ids"),
+    _: dict = Depends(get_current_user),
+):
+    return await _tt_json(
+        "GET",
+        "/projects/budget-metrics",
+        params={"ids": ids},
+        timeout=45.0,
+    )
 
 
 @router.get("/projects/{project_id}/expense-categories")
