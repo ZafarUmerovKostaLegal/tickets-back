@@ -1,42 +1,4 @@
-"""Импорт клиентов, проектов и записей времени из отчёта Harvest (.csv / .xlsx).
 
-Запуск на сервере **без Docker**:
-
-  cd /path/to/tickets-back
-  export TIME_TRACKING_DATABASE_URL="postgresql://user:pass@host:5432/kosta_time_tracking"
-  pip install -r time_tracking/requirements.txt
-
-  python time_tracking/scripts/import_harvest_time_report.py --dry-run
-  python time_tracking/scripts/import_harvest_time_report.py --execute
-
-Пакетный импорт (можно остановить Ctrl+C и продолжить позже):
-
-  python time_tracking/scripts/import_harvest_time_report.py --file report.csv --execute --batch-size 1
-  python time_tracking/scripts/import_harvest_time_report.py --file report.csv --progress
-
-При старте скрипт сверяет CSV с БД и пропускает проекты, которые уже загружены 1:1
-(часы, строки, harvest-import refs). Checkpoint синхронизируется с БД.
-Отключить: --no-sync-from-db (только checkpoint).
-
-Time report содержит только проекты с записями времени. Все проекты Harvest (в т.ч. без часов):
-  --projects-file harvest_projects.csv
-(колонки Client, Project, Project Code, Currency — экспорт списка проектов из Harvest).
-
-Checkpoint: {csv}.harvest-import.checkpoint.json — список загруженных проектов и %.
-
-Сверка CSV ↔ БД (read-only):
-
-  python time_tracking/scripts/verify_harvest_time_report.py --file report.csv
-
-По умолчанию ищется CSV (точный экспорт Harvest):
-  harvest_time_report_from2023-01-23to2026-05-26.csv
-Затем xlsx с тем же именем.
-
-URL БД: --database-url или env TIME_TRACKING_DATABASE_URL / DATABASE_URL.
-
-Пользователи сопоставляются с time_tracking_users (включая архив), затем auth DB.
-Если сотрудника нет нигде — создаётся архивный TT-пользователь Harvest (все записи импортируются).
-"""
 
 from __future__ import annotations
 
@@ -506,6 +468,20 @@ def _configure_database_url(database_url: str) -> None:
         get_settings.cache_clear()
     except Exception:
         pass
+
+
+def _configure_stdio_utf8() -> None:
+    """Avoid argparse/help crashes on Windows non-UTF consoles."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
 
 def _norm(s: str | None) -> str:
@@ -3420,6 +3396,7 @@ async def _run(
 
 
 def main() -> int:
+    _configure_stdio_utf8()
     p = argparse.ArgumentParser(description="Импорт Harvest time report (.csv / .xlsx) в time tracking.")
     p.add_argument(
         "--file",

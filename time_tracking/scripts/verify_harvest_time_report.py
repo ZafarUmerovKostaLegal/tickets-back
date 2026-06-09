@@ -65,6 +65,20 @@ def _expected_hours_breakdown(
     )
 
 
+def _configure_stdio_utf8() -> None:
+    """Avoid argparse/help crashes on Windows non-UTF consoles."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 async def _run_verify(
     *,
     path: Path,
@@ -399,6 +413,7 @@ async def _run_verify(
 
 
 def main() -> int:
+    _configure_stdio_utf8()
     p = argparse.ArgumentParser(
         description="Сверка Harvest CSV с time tracking (read-only)."
     )
