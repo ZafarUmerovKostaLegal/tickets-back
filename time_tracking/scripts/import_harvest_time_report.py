@@ -18,6 +18,10 @@
 (часы, строки, harvest-import refs). Checkpoint синхронизируется с БД.
 Отключить: --no-sync-from-db (только checkpoint).
 
+Time report содержит только проекты с записями времени. Все проекты Harvest (в т.ч. без часов):
+  --projects-file harvest_projects.csv
+(колонки Client, Project, Project Code, Currency — экспорт списка проектов из Harvest).
+
 Checkpoint: {csv}.harvest-import.checkpoint.json — список загруженных проектов и %.
 
 Сверка CSV ↔ БД (read-only):
@@ -114,14 +118,25 @@ def _expectation_from_project_rows(
 def _build_csv_expectations_map(
     rows: list[HarvestRow],
     source_name: str,
+    extra_project_pairs: list[tuple[str, str]] | None = None,
 ) -> dict[str, ProjectImportExpectation]:
     grouped: dict[str, list[HarvestRow]] = defaultdict(list)
     for row in rows:
         grouped[_project_key(row.client_name, row.project_name)].append(row)
-    return {
+    out = {
         key: _expectation_from_project_rows(proj_rows, source_name)
         for key, proj_rows in grouped.items()
     }
+    empty = ProjectImportExpectation(
+        total=Decimal("0"),
+        billable=Decimal("0"),
+        non_billable=Decimal("0"),
+        row_count=0,
+        refs=frozenset(),
+    )
+    for client_name, project_name in extra_project_pairs or []:
+        out.setdefault(_project_key(client_name, project_name), empty)
+    return out
 
 
 def _project_db_matches_expectation(
@@ -694,6 +709,105 @@ def _sorted_project_pairs(rows: list[HarvestRow]) -> list[tuple[str, str]]:
     )
 
 
+@dataclass(frozen=True)
+class HarvestProjectCatalogEntry:
+    client_name: str
+    project_name: str
+    project_code: str | None
+    currency: str
+
+
+def _load_projects_catalog(path: Path) -> list[HarvestProjectCatalogEntry]:
+    """CSV/XLSX со списком проектов Harvest (в т.ч. без записей времени).
+
+    Колонки: Client, Project, Project Code, Currency (как в time report).
+    """
+    suffix = path.suffix.lower()
+    out: list[HarvestProjectCatalogEntry] = []
+    if suffix == ".csv":
+        with path.open(newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                client_name = _csv_field(row, "Client").strip()
+                project_name = _csv_field(row, "Project").strip()
+                if not client_name or not project_name:
+                    continue
+                out.append(
+                    HarvestProjectCatalogEntry(
+                        client_name=client_name,
+                        project_name=project_name,
+                        project_code=_optional_text(_csv_field(row, "Project Code")),
+                        currency=_parse_currency(_csv_field(row, "Currency")),
+                    )
+                )
+        return out
+    if suffix in (".xlsx", ".xlsm"):
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            ws = wb["Harvest"] if "Harvest" in wb.sheetnames else wb[wb.sheetnames[0]]
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or all(c is None or str(c).strip() == "" for c in row):
+                    continue
+                client_name = str(row[1] or "").strip()
+                project_name = str(row[2] or "").strip()
+                if not client_name or not project_name:
+                    continue
+                out.append(
+                    HarvestProjectCatalogEntry(
+                        client_name=client_name,
+                        project_name=project_name,
+                        project_code=_optional_text(str(row[3] or "")),
+                        currency=_parse_currency(row[19] if len(row) > 19 else None),
+                    )
+                )
+        finally:
+            wb.close()
+        return out
+    raise SystemExit(
+        f"Неподдерживаемый формат каталога проектов: {path.suffix} (нужен .csv или .xlsx)"
+    )
+
+
+def _merge_project_pairs(
+    time_rows: list[HarvestRow],
+    catalog: list[HarvestProjectCatalogEntry],
+) -> list[tuple[str, str]]:
+    pairs = {(r.client_name, r.project_name) for r in time_rows}
+    for entry in catalog:
+        pairs.add((entry.client_name, entry.project_name))
+    return sorted(pairs, key=lambda p: (_norm(p[0]), _norm(p[1])))
+
+
+def _build_harvest_meta_maps(
+    time_rows: list[HarvestRow],
+    catalog: list[HarvestProjectCatalogEntry],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str | None]]:
+    """client_norm -> currency, project_key -> currency, project_key -> code."""
+    project_currency: dict[str, str] = {}
+    project_code: dict[str, str | None] = {}
+    client_counts: dict[str, Counter] = defaultdict(Counter)
+
+    for row in time_rows:
+        key = _project_key(row.client_name, row.project_name)
+        project_currency[key] = row.currency
+        if row.project_code:
+            project_code.setdefault(key, row.project_code)
+        client_counts[_norm(row.client_name)][row.currency] += 1
+
+    for entry in catalog:
+        key = _project_key(entry.client_name, entry.project_name)
+        project_currency.setdefault(key, entry.currency)
+        if entry.project_code:
+            project_code.setdefault(key, entry.project_code)
+        client_counts[_norm(entry.client_name)][entry.currency] += 1
+
+    client_currency = {
+        client_key: counts.most_common(1)[0][0]
+        for client_key, counts in client_counts.items()
+    }
+    return client_currency, project_currency, project_code
+
+
 def _csv_field(row: dict[str, str], name: str) -> str:
     if name in row:
         return str(row[name] or "").strip()
@@ -935,12 +1049,13 @@ async def _run(
     project_filter: str | None = None,
     project_index: int | None = None,
     sync_from_db: bool = True,
+    projects_file: Path | None = None,
 ) -> int:
     from sqlalchemy import and_, case, delete, func, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from application.client_expense_category_defaults import seed_default_expense_categories_for_client
-    from application.hourly_rate_logic import normalize_currency
+    from application.hourly_rate_logic import filter_rates_by_currency, normalize_currency, pick_rate_for_date
     from application.project_billable_rate_sync import _delete_user_project_scoped_billable_rates
     from application.project_partner_requirement import (
         ensure_projects_have_partner_assignee,
@@ -961,26 +1076,54 @@ async def _run(
     from infrastructure.repositories import TimeTrackingUserRepository
 
     rows = _load_rows(path)
-    if not rows:
+    if not rows and not projects_file:
         print("Файл пуст или не содержит строк данных.")
         return 1
+
+    catalog: list[HarvestProjectCatalogEntry] = []
+    if projects_file is not None:
+        if not projects_file.is_file():
+            print(f"Каталог проектов не найден: {projects_file}")
+            return 1
+        catalog = _load_projects_catalog(projects_file)
+        print(f"Каталог проектов: {projects_file.name} — {len(catalog)} проект(ов)")
+
+    client_currency_map, project_currency_map, project_code_map = _build_harvest_meta_maps(
+        rows, catalog
+    )
+    all_project_pairs = _merge_project_pairs(rows, catalog)
+    catalog_only_pairs = {
+        (e.client_name, e.project_name)
+        for e in catalog
+        if not any(
+            _norm(r.client_name) == _norm(e.client_name)
+            and _norm(r.project_name) == _norm(e.project_name)
+            for r in rows
+        )
+    }
+    if catalog_only_pairs:
+        print(
+            f"Проектов только в каталоге (без часов в time report): {len(catalog_only_pairs)}"
+        )
 
     print(f"Файл: {path}")
     print(f"Формат: {path.suffix.lower()} (1 строка файла = 1 запись времени)")
     harvest_source_name = path.name
-    print(f"Строк в отчёте: {len(rows)}")
-    print(f"Клиентов: {len({r.client_name for r in rows})}")
-    print(f"Проектов: {len({(r.client_name, r.project_name) for r in rows})}")
-    print(f"Пользователей Harvest: {len({r.harvest_user_key for r in rows})}")
-    expected_hours_total = sum((r.hours for r in rows), Decimal("0"))
-    expected_billable_total = sum((r.hours for r in rows if r.is_billable), Decimal("0"))
-    expected_non_billable_total = expected_hours_total - expected_billable_total
-    print(
-        f"Часы в файле Harvest: всего {expected_hours_total}, "
-        f"billable {expected_billable_total}, non-billable {expected_non_billable_total}"
-    )
+    print(f"Клиентов: {len({p[0] for p in all_project_pairs})}")
+    print(f"Проектов: {len(all_project_pairs)}")
+    if rows:
+        print(f"Строк в отчёте: {len(rows)}")
+        print(f"Пользователей Harvest: {len({r.harvest_user_key for r in rows})}")
+        expected_hours_total = sum((r.hours for r in rows), Decimal("0"))
+        expected_billable_total = sum((r.hours for r in rows if r.is_billable), Decimal("0"))
+        expected_non_billable_total = expected_hours_total - expected_billable_total
+        print(
+            f"Часы в файле Harvest: всего {expected_hours_total}, "
+            f"billable {expected_billable_total}, non-billable {expected_non_billable_total}"
+        )
+    else:
+        print("Строк времени в time report: 0 (только каталог проектов)")
 
-    all_project_pairs = _sorted_project_pairs(rows)
     try:
         scope_project_pairs = _filter_project_pairs(
             all_project_pairs,
@@ -1000,7 +1143,9 @@ async def _run(
             print(f"Фильтр: {len(scope_project_pairs)} проект(ов) из {len(all_project_pairs)}")
 
     checkpoint_path = checkpoint_file or _default_checkpoint_path(path)
-    csv_expectations = _build_csv_expectations_map(rows, harvest_source_name)
+    csv_expectations = _build_csv_expectations_map(
+        rows, harvest_source_name, extra_project_pairs=catalog_only_pairs
+    )
 
     checkpoint_data: dict[str, Any] | None = None
     completed_from_checkpoint: set[str] = set()
@@ -1368,8 +1513,11 @@ async def _run(
         auth_user_id: int,
         project_ids: list[str],
         stats: Counter,
+        scoped_rows: list[HarvestRow] | None = None,
     ) -> None:
-        user_rows = [r for r in rows if r.harvest_user_key == harvest_user_key]
+        user_rows = scoped_rows if scoped_rows is not None else [
+            r for r in rows if r.harvest_user_key == harvest_user_key
+        ]
         billable_intervals = _harvest_user_rate_intervals(user_rows)
         cost_intervals = _harvest_user_rate_intervals(
             user_rows, rate_attr="cost_rate", billable_only=False
@@ -1493,6 +1641,19 @@ async def _run(
                 granter = uid
 
             access_key = (uid, project_id)
+            user_proj_rows = [
+                r for r in rows_for_project(client_name, project_name)
+                if r.harvest_user_key == hkey
+            ]
+            await ensure_harvest_user_rates_from_csv(
+                session,
+                harvest_user_key=hkey,
+                sample_row=sample,
+                auth_user_id=uid,
+                project_ids=[project_id],
+                stats=stats,
+                scoped_rows=user_proj_rows,
+            )
             if access_key not in granted_access:
                 await access_repo.grant_access_if_absent(
                     uid,
@@ -1503,14 +1664,6 @@ async def _run(
                 granted_access.add(access_key)
                 stats["project_access_granted"] += 1
 
-            await ensure_harvest_user_rates_from_csv(
-                session,
-                harvest_user_key=hkey,
-                sample_row=sample,
-                auth_user_id=uid,
-                project_ids=[project_id],
-                stats=stats,
-            )
             stats["project_team_members"] += 1
             print(f"    + {_harvest_display_name(sample)}: список TT, доступ, ставки")
         await session.flush()
@@ -2069,11 +2222,141 @@ async def _run(
             task_cache: dict[str, dict[str, str]] = {}
             projects_tasks_initialized: set[str] = set()
             projects_team_initialized: set[str] = set()
-            client_currency: dict[str, str] = {}
             granted_access: set[tuple[int, str]] = set()
             granter: int | None = None
-            for hr in rows:
-                client_currency.setdefault(_norm(hr.client_name), hr.currency)
+
+            async def _sync_harvest_currencies(
+                client_id: str,
+                client_name: str,
+                project_id: str,
+                project_name: str,
+            ) -> None:
+                ckey = _norm(client_name)
+                pkey = _project_key(client_name, project_name)
+                exp_client_cur = client_currency_map.get(ckey, "USD")
+                exp_project_cur = project_currency_map.get(pkey, exp_client_cur)
+                client_row = await client_repo.get_by_id(client_id)
+                if client_row and (client_row.currency or "").strip().upper()[:10] != exp_client_cur:
+                    await client_repo.update(client_id, {"currency": exp_client_cur})
+                    stats["client_currency_synced"] += 1
+                project_row = await project_repo.get_by_id(client_id, project_id)
+                if project_row and (project_row.currency or "").strip().upper()[:10] != exp_project_cur:
+                    await project_repo.update(
+                        client_id,
+                        project_id,
+                        {"currency": exp_project_cur},
+                    )
+                    stats["project_currency_synced"] += 1
+
+            async def _ensure_harvest_project_shell(
+                client_name: str,
+                project_name: str,
+            ) -> str | None:
+                """Создать клиента/проект без записей времени (из каталога Harvest)."""
+                ckey = _norm(client_name)
+                pkey_norm = _norm(project_name)
+                pair_key = _project_key(client_name, project_name)
+                exp_client_cur = client_currency_map.get(ckey, "USD")
+                exp_project_cur = project_currency_map.get(pair_key, exp_client_cur)
+                exp_code = project_code_map.get(pair_key)
+
+                if ckey not in client_cache:
+                    existing = await find_client_by_name(session, client_name)
+                    if existing:
+                        client_cache[ckey] = existing.id
+                        stats["client_exists"] += 1
+                    elif execute:
+                        created = await client_repo.create(
+                            name=client_name,
+                            address=None,
+                            currency=exp_client_cur,
+                            invoice_due_mode="custom",
+                            invoice_due_days_after_issue=30,
+                            tax_percent=None,
+                            tax2_percent=None,
+                            discount_percent=None,
+                        )
+                        await seed_default_expense_categories_for_client(session, created.id)
+                        client_cache[ckey] = created.id
+                        stats["client_created"] += 1
+                        await session.flush()
+                    else:
+                        return None
+                client_id = client_cache[ckey]
+                if client_id.startswith("<new:"):
+                    return None
+
+                cache_key = (client_id, pkey_norm)
+                if cache_key not in project_cache:
+                    existing_p = await find_project(session, client_id, project_name)
+                    if existing_p:
+                        project_cache[cache_key] = existing_p.id
+                        project_meta[existing_p.id] = (client_id, client_name, project_name)
+                        stats["project_exists"] += 1
+                    elif execute:
+                        project_code = await harvest_project_code_for_create(
+                            session,
+                            client_id,
+                            project_name,
+                            exp_code,
+                        )
+                        created_p = await project_repo.create(
+                            client_id=client_id,
+                            name=project_name,
+                            code=project_code,
+                            start_date=None,
+                            end_date=None,
+                            notes="Imported from Harvest (catalog, no time entries)",
+                            report_visibility="managers_only",
+                            project_type="time_and_materials",
+                            currency=exp_project_cur,
+                            billable_rate_type=None,
+                            project_billable_rate_amount=None,
+                        )
+                        project_cache[cache_key] = created_p.id
+                        project_meta[created_p.id] = (client_id, client_name, project_name)
+                        stats["project_created"] += 1
+                        await session.flush()
+                    else:
+                        return None
+                project_id = project_cache[cache_key]
+                await _sync_harvest_currencies(client_id, client_name, project_id, project_name)
+                if project_id not in projects_tasks_initialized:
+                    task_cache[project_id] = await ensure_harvest_project_tasks(
+                        session,
+                        project_id,
+                        [],
+                        task_repo,
+                    )
+                    projects_tasks_initialized.add(project_id)
+                return project_id
+
+            if execute and not team_only:
+                cur_sync_clients_before = stats["client_currency_synced"]
+                cur_sync_projects_before = stats["project_currency_synced"]
+                for client_name, project_name in scope_project_pairs:
+                    existing_client = await find_client_by_name(session, client_name)
+                    if existing_client is None:
+                        continue
+                    existing_project = await find_project(
+                        session, existing_client.id, project_name
+                    )
+                    if existing_project is None:
+                        continue
+                    await _sync_harvest_currencies(
+                        existing_client.id,
+                        client_name,
+                        existing_project.id,
+                        project_name,
+                    )
+                synced_clients = stats["client_currency_synced"] - cur_sync_clients_before
+                synced_projects = stats["project_currency_synced"] - cur_sync_projects_before
+                if synced_clients or synced_projects:
+                    await session.flush()
+                    print(
+                        f"Синхронизация валют из Harvest: "
+                        f"клиентов {synced_clients}, проектов {synced_projects}"
+                    )
 
             # Сначала гарантируем TT-пользователя для каждого имени из Harvest (даже без регистрации в auth).
             pending_set = set(pending_project_pairs)
@@ -2229,11 +2512,15 @@ async def _run(
                         if existing:
                             client_cache[ckey] = existing.id
                             stats["client_exists"] += 1
+                            exp_client_cur = client_currency_map.get(ckey, hr.currency)
+                            if execute and (existing.currency or "").strip().upper()[:10] != exp_client_cur:
+                                await client_repo.update(existing.id, {"currency": exp_client_cur})
+                                stats["client_currency_synced"] += 1
                         elif execute:
                             created = await client_repo.create(
                                 name=hr.client_name,
                                 address=None,
-                                currency=client_currency.get(ckey, "EUR"),
+                                currency=client_currency_map.get(ckey, hr.currency),
                                 invoice_due_mode="custom",
                                 invoice_due_days_after_issue=30,
                                 tax_percent=None,
@@ -2260,17 +2547,29 @@ async def _run(
                             project_cache[pkey] = existing_p.id
                             project_meta[existing_p.id] = (client_id, hr.client_name, hr.project_name)
                             stats["project_exists"] += 1
+                            exp_project_cur = project_currency_map.get(
+                                _project_key(hr.client_name, hr.project_name),
+                                hr.currency,
+                            )
+                            if execute and (existing_p.currency or "").strip().upper()[:10] != exp_project_cur:
+                                await project_repo.update(
+                                    client_id,
+                                    existing_p.id,
+                                    {"currency": exp_project_cur},
+                                )
+                                stats["project_currency_synced"] += 1
                         elif execute:
                             proj_dates = [
                                 r.work_date
                                 for r in rows
                                 if _norm(r.client_name) == ckey and _norm(r.project_name) == _norm(hr.project_name)
                             ]
+                            pair_key = _project_key(hr.client_name, hr.project_name)
                             project_code = await harvest_project_code_for_create(
                                 session,
                                 client_id,
                                 hr.project_name,
-                                hr.project_code,
+                                project_code_map.get(pair_key, hr.project_code),
                             )
                             created_p = await project_repo.create(
                                 client_id=client_id,
@@ -2281,7 +2580,7 @@ async def _run(
                                 notes="Imported from Harvest",
                                 report_visibility="managers_only",
                                 project_type="time_and_materials",
-                                currency=client_currency.get(ckey, hr.currency),
+                                currency=project_currency_map.get(pair_key, hr.currency),
                                 billable_rate_type=None,
                                 project_billable_rate_amount=None,
                             )
@@ -2389,6 +2688,15 @@ async def _run(
                     elif not execute:
                         stats["entry_planned"] += 1
 
+                for shell_client, shell_project in batch_pairs:
+                    if rows_for_project(shell_client, shell_project):
+                        continue
+                    shell_id = await _ensure_harvest_project_shell(shell_client, shell_project)
+                    if shell_id and execute:
+                        print(
+                            f"  Каталог: проект без часов — {shell_client} / {shell_project}"
+                        )
+
                 if batch_size > 0 and execute:
                     scope_meta = {
                         pid: meta
@@ -2398,6 +2706,13 @@ async def _run(
                     if not scope_meta and active_rows:
                         print(
                             "ОШИБКА пакета: строки есть, но проект не создан в БД "
+                            f"({batch_pairs[0][0]} / {batch_pairs[0][1]})."
+                        )
+                        await session.rollback()
+                        return 1
+                    if not scope_meta and not active_rows and batch_pairs:
+                        print(
+                            "ОШИБКА пакета: не удалось создать проект из каталога "
                             f"({batch_pairs[0][0]} / {batch_pairs[0][1]})."
                         )
                         await session.rollback()
@@ -2497,12 +2812,20 @@ async def _run(
                                     f"нет доступа — {_harvest_display_name(sample)}"
                                 )
                             needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
-                            if needs_rate and not await hr_repo.list_by_user_and_kind(uid, "billable"):
-                                batch_team_ok = False
-                                print(
-                                    f"  [команда] {client_name} / {project_name}: "
-                                    f"нет billable-ставки — {_harvest_display_name(sample)}"
-                                )
+                            proj_cur = project_currency_map.get(
+                                _project_key(client_name, project_name),
+                                client_currency_map.get(_norm(client_name), "USD"),
+                            )
+                            if needs_rate:
+                                billable_rates = await hr_repo.list_by_user_and_kind(uid, "billable")
+                                scoped_rates = filter_rates_by_currency(billable_rates, proj_cur)
+                                if pick_rate_for_date(scoped_rates, date.today()) is None:
+                                    batch_team_ok = False
+                                    print(
+                                        f"  [команда] {client_name} / {project_name}: "
+                                        f"нет billable-ставки в {proj_cur} — "
+                                        f"{_harvest_display_name(sample)}"
+                                    )
 
                     expected_users = _expected_hours_by_harvest_user(active_rows)
                     db_by_auth = await db_user_hours_harvest_file_for_projects(
@@ -2937,6 +3260,15 @@ def main() -> int:
         action="store_true",
         help="Не сверять CSV с БД при старте (только checkpoint, без пропуска по БД).",
     )
+    p.add_argument(
+        "--projects-file",
+        type=Path,
+        default=None,
+        help=(
+            "CSV/XLSX каталог всех проектов Harvest (Client, Project, Project Code, Currency). "
+            "Нужен для проектов без записей времени (time report содержит только проекты с часами)."
+        ),
+    )
     g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
@@ -2986,6 +3318,7 @@ def main() -> int:
                 project_filter=(args.project or "").strip() or None,
                 project_index=args.project_index if args.project_index > 0 else None,
                 sync_from_db=not args.no_sync_from_db,
+                projects_file=args.projects_file,
             )
         )
     except KeyboardInterrupt:

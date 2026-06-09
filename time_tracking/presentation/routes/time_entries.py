@@ -27,6 +27,7 @@ from presentation.schemas import (
     TimeEntryOut,
     TimeEntryPatchBody,
 )
+from infrastructure.report_cache import invalidate_all_reports
 
 router = APIRouter(prefix="/users", tags=["time_entries"])
 
@@ -166,6 +167,7 @@ async def create_time_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     await session.commit()
     await session.refresh(row)
+    invalidate_all_reports()
     return TimeEntryOut.model_validate(row)
 
 
@@ -243,6 +245,7 @@ async def patch_time_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     await session.commit()
     await session.refresh(row)
+    invalidate_all_reports()
     return TimeEntryOut.model_validate(row)
 
 
@@ -302,6 +305,7 @@ async def delete_time_entry(
         if not ok:
             raise HTTPException(status_code=404, detail="Запись не найдена")
         await session.commit()
+        invalidate_all_reports()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     void_kind = (body.void_kind if body is not None else "rejected")
@@ -318,4 +322,5 @@ async def delete_time_entry(
         raise HTTPException(status_code=404, detail="Запись не найдена") from None
     await session.commit()
     await session.refresh(row2)
+    invalidate_all_reports()
     return TimeEntryOut.model_validate(row2)

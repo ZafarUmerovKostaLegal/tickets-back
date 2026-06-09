@@ -29,6 +29,7 @@ from infrastructure.models import (
 )
 from infrastructure.models_invoices import InvoiceLineItemModel, InvoiceModel
 from infrastructure.repository_invoices import InvoiceRepository
+from infrastructure.report_cache import get_dim, set_dim, invalidate_all_dims, invalidate_all_reports
 
 _log = logging.getLogger(__name__)
 
@@ -367,24 +368,43 @@ def filter_expense_rows_to_tt_projects(
 
 
 async def _load_users_map(session: AsyncSession) -> dict[int, TimeTrackingUserModel]:
+    cached = get_dim("users_map")
+    if cached is not None:
+        return cached
     rows = (await session.execute(select(TimeTrackingUserModel))).scalars().all()
-    return {u.auth_user_id: u for u in rows}
+    result = {u.auth_user_id: u for u in rows}
+    set_dim("users_map", result)
+    return result
 
 
 async def _load_projects_map(session: AsyncSession) -> dict[str, TimeManagerClientProjectModel]:
+    cached = get_dim("projects_map")
+    if cached is not None:
+        return cached
     rows = (await session.execute(select(TimeManagerClientProjectModel))).scalars().all()
-    return {p.id: p for p in rows}
+    result = {p.id: p for p in rows}
+    set_dim("projects_map", result)
+    return result
 
 
 async def _load_clients_map(session: AsyncSession) -> dict[str, TimeManagerClientModel]:
+    cached = get_dim("clients_map")
+    if cached is not None:
+        return cached
     rows = (await session.execute(select(TimeManagerClientModel))).scalars().all()
-    return {c.id: c for c in rows}
+    result = {c.id: c for c in rows}
+    set_dim("clients_map", result)
+    return result
 
 
 async def _load_tasks_map(session: AsyncSession) -> dict[str, TimeManagerClientTaskModel]:
-
+    cached = get_dim("tasks_map")
+    if cached is not None:
+        return cached
     rows = (await session.execute(select(TimeManagerClientTaskModel))).scalars().all()
-    return {t.id: t for t in rows}
+    result = {t.id: t for t in rows}
+    set_dim("tasks_map", result)
+    return result
 
 
 async def build_report_summary(

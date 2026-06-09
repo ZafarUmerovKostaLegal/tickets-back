@@ -884,3 +884,23 @@ async def apply_hourly_rates_applies_to_project_patch(conn: AsyncConnection) -> 
         )
     )
 
+
+async def apply_report_performance_indexes_patch(conn: AsyncConnection) -> None:
+    """Add composite indexes that speed up the time-report queries."""
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entries_date_voided
+                ON time_tracking_entries (work_date, voided_at)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entries_voided_at
+                ON time_tracking_entries (voided_at)
+            """
+        )
+    )
+

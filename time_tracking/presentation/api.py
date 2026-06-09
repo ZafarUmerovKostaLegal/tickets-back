@@ -32,6 +32,7 @@ from infrastructure.schema_patches import (
     apply_weekly_submissions_schema_patch,
     apply_client_projects_project_billable_amount_patch,
     apply_hourly_rates_applies_to_project_patch,
+    apply_report_performance_indexes_patch,
 )
 from application.settings_sync import renormalize_time_entries_to_minute
 from presentation.deps import require_bearer_user
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI):
         await apply_weekly_submissions_schema_patch(conn)
         await apply_client_projects_project_billable_amount_patch(conn)
         await apply_hourly_rates_applies_to_project_patch(conn)
+        await apply_report_performance_indexes_patch(conn)
     async with async_session_factory() as session:
         await seed_default_tasks_for_all_projects_missing_tasks(session)
         await seed_default_expense_categories_for_all_clients(session)

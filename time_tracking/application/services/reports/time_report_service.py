@@ -28,6 +28,7 @@ from application.report_builder import (
     load_week_submitted_user_dates,
 )
 from infrastructure.models import TimeEntryModel
+from infrastructure.report_cache import get_report, set_report
 from application.services.reports._base import (
     _hours,
     _money,
@@ -373,6 +374,24 @@ async def get_time_report(
     page: int = 1,
     per_page: int = 100,
 ) -> dict:
+    _cache_params = {
+        "fn": "get_time_report",
+        "group_by": group_by,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "client_ids": sorted(client_ids) if client_ids else None,
+        "project_ids": sorted(project_ids) if project_ids else None,
+        "user_ids": sorted(user_ids) if user_ids else None,
+        "task_ids": sorted(task_ids) if task_ids else None,
+        "is_billable": is_billable,
+        "include_fixed_fee": include_fixed_fee,
+        "page": page,
+        "per_page": per_page,
+    }
+    _cached = get_report(_cache_params)
+    if _cached is not None:
+        return _cached
+
     cond = _base_entry_conditions(
         date_from, date_to, user_ids, project_ids, client_ids, include_fixed_fee,
     )
@@ -527,6 +546,7 @@ async def get_time_report(
             **out["meta"],
             "voided_time_entries_count": len(voided_api_lines),
         }
+    set_report(_cache_params, out)
     return out
 
 

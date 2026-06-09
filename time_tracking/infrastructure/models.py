@@ -84,6 +84,10 @@ class TimeEntryModel(Base):
     __table_args__ = (
         Index("ix_tt_entries_user_date", "auth_user_id", "work_date"),
         Index("ix_tt_entries_project_task", "project_id", "task_id"),
+        # Report queries: WHERE work_date BETWEEN x AND y AND voided_at IS NULL
+        Index("ix_tt_entries_date_voided", "work_date", "voided_at"),
+        # Voided-entries query: WHERE voided_at IS NOT NULL
+        Index("ix_tt_entries_voided_at", "voided_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
