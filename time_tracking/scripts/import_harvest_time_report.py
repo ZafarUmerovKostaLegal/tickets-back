@@ -437,6 +437,42 @@ def _resolve_harvest_file(preferred: Path) -> Path | None:
     return None
 
 
+def _projects_catalog_candidates(preferred: Path, time_report: Path | None = None) -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+
+    def add(p: Path) -> None:
+        key = str(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+
+    add(preferred)
+    if time_report is not None:
+        add(time_report.parent / preferred.name)
+        if preferred.name != preferred.stem:
+            add(time_report.parent / preferred.stem)
+    for base in (Path("/app"), Path("/tmp"), TT_ROOT, Path.cwd(), REPO_ROOT / "timetrackinck"):
+        add(base / preferred.name)
+        if preferred.suffix:
+            add(base / preferred.stem)
+    return out
+
+
+def _resolve_projects_catalog_file(
+    preferred: Path,
+    *,
+    time_report: Path | None = None,
+) -> Path | None:
+    for candidate in _projects_catalog_candidates(preferred, time_report):
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            if str(resolved) != str(preferred.resolve() if preferred.exists() else preferred):
+                print(f"Используется каталог проектов: {resolved}")
+            return resolved
+    return None
+
+
 def _make_async_url(url: str) -> str:
     u = (url or "").strip()
     if u.startswith("postgresql://"):
@@ -1082,11 +1118,8 @@ async def _run(
 
     catalog: list[HarvestProjectCatalogEntry] = []
     if projects_file is not None:
-        if not projects_file.is_file():
-            print(f"Каталог проектов не найден: {projects_file}")
-            return 1
         catalog = _load_projects_catalog(projects_file)
-        print(f"Каталог проектов: {projects_file.name} — {len(catalog)} проект(ов)")
+        print(f"Каталог проектов: {projects_file} — {len(catalog)} проект(ов)")
 
     client_currency_map, project_currency_map, project_code_map = _build_harvest_meta_maps(
         rows, catalog
@@ -3296,6 +3329,28 @@ def main() -> int:
         )
         return 1
 
+    projects_catalog_file: Path | None = None
+    if args.projects_file is not None:
+        projects_catalog_file = _resolve_projects_catalog_file(
+            args.projects_file,
+            time_report=harvest_file,
+        )
+        if projects_catalog_file is None:
+            print(f"Каталог проектов не найден: {args.projects_file}")
+            print("Проверьте пути:")
+            for c in _projects_catalog_candidates(args.projects_file, harvest_file):
+                print(f"  - {c}")
+            print(
+                "\nФайл нужно экспортировать из Harvest (Reports → Projects) и скопировать в контейнер:\n"
+                f"  docker cp harvest_projects_all.csv "
+                "$(docker compose ps -q time_tracking):/app/harvest_projects_all.csv"
+            )
+            print(
+                "\nБез каталога импортируются только проекты с часами в time report (~749). "
+                "Запуск без --projects-file тоже допустим."
+            )
+            return 1
+
     from sqlalchemy.exc import IntegrityError
 
     database_url = _resolve_database_url(args.database_url or None)
@@ -3318,7 +3373,7 @@ def main() -> int:
                 project_filter=(args.project or "").strip() or None,
                 project_index=args.project_index if args.project_index > 0 else None,
                 sync_from_db=not args.no_sync_from_db,
-                projects_file=args.projects_file,
+                projects_file=projects_catalog_file,
             )
         )
     except KeyboardInterrupt:
