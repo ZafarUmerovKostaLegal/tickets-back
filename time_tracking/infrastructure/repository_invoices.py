@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from application.sql_batches import iter_sql_in_batches
 from infrastructure.models_invoices import (
     InvoiceAuditLogModel,
     InvoiceCounterModel,
@@ -204,16 +205,20 @@ class InvoiceRepository:
     async def sum_payments_batch(self, invoice_ids: list[str]) -> dict[str, Decimal]:
         if not invoice_ids:
             return {}
-        q = (
-            select(
-                InvoicePaymentModel.invoice_id,
-                func.coalesce(func.sum(InvoicePaymentModel.amount), 0),
+        out: dict[str, Decimal] = {}
+        for batch in iter_sql_in_batches(invoice_ids):
+            q = (
+                select(
+                    InvoicePaymentModel.invoice_id,
+                    func.coalesce(func.sum(InvoicePaymentModel.amount), 0),
+                )
+                .where(InvoicePaymentModel.invoice_id.in_(batch))
+                .group_by(InvoicePaymentModel.invoice_id)
             )
-            .where(InvoicePaymentModel.invoice_id.in_(invoice_ids))
-            .group_by(InvoicePaymentModel.invoice_id)
-        )
-        raw = (await self._s.execute(q)).all()
-        return {str(r[0]): _m4(Decimal(str(r[1]))) for r in raw}
+            raw = (await self._s.execute(q)).all()
+            for invoice_id, amount in raw:
+                out[str(invoice_id)] = _m4(Decimal(str(amount)))
+        return out
 
     async def _apply_batch_payment_totals(self, rows: list[InvoiceModel]) -> None:
         if not rows:
@@ -282,34 +287,40 @@ class InvoiceRepository:
     async def invoiced_time_entry_ids(self, time_entry_ids: list[str]) -> set[str]:
         if not time_entry_ids:
             return set()
-        q = (
-            select(InvoiceLineItemModel.time_entry_id)
-            .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
-            .where(
-                and_(
-                    InvoiceLineItemModel.time_entry_id.in_(time_entry_ids),
-                    InvoiceModel.status != "canceled",
+        out: set[str] = set()
+        for batch in iter_sql_in_batches(time_entry_ids):
+            q = (
+                select(InvoiceLineItemModel.time_entry_id)
+                .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
+                .where(
+                    and_(
+                        InvoiceLineItemModel.time_entry_id.in_(batch),
+                        InvoiceModel.status != "canceled",
+                    )
                 )
             )
-        )
-        rows = (await self._s.execute(q)).all()
-        return {str(r[0]) for r in rows if r[0]}
+            rows = (await self._s.execute(q)).all()
+            out.update(str(r[0]) for r in rows if r[0])
+        return out
 
     async def invoiced_expense_ids(self, expense_ids: list[str]) -> set[str]:
         if not expense_ids:
             return set()
-        q = (
-            select(InvoiceLineItemModel.expense_request_id)
-            .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
-            .where(
-                and_(
-                    InvoiceLineItemModel.expense_request_id.in_(expense_ids),
-                    InvoiceModel.status != "canceled",
+        out: set[str] = set()
+        for batch in iter_sql_in_batches(expense_ids):
+            q = (
+                select(InvoiceLineItemModel.expense_request_id)
+                .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
+                .where(
+                    and_(
+                        InvoiceLineItemModel.expense_request_id.in_(batch),
+                        InvoiceModel.status != "canceled",
+                    )
                 )
             )
-        )
-        rows = (await self._s.execute(q)).all()
-        return {str(r[0]) for r in rows if r[0]}
+            rows = (await self._s.execute(q)).all()
+            out.update(str(r[0]) for r in rows if r[0])
+        return out
 
     def add(self, inv: InvoiceModel) -> None:
         self._s.add(inv)

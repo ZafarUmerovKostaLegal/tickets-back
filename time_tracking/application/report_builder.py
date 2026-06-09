@@ -16,6 +16,7 @@ from application.entry_pricing import (
     _billable_rate_for_entry,
     _cost_amount_for_entry,
 )
+from application.sql_batches import iter_sql_in_batches
 from infrastructure.config import get_settings
 from infrastructure.models import (
     TimeEntryModel,
@@ -210,28 +211,29 @@ async def _invoice_info_for_time_entries(
 
     if not entry_ids:
         return {}
-    q = (
-        select(
-            InvoiceLineItemModel.time_entry_id,
-            InvoiceModel.id,
-            InvoiceModel.invoice_number,
-        )
-        .select_from(InvoiceLineItemModel)
-        .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
-        .where(
-            InvoiceLineItemModel.time_entry_id.in_(entry_ids),
-            InvoiceLineItemModel.time_entry_id.is_not(None),
-            InvoiceModel.status != "canceled",
-        )
-    )
-    rows = (await session.execute(q)).all()
     out: dict[str, tuple[str, str]] = {}
-    for tid, iid, num in rows:
-        if not tid:
-            continue
-        k = str(tid)
-        if k not in out:
-            out[k] = (str(iid), str(num))
+    for batch in iter_sql_in_batches(entry_ids):
+        q = (
+            select(
+                InvoiceLineItemModel.time_entry_id,
+                InvoiceModel.id,
+                InvoiceModel.invoice_number,
+            )
+            .select_from(InvoiceLineItemModel)
+            .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
+            .where(
+                InvoiceLineItemModel.time_entry_id.in_(batch),
+                InvoiceLineItemModel.time_entry_id.is_not(None),
+                InvoiceModel.status != "canceled",
+            )
+        )
+        rows = (await session.execute(q)).all()
+        for tid, iid, num in rows:
+            if not tid:
+                continue
+            k = str(tid)
+            if k not in out:
+                out[k] = (str(iid), str(num))
     return out
 
 
@@ -241,29 +243,31 @@ async def invoice_details_for_time_entries(
 
     if not entry_ids:
         return {}
-    q = (
-        select(
-            InvoiceLineItemModel.time_entry_id,
-            InvoiceModel.id,
-            InvoiceModel.invoice_number,
-            InvoiceModel.status,
-            InvoiceModel.amount_paid,
-            InvoiceModel.total_amount,
-            InvoiceModel.due_date,
+    raw_rows: list[tuple] = []
+    for batch in iter_sql_in_batches(entry_ids):
+        q = (
+            select(
+                InvoiceLineItemModel.time_entry_id,
+                InvoiceModel.id,
+                InvoiceModel.invoice_number,
+                InvoiceModel.status,
+                InvoiceModel.amount_paid,
+                InvoiceModel.total_amount,
+                InvoiceModel.due_date,
+            )
+            .select_from(InvoiceLineItemModel)
+            .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
+            .where(
+                InvoiceLineItemModel.time_entry_id.in_(batch),
+                InvoiceLineItemModel.time_entry_id.is_not(None),
+                InvoiceModel.status != "canceled",
+            )
         )
-        .select_from(InvoiceLineItemModel)
-        .join(InvoiceModel, InvoiceModel.id == InvoiceLineItemModel.invoice_id)
-        .where(
-            InvoiceLineItemModel.time_entry_id.in_(entry_ids),
-            InvoiceLineItemModel.time_entry_id.is_not(None),
-            InvoiceModel.status != "canceled",
-        )
-    )
-    rows = (await session.execute(q)).all()
-    iids = list({str(r[1]) for r in rows})
+        raw_rows.extend((await session.execute(q)).all())
+    iids = list({str(r[1]) for r in raw_rows})
     sums = await InvoiceRepository(session).sum_payments_batch(iids)
     out: dict[str, dict[str, Any]] = {}
-    for tid, iid, inum, st, _ap, tot, due_d in rows:
+    for tid, iid, inum, st, _ap, tot, due_d in raw_rows:
         if not tid:
             continue
         k = str(tid)
