@@ -9,6 +9,7 @@ from scripts.import_harvest_time_report import (
     _harvest_users_for_project,
     _parse_hours,
     _parse_money_rate,
+    _user_has_billable_rate_for_harvest_rows,
     _user_needs_billable_rate_from_csv,
 )
 
@@ -103,3 +104,21 @@ def test_parse_hours_handles_thousands_separator() -> None:
     assert _parse_hours("0.17") == Decimal("0.17")
     assert _parse_hours("1,234.5") == Decimal("1234.50")
     assert _parse_hours("") is None
+
+
+def test_billable_rate_check_uses_harvest_work_dates_not_today() -> None:
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeRate:
+        valid_from: date
+        valid_to: date | None
+        currency: str = "USD"
+        id: str = "1"
+
+    rows = [_row(date(2018, 5, 10), "220", client="24 FLOOR", project="Strategy")]
+    rates = [FakeRate(valid_from=date(2018, 5, 10), valid_to=date(2018, 5, 12))]
+    assert _user_has_billable_rate_for_harvest_rows(rows, rates, project_currency="USD")
+    assert not _user_has_billable_rate_for_harvest_rows(
+        rows, rates, project_currency="EUR"
+    )

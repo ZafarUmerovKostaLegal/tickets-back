@@ -707,6 +707,28 @@ def _user_needs_billable_rate_from_csv(user_rows: list[HarvestRow]) -> bool:
     )
 
 
+def _user_has_billable_rate_for_harvest_rows(
+    user_rows: list[HarvestRow],
+    billable_rates: list[Any],
+    *,
+    project_currency: str,
+) -> bool:
+    """Ставка в валюте проекта покрывает billable-даты из CSV (не date.today())."""
+    if not _user_needs_billable_rate_from_csv(user_rows):
+        return True
+    from application.hourly_rate_logic import filter_rates_by_currency, pick_rate_for_date
+
+    scoped_rates = filter_rates_by_currency(billable_rates, project_currency)
+    if not scoped_rates:
+        return False
+    for r in user_rows:
+        if not r.is_billable or r.billable_rate is None or r.billable_rate <= 0:
+            continue
+        if pick_rate_for_date(scoped_rates, r.work_date) is None:
+            return False
+    return True
+
+
 def _harvest_seconds_for_hours(hours: Decimal) -> int:
     return int((_quantize_harvest_hours(hours) * Decimal(3600)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -2844,15 +2866,17 @@ async def _run(
                                     f"  [команда] {client_name} / {project_name}: "
                                     f"нет доступа — {_harvest_display_name(sample)}"
                                 )
-                            needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
                             proj_cur = project_currency_map.get(
                                 _project_key(client_name, project_name),
                                 client_currency_map.get(_norm(client_name), "USD"),
                             )
-                            if needs_rate:
+                            if _user_needs_billable_rate_from_csv(user_proj_rows):
                                 billable_rates = await hr_repo.list_by_user_and_kind(uid, "billable")
-                                scoped_rates = filter_rates_by_currency(billable_rates, proj_cur)
-                                if pick_rate_for_date(scoped_rates, date.today()) is None:
+                                if not _user_has_billable_rate_for_harvest_rows(
+                                    user_proj_rows,
+                                    billable_rates,
+                                    project_currency=proj_cur,
+                                ):
                                     batch_team_ok = False
                                     print(
                                         f"  [команда] {client_name} / {project_name}: "
