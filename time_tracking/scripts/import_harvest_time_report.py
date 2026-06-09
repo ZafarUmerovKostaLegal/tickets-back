@@ -955,6 +955,34 @@ def _build_harvest_project_archived_map(
     return out
 
 
+def _write_projects_catalog_from_time_rows(
+    rows: list[HarvestRow],
+    output_path: Path,
+) -> int:
+    """Генерирует каталог проектов из time report (только проекты с часами)."""
+    _, project_currency_map, project_code_map = _build_harvest_meta_maps(rows, [])
+    pairs = _sorted_project_pairs(rows)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=("Client", "Project", "Project Code", "Currency", "Project Status"),
+        )
+        writer.writeheader()
+        for client_name, project_name in pairs:
+            key = _project_key(client_name, project_name)
+            writer.writerow(
+                {
+                    "Client": client_name,
+                    "Project": project_name,
+                    "Project Code": project_code_map.get(key) or "",
+                    "Currency": project_currency_map.get(key, "USD"),
+                    "Project Status": "",
+                }
+            )
+    return len(pairs)
+
+
 def _csv_field(row: dict[str, str], name: str) -> str:
     if name in row:
         return str(row[name] or "").strip()
@@ -3521,7 +3549,24 @@ def main() -> int:
                 "\nБез каталога импортируются только проекты с часами в time report (~749). "
                 "Запуск без --projects-file тоже допустим."
             )
-            return 1
+            fallback_catalog = (harvest_file.parent / args.projects_file.name).resolve()
+            try:
+                rows_for_catalog = _load_rows(harvest_file)
+                generated = _write_projects_catalog_from_time_rows(
+                    rows_for_catalog, fallback_catalog
+                )
+                projects_catalog_file = fallback_catalog
+                print(
+                    f"\nСгенерирован временный каталог: {fallback_catalog} "
+                    f"({generated} проект(ов) из time report)."
+                )
+                print(
+                    "ВНИМАНИЕ: это только проекты с часами. "
+                    "Для полного 1:1 (все 904) замените файл экспортом Harvest Projects."
+                )
+            except Exception as e:
+                print(f"Не удалось сгенерировать временный каталог: {e}")
+                return 1
 
     from sqlalchemy.exc import IntegrityError
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from scripts.import_harvest_time_report import (
     HarvestRow,
@@ -16,6 +17,7 @@ from scripts.import_harvest_time_report import (
     _project_key,
     _user_has_billable_rate_for_harvest_rows,
     _user_needs_billable_rate_from_csv,
+    _write_projects_catalog_from_time_rows,
 )
 
 
@@ -175,3 +177,16 @@ def test_build_harvest_project_archived_map() -> None:
     assert out[_project_key("A", "P1")] is True
     assert out[_project_key("B", "P3")] is False
     assert _project_key("A", "P2") not in out
+
+
+def test_write_projects_catalog_from_time_rows(tmp_path: Path) -> None:
+    out_file = tmp_path / "harvest_projects_all.csv"
+    rows = [
+        _row(date(2024, 1, 10), "220", client="24 FLOOR", project="Strategy"),
+        _row(date(2024, 1, 11), "220", client="24 FLOOR", project="Strategy"),
+    ]
+    generated = _write_projects_catalog_from_time_rows(rows, out_file)
+    text = out_file.read_text(encoding="utf-8")
+    assert generated == 1
+    assert "Client,Project,Project Code,Currency,Project Status" in text
+    assert "24 FLOOR,Strategy,,EUR," in text
