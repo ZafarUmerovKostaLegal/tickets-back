@@ -14,7 +14,15 @@
   python time_tracking/scripts/import_harvest_time_report.py --file report.csv --execute --batch-size 1
   python time_tracking/scripts/import_harvest_time_report.py --file report.csv --progress
 
+При старте скрипт сверяет CSV с БД и пропускает проекты, которые уже загружены 1:1
+(часы, строки, harvest-import refs). Checkpoint синхронизируется с БД.
+Отключить: --no-sync-from-db (только checkpoint).
+
 Checkpoint: {csv}.harvest-import.checkpoint.json — список загруженных проектов и %.
+
+Сверка CSV ↔ БД (read-only):
+
+  python time_tracking/scripts/verify_harvest_time_report.py --file report.csv
 
 По умолчанию ищется CSV (точный экспорт Harvest):
   harvest_time_report_from2023-01-23to2026-05-26.csv
@@ -69,6 +77,180 @@ def _project_key(client_name: str, project_name: str) -> str:
 def _project_key_parts(key: str) -> tuple[str, str]:
     client, project = key.split(PROJECT_KEY_SEP, 1)
     return client, project
+
+
+@dataclass(frozen=True)
+class ProjectImportExpectation:
+    total: Decimal
+    billable: Decimal
+    non_billable: Decimal
+    row_count: int
+    refs: frozenset[str]
+
+
+def _expectation_from_project_rows(
+    project_rows: list[HarvestRow],
+    source_name: str,
+) -> ProjectImportExpectation:
+    total = Decimal("0")
+    billable = Decimal("0")
+    refs: set[str] = set()
+    for row in project_rows:
+        total += row.hours
+        if row.is_billable:
+            billable += row.hours
+        refs.add(row.import_ref(source_name))
+    total = _quantize_harvest_hours(total)
+    billable = _quantize_harvest_hours(billable)
+    return ProjectImportExpectation(
+        total=total,
+        billable=billable,
+        non_billable=_quantize_harvest_hours(total - billable),
+        row_count=len(project_rows),
+        refs=frozenset(refs),
+    )
+
+
+def _build_csv_expectations_map(
+    rows: list[HarvestRow],
+    source_name: str,
+) -> dict[str, ProjectImportExpectation]:
+    grouped: dict[str, list[HarvestRow]] = defaultdict(list)
+    for row in rows:
+        grouped[_project_key(row.client_name, row.project_name)].append(row)
+    return {
+        key: _expectation_from_project_rows(proj_rows, source_name)
+        for key, proj_rows in grouped.items()
+    }
+
+
+def _project_db_matches_expectation(
+    expected: ProjectImportExpectation,
+    *,
+    db_total: Decimal,
+    db_billable: Decimal,
+    db_non_billable: Decimal,
+    db_row_count: int,
+    db_refs: set[str],
+) -> bool:
+    return (
+        _quantize_harvest_hours(db_total) == expected.total
+        and _quantize_harvest_hours(db_billable) == expected.billable
+        and _quantize_harvest_hours(db_non_billable) == expected.non_billable
+        and db_row_count == expected.row_count
+        and db_refs == set(expected.refs)
+    )
+
+
+async def _discover_complete_projects_in_db(
+    session: Any,
+    *,
+    project_pairs: list[tuple[str, str]],
+    csv_expectations: dict[str, ProjectImportExpectation],
+    harvest_source_name: str,
+) -> set[str]:
+    """Проекты, у которых записи harvest-import:{file}:* в БД совпадают с CSV 1:1."""
+    from sqlalchemy import case, func, select
+
+    from infrastructure.models import (
+        TimeEntryModel,
+        TimeManagerClientModel,
+        TimeManagerClientProjectModel,
+    )
+
+    harvest_prefix = f"harvest-import:{harvest_source_name}:"
+
+    clients_by_norm: dict[str, tuple[str, str]] = {}
+    client_id_to_name: dict[str, str] = {}
+    client_result = await session.execute(select(TimeManagerClientModel))
+    for client in client_result.scalars().all():
+        clients_by_norm[_norm(client.name)] = (client.id, client.name)
+        client_id_to_name[client.id] = client.name
+
+    projects_by_client: dict[str, dict[str, str]] = defaultdict(dict)
+    project_result = await session.execute(select(TimeManagerClientProjectModel))
+    for project in project_result.scalars().all():
+        projects_by_client[project.client_id][_norm(project.name)] = project.id
+
+    pair_to_project_id: dict[str, str] = {}
+    for client_name, project_name in project_pairs:
+        client = clients_by_norm.get(_norm(client_name))
+        if client is None:
+            continue
+        client_id, _ = client
+        project_id = projects_by_client.get(client_id, {}).get(_norm(project_name))
+        if project_id:
+            pair_to_project_id[_project_key(client_name, project_name)] = project_id
+
+    if not pair_to_project_id:
+        return set()
+
+    agg_result = await session.execute(
+        select(
+            TimeEntryModel.project_id,
+            func.count(TimeEntryModel.id).label("rows"),
+            func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+            func.coalesce(
+                func.sum(
+                    case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)
+                ),
+                0,
+            ).label("billable"),
+            func.coalesce(
+                func.sum(
+                    case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)
+                ),
+                0,
+            ).label("non_billable"),
+        )
+        .where(
+            TimeEntryModel.voided_at.is_(None),
+            TimeEntryModel.external_reference_url.like(f"{harvest_prefix}%"),
+            TimeEntryModel.project_id.in_(list(pair_to_project_id.values())),
+        )
+        .group_by(TimeEntryModel.project_id)
+    )
+    agg_by_project_id: dict[str, tuple[int, Decimal, Decimal, Decimal]] = {}
+    for row in agg_result.all():
+        agg_by_project_id[str(row.project_id)] = (
+            int(row.rows or 0),
+            Decimal(str(row.total)),
+            Decimal(str(row.billable)),
+            Decimal(str(row.non_billable)),
+        )
+
+    refs_by_project_id: dict[str, set[str]] = defaultdict(set)
+    refs_result = await session.execute(
+        select(TimeEntryModel.project_id, TimeEntryModel.external_reference_url).where(
+            TimeEntryModel.voided_at.is_(None),
+            TimeEntryModel.external_reference_url.like(f"{harvest_prefix}%"),
+            TimeEntryModel.project_id.in_(list(pair_to_project_id.values())),
+        )
+    )
+    for project_id, external_reference_url in refs_result.all():
+        ref = (external_reference_url or "").strip()
+        if ref:
+            refs_by_project_id[str(project_id)].add(ref)
+
+    complete: set[str] = set()
+    for project_key, project_id in pair_to_project_id.items():
+        expected = csv_expectations.get(project_key)
+        if expected is None:
+            continue
+        agg = agg_by_project_id.get(project_id)
+        if agg is None:
+            continue
+        row_count, db_total, db_billable, db_non_billable = agg
+        if _project_db_matches_expectation(
+            expected,
+            db_total=db_total,
+            db_billable=db_billable,
+            db_non_billable=db_non_billable,
+            db_row_count=row_count,
+            db_refs=refs_by_project_id.get(project_id, set()),
+        ):
+            complete.add(project_key)
+    return complete
 
 
 def _default_checkpoint_path(source_file: Path) -> Path:
@@ -131,22 +313,66 @@ def _save_checkpoint(checkpoint_path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def _filter_project_pairs(
+    pairs: list[tuple[str, str]],
+    *,
+    client_filter: str | None,
+    project_filter: str | None,
+    project_index: int | None,
+) -> list[tuple[str, str]]:
+    if project_index is not None:
+        if project_index < 1 or project_index > len(pairs):
+            raise ValueError(
+                f"--project-index {project_index} вне диапазона 1..{len(pairs)}"
+            )
+        return [pairs[project_index - 1]]
+    out = pairs
+    if client_filter:
+        cf = _norm(client_filter)
+        out = [p for p in out if _norm(p[0]) == cf]
+    if project_filter:
+        pf = _norm(project_filter)
+        out = [p for p in out if _norm(p[1]) == pf]
+    return out
+
+
+def _project_number(
+    project_pair: tuple[str, str], all_project_pairs: list[tuple[str, str]]
+) -> int:
+    return all_project_pairs.index(project_pair) + 1
+
+
 def _print_import_progress(
     checkpoint_path: Path,
     source_file: Path,
     all_project_pairs: list[tuple[str, str]],
+    *,
+    completed_keys: set[str] | None = None,
+    source_label: str = "checkpoint",
 ) -> None:
-    data = _load_checkpoint(checkpoint_path, source_file, reset=False)
-    completed = set(data.get("completed_project_keys") or [])
+    if completed_keys is None:
+        data = _load_checkpoint(checkpoint_path, source_file, reset=False)
+        completed = set(data.get("completed_project_keys") or [])
+    else:
+        completed = set(completed_keys)
     total = len(all_project_pairs)
-    done = sum(1 for p in all_project_pairs if _project_key(*p) in completed)
+    done = sum(1 for pair in all_project_pairs if _project_key(*pair) in completed)
     pending = total - done
     pct = (100.0 * done / total) if total else 100.0
     print(f"Файл: {source_file.name}")
-    print(f"Checkpoint: {checkpoint_path}")
+    if completed_keys is None:
+        print(f"Checkpoint: {checkpoint_path}")
+    else:
+        print(f"Источник прогресса: {source_label}")
     print(f"Проектов всего: {total}")
     print(f"Загружено: {done} ({pct:.1f}%)")
     print(f"Осталось: {pending}")
+    if pending:
+        for idx, pair in enumerate(all_project_pairs, 1):
+            if _project_key(*pair) not in completed:
+                c, p = pair
+                print(f"\nСледующий проект: #{idx} — {c} / {p}")
+                break
     if completed:
         print("\nПоследние 5 завершённых проектов:")
         for key in list(completed)[-5:]:
@@ -683,6 +909,10 @@ async def _run(
     checkpoint_file: Path | None = None,
     reset_checkpoint: bool = False,
     progress_only: bool = False,
+    client_filter: str | None = None,
+    project_filter: str | None = None,
+    project_index: int | None = None,
+    sync_from_db: bool = True,
 ) -> int:
     from sqlalchemy import and_, case, delete, func, select, update
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -729,45 +959,32 @@ async def _run(
     )
 
     all_project_pairs = _sorted_project_pairs(rows)
+    try:
+        scope_project_pairs = _filter_project_pairs(
+            all_project_pairs,
+            client_filter=client_filter,
+            project_filter=project_filter,
+            project_index=project_index,
+        )
+    except ValueError as e:
+        print(f"Ошибка фильтра проектов: {e}")
+        return 1
+    if client_filter or project_filter or project_index is not None:
+        if len(scope_project_pairs) == 1:
+            c, p = scope_project_pairs[0]
+            n = _project_number((c, p), all_project_pairs)
+            print(f"Фильтр: только проект #{n} — {c} / {p}")
+        else:
+            print(f"Фильтр: {len(scope_project_pairs)} проект(ов) из {len(all_project_pairs)}")
+
     checkpoint_path = checkpoint_file or _default_checkpoint_path(path)
-    if progress_only:
-        _print_import_progress(checkpoint_path, path, all_project_pairs)
-        return 0
+    csv_expectations = _build_csv_expectations_map(rows, harvest_source_name)
 
     checkpoint_data: dict[str, Any] | None = None
-    completed_project_keys: set[str] = set()
-    pending_project_pairs = all_project_pairs
+    completed_from_checkpoint: set[str] = set()
     if batch_size > 0:
         checkpoint_data = _load_checkpoint(checkpoint_path, path, reset=reset_checkpoint)
-        completed_project_keys = set(checkpoint_data.get("completed_project_keys") or [])
-        pending_project_pairs = [
-            p for p in all_project_pairs if _project_key(*p) not in completed_project_keys
-        ]
-        total_projects = len(all_project_pairs)
-        done_count = total_projects - len(pending_project_pairs)
-        done_pct = (100.0 * done_count / total_projects) if total_projects else 100.0
-        print(
-            f"\nПакетный режим: batch-size={batch_size}, checkpoint={checkpoint_path.name}"
-        )
-        print(
-            f"Проектов: {done_count}/{total_projects} уже загружено ({done_pct:.1f}%), "
-            f"осталось {len(pending_project_pairs)}"
-        )
-        if execute and not pending_project_pairs:
-            print("Все проекты уже импортированы. Для повтора: --reset-checkpoint")
-            return 0
-        if not execute:
-            print(
-                f"Dry-run: будет обработано {len(pending_project_pairs)} проектов "
-                f"({sum(1 for r in rows if (r.client_name, r.project_name) in set(pending_project_pairs))} строк)."
-            )
-
-    import_batches: list[list[tuple[str, str]]] = [all_project_pairs]
-    if batch_size > 0:
-        import_batches = [
-            pending_project_pairs[i : i + batch_size]
-            for i in range(0, len(pending_project_pairs), batch_size)
-        ]
+        completed_from_checkpoint = set(checkpoint_data.get("completed_project_keys") or [])
 
     engine = create_async_engine(_make_async_url(database_url), echo=False)
     session_factory = async_sessionmaker(
@@ -777,6 +994,84 @@ async def _run(
         autocommit=False,
         autoflush=False,
     )
+
+    completed_project_keys: set[str] = set(completed_from_checkpoint)
+    if sync_from_db:
+        print("\nСверка CSV с БД (пропуск уже загруженных проектов)...")
+        async with session_factory() as scan_session:
+            completed_project_keys = await _discover_complete_projects_in_db(
+                scan_session,
+                project_pairs=all_project_pairs,
+                csv_expectations=csv_expectations,
+                harvest_source_name=harvest_source_name,
+            )
+        newly_found = completed_project_keys - completed_from_checkpoint
+        print(
+            f"В БД совпадают с CSV: {len(completed_project_keys)}/{len(all_project_pairs)} проектов"
+        )
+        if batch_size > 0 and newly_found:
+            print(f"  (+{len(newly_found)} не были в checkpoint — checkpoint обновлён)")
+        if batch_size > 0 or sync_from_db:
+            if checkpoint_data is None:
+                checkpoint_data = _load_checkpoint(checkpoint_path, path, reset=False)
+            checkpoint_data["completed_project_keys"] = sorted(completed_project_keys)
+            _save_checkpoint(checkpoint_path, checkpoint_data)
+    elif batch_size > 0:
+        completed_project_keys = completed_from_checkpoint
+
+    if progress_only:
+        if sync_from_db:
+            _print_import_progress(
+                checkpoint_path,
+                path,
+                all_project_pairs,
+                completed_keys=completed_project_keys,
+                source_label="БД + CSV",
+            )
+        else:
+            _print_import_progress(checkpoint_path, path, all_project_pairs)
+        await engine.dispose()
+        return 0
+
+    pending_project_pairs = [
+        pair
+        for pair in scope_project_pairs
+        if _project_key(*pair) not in completed_project_keys
+    ]
+    total_projects = len(all_project_pairs)
+    done_count = sum(
+        1 for pair in all_project_pairs if _project_key(*pair) in completed_project_keys
+    )
+    done_pct = (100.0 * done_count / total_projects) if total_projects else 100.0
+
+    if batch_size > 0 or sync_from_db:
+        print(
+            f"\nК импорту: {len(pending_project_pairs)} проект(ов) "
+            f"({sum(1 for r in rows if (r.client_name, r.project_name) in set(pending_project_pairs))} строк)"
+        )
+        print(
+            f"Уже в БД: {done_count}/{total_projects} ({done_pct:.1f}%)"
+        )
+        if batch_size > 0:
+            print(f"Пакетный режим: batch-size={batch_size}, checkpoint={checkpoint_path.name}")
+        if execute and not pending_project_pairs:
+            print("Все проекты из файла уже есть в БД. Для принудительного повтора: --replace")
+            await engine.dispose()
+            return 0
+        if not execute:
+            print(
+                f"Dry-run: будет обработано {len(pending_project_pairs)} проектов "
+                f"({sum(1 for r in rows if (r.client_name, r.project_name) in set(pending_project_pairs))} строк)."
+            )
+
+    import_batches: list[list[tuple[str, str]]] = []
+    if batch_size > 0:
+        import_batches = [
+            pending_project_pairs[i : i + batch_size]
+            for i in range(0, len(pending_project_pairs), batch_size)
+        ]
+    elif pending_project_pairs:
+        import_batches = [pending_project_pairs]
 
     def build_user_index(users: list[TimeTrackingUserModel]) -> dict[str, int]:
         index: dict[str, int] = {}
@@ -1719,11 +2014,11 @@ async def _run(
                 client_currency.setdefault(_norm(hr.client_name), hr.currency)
 
             # Сначала гарантируем TT-пользователя для каждого имени из Harvest (даже без регистрации в auth).
-            pending_set = set(pending_project_pairs) if batch_size > 0 else None
+            pending_set = set(pending_project_pairs)
             user_setup_rows = [
                 r
                 for r in rows
-                if pending_set is None or (r.client_name, r.project_name) in pending_set
+                if (r.client_name, r.project_name) in pending_set
             ]
             unique_by_harvest_user: dict[str, HarvestRow] = {}
             for hr in user_setup_rows:
@@ -1847,17 +2142,21 @@ async def _run(
 
             for batch_index, batch_pairs in enumerate(import_batches, 1):
                 batch_set = set(batch_pairs)
-                active_rows = (
-                    [r for r in rows if (r.client_name, r.project_name) in batch_set]
-                    if batch_size > 0
-                    else rows
-                )
+                active_rows = [
+                    r for r in rows if (r.client_name, r.project_name) in batch_set
+                ]
                 batch_project_meta: dict[str, tuple[str, str, str]] = {}
 
                 if batch_size > 0 and execute:
+                    first_client, first_project = batch_pairs[0]
+                    global_no = _project_number(
+                        (first_client, first_project), all_project_pairs
+                    )
                     print(
                         f"\n=== Пакет {batch_index}/{len(import_batches)}: "
-                        f"{len(batch_pairs)} проект(ов), {len(active_rows)} строк ==="
+                        f"проект #{global_no}/{total_projects}: "
+                        f"{first_client} / {first_project} "
+                        f"({len(batch_pairs)} проект(ов), {len(active_rows)} строк) ==="
                     )
                     await _cleanup_projects_before_import(batch_pairs)
 
@@ -2082,22 +2381,41 @@ async def _run(
                             exp_non_t = _quantize_harvest_hours(exp_non_t)
                             exp_billable_flag = _billable_default_for_harvest_task(key, proj_rows)
                             if key not in db_tasks:
-                                batch_tasks_ok = False
+                                if exp_total_t > 0:
+                                    batch_tasks_ok = False
+                                    print(
+                                        f"  [задачи] {client_name} / {project_name}: "
+                                        f"«{key}» нет в БД ({exp_total_t} ч в файле)"
+                                    )
                                 continue
                             _name, db_t, db_b, db_n, db_flag = db_tasks[key]
-                            if not (
-                                db_t == exp_total_t
-                                and db_b == exp_bill_t
-                                and db_n == exp_non_t
-                                and db_flag == exp_billable_flag
-                            ):
+                            task_issues: list[str] = []
+                            if db_t != exp_total_t:
+                                task_issues.append(f"часы файл {exp_total_t}, БД {db_t}")
+                            if db_b != exp_bill_t:
+                                task_issues.append(f"billable файл {exp_bill_t}, БД {db_b}")
+                            if db_n != exp_non_t:
+                                task_issues.append(f"non-billable файл {exp_non_t}, БД {db_n}")
+                            if exp_total_t > 0 and db_flag != exp_billable_flag:
+                                task_issues.append(
+                                    f"billable-флаг файл {exp_billable_flag}, БД {db_flag}"
+                                )
+                            if task_issues:
                                 batch_tasks_ok = False
+                                print(
+                                    f"  [задачи] {client_name} / {project_name}: "
+                                    f"«{_name}»: {'; '.join(task_issues)}"
+                                )
 
                         team = _harvest_users_for_project(rows, client_name, project_name)
                         for hkey, sample in team.items():
                             uid = harvest_user_auth_ids.get(hkey) or _match_auth_user_id(sample, user_index)
                             if uid is None:
                                 batch_team_ok = False
+                                print(
+                                    f"  [команда] {client_name} / {project_name}: "
+                                    f"пользователь не найден — {_harvest_display_name(sample)}"
+                                )
                                 continue
                             user_proj_rows = [
                                 r
@@ -2106,9 +2424,17 @@ async def _run(
                             ]
                             if not await access_repo.has_access(uid, project_id):
                                 batch_team_ok = False
+                                print(
+                                    f"  [команда] {client_name} / {project_name}: "
+                                    f"нет доступа — {_harvest_display_name(sample)}"
+                                )
                             needs_rate = _user_needs_billable_rate_from_csv(user_proj_rows)
                             if needs_rate and not await hr_repo.list_by_user_and_kind(uid, "billable"):
                                 batch_team_ok = False
+                                print(
+                                    f"  [команда] {client_name} / {project_name}: "
+                                    f"нет billable-ставки — {_harvest_display_name(sample)}"
+                                )
 
                     expected_users = _expected_hours_by_harvest_user(active_rows)
                     db_by_auth = await db_user_hours_harvest_file_for_projects(
@@ -2118,17 +2444,29 @@ async def _run(
                         uid = harvest_user_auth_ids.get(hkey) or user_index.get(hkey)
                         if uid is None:
                             batch_users_ok = False
+                            print(f"  [пользователи] не найден auth_user_id: {name}")
                             continue
                         db_total, db_bill, db_non, db_rows = db_by_auth.get(
                             uid, (Decimal("0"), Decimal("0"), Decimal("0"), 0)
                         )
-                        if not (
-                            db_total == _quantize_harvest_hours(exp_total)
-                            and db_bill == _quantize_harvest_hours(exp_bill)
-                            and db_non == _quantize_harvest_hours(exp_non)
-                            and db_rows == exp_rows
-                        ):
+                        user_issues: list[str] = []
+                        if db_total != _quantize_harvest_hours(exp_total):
+                            user_issues.append(
+                                f"часы файл {_quantize_harvest_hours(exp_total)}, БД {db_total}"
+                            )
+                        if db_bill != _quantize_harvest_hours(exp_bill):
+                            user_issues.append(
+                                f"billable файл {_quantize_harvest_hours(exp_bill)}, БД {db_bill}"
+                            )
+                        if db_non != _quantize_harvest_hours(exp_non):
+                            user_issues.append(
+                                f"non-billable файл {_quantize_harvest_hours(exp_non)}, БД {db_non}"
+                            )
+                        if db_rows != exp_rows:
+                            user_issues.append(f"строк файл {exp_rows}, БД {db_rows}")
+                        if user_issues:
                             batch_users_ok = False
+                            print(f"  [пользователи] {name}: {'; '.join(user_issues)}")
 
                     if not batch_hours_ok:
                         print("ОШИБКА пакета: часы по проектам не совпадают.")
@@ -2517,6 +2855,20 @@ def main() -> int:
         action="store_true",
         help="Показать прогресс по checkpoint и выйти (без импорта).",
     )
+    p.add_argument("--client", type=str, default="", help="Импорт только указанного клиента.")
+    p.add_argument("--project", type=str, default="", help="Импорт только указанного проекта.")
+    p.add_argument(
+        "--project-index",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Импорт только проекта № N (1..749, как в sorted-списке).",
+    )
+    p.add_argument(
+        "--no-sync-from-db",
+        action="store_true",
+        help="Не сверять CSV с БД при старте (только checkpoint, без пропуска по БД).",
+    )
     g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--dry-run", action="store_true", help="Только статистика, без записи.")
     g.add_argument("--execute", action="store_true", help="Записать в БД.")
@@ -2560,6 +2912,10 @@ def main() -> int:
                 checkpoint_file=args.checkpoint,
                 reset_checkpoint=args.reset_checkpoint,
                 progress_only=args.progress,
+                client_filter=(args.client or "").strip() or None,
+                project_filter=(args.project or "").strip() or None,
+                project_index=args.project_index if args.project_index > 0 else None,
+                sync_from_db=not args.no_sync_from_db,
             )
         )
     except KeyboardInterrupt:
