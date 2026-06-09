@@ -519,6 +519,7 @@ async def get_time_report(
         )
         all_rows.append(row)
 
+    totals_all = _totals_from_group_rows(all_rows)
     all_rows.sort(key=lambda r: r.get("total_hours", 0), reverse=True)
     total_entries_count = len(all_rows)
     start = (page - 1) * per_page
@@ -546,6 +547,10 @@ async def get_time_report(
             **out["meta"],
             "voided_time_entries_count": len(voided_api_lines),
         }
+    out["meta"] = {
+        **out["meta"],
+        "totals_all_groups": totals_all,
+    }
     set_report(_cache_params, out)
     return out
 
@@ -684,6 +689,26 @@ async def get_time_report_flat_entries(
 def _row_for_export(r: dict[str, Any]) -> dict[str, Any]:
 
     return {k: r.get(k) for k in TIME_REPORT_FLAT_COLUMNS}
+
+
+def _totals_from_group_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total_hours = Decimal(0)
+    billable_hours = Decimal(0)
+    billable_amount = Decimal(0)
+    source_entry_count = 0
+    for row in rows:
+        total_hours += _d(row.get("total_hours"))
+        billable_hours += _d(row.get("billable_hours"))
+        billable_amount += _d(row.get("billable_amount"))
+        source_entry_count += int(row.get("source_entry_count") or 0)
+    return {
+        "total_hours": _hours(total_hours),
+        "billable_hours": _hours(billable_hours),
+        "non_billable_hours": _hours(total_hours - billable_hours),
+        "billable_percent": _percent_billable(total_hours, billable_hours),
+        "billable_amount": _money(billable_amount),
+        "source_entry_count": source_entry_count,
+    }
 
 
 def _get_group_id(e: Any, group_by: str, projects_map: dict) -> Any:

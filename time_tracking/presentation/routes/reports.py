@@ -164,7 +164,7 @@ async def get_time_report_endpoint(
     is_billable: Optional[str] = Query(None, description="true/false"),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(100, ge=1, le=500),
+    per_page: int = Query(2000, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
 ):
     df, dt = period

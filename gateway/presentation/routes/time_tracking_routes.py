@@ -1186,7 +1186,34 @@ async def reports_time(
     request: Request,
     user: dict = Depends(require_view_role),
 ):
-    return await _tt_json("GET", f"/reports/time/{group_by}", params=request.query_params, timeout=30.0)
+    params = dict(request.query_params)
+    # Frontend screens historically aggregated only current page.
+    # Request larger pages by default to reduce undercount risk.
+    try:
+        per_page = int(str(params.get("per_page") or params.get("perPage") or "0"))
+    except ValueError:
+        per_page = 0
+    if per_page <= 0 or per_page < 2000:
+        params["per_page"] = "2000"
+
+    payload = await _tt_json("GET", f"/reports/time/{group_by}", params=params, timeout=30.0)
+    if not isinstance(payload, dict):
+        return payload
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return payload
+    totals = meta.get("totals_all_groups")
+    if not isinstance(totals, dict):
+        return payload
+    # Additive compatibility fields for older frontend code.
+    payload.setdefault("totals", totals)
+    payload["summary"] = {
+        "total_hours": totals.get("total_hours", 0),
+        "billable_hours": totals.get("billable_hours", 0),
+        "non_billable_hours": totals.get("non_billable_hours", 0),
+        "billable_percent": totals.get("billable_percent", 0),
+    }
+    return payload
 
 
 @router.get("/reports/time/{group_by}/export")
