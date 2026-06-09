@@ -5,10 +5,15 @@ from decimal import Decimal
 
 from scripts.import_harvest_time_report import (
     HarvestRow,
+    HarvestProjectCatalogEntry,
+    _build_harvest_project_archived_map,
     _harvest_user_rate_intervals,
+    _harvest_project_is_archived,
     _harvest_users_for_project,
+    _normalize_harvest_project_status,
     _parse_hours,
     _parse_money_rate,
+    _project_key,
     _user_has_billable_rate_for_harvest_rows,
     _user_needs_billable_rate_from_csv,
 )
@@ -122,3 +127,51 @@ def test_billable_rate_check_uses_harvest_work_dates_not_today() -> None:
     assert not _user_has_billable_rate_for_harvest_rows(
         rows, rates, project_currency="EUR"
     )
+
+
+def test_normalize_harvest_project_status() -> None:
+    assert _normalize_harvest_project_status("Archived projects (602)") == "archived"
+    assert _normalize_harvest_project_status("Active projects (169)") == "active"
+    assert _normalize_harvest_project_status("Budgeted projects (125)") == "budgeted"
+    assert _normalize_harvest_project_status("На паузе") == "paused"
+    assert _normalize_harvest_project_status("") is None
+
+
+def test_harvest_project_is_archived() -> None:
+    assert _harvest_project_is_archived("Archived projects") is True
+    assert _harvest_project_is_archived("Active projects") is False
+    assert _harvest_project_is_archived("Budgeted projects") is False
+    assert _harvest_project_is_archived(None) is None
+
+
+def test_build_harvest_project_archived_map() -> None:
+    catalog = [
+        HarvestProjectCatalogEntry(
+            client_name="A",
+            project_name="P1",
+            project_code=None,
+            currency="USD",
+            status="archived",
+            is_archived=True,
+        ),
+        HarvestProjectCatalogEntry(
+            client_name="A",
+            project_name="P2",
+            project_code=None,
+            currency="USD",
+            status=None,
+            is_archived=None,
+        ),
+        HarvestProjectCatalogEntry(
+            client_name="B",
+            project_name="P3",
+            project_code=None,
+            currency="EUR",
+            status="active",
+            is_archived=False,
+        ),
+    ]
+    out = _build_harvest_project_archived_map(catalog)
+    assert out[_project_key("A", "P1")] is True
+    assert out[_project_key("B", "P3")] is False
+    assert _project_key("A", "P2") not in out

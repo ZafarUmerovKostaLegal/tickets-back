@@ -23,18 +23,21 @@ if TT_ROOT.as_posix() not in sys.path:
 
 from scripts.import_harvest_time_report import (  # noqa: E402
     HarvestRow,
+    _build_harvest_meta_maps,
+    _build_harvest_project_archived_map,
     _billable_default_for_harvest_task,
     _configure_database_url,
+    _load_projects_catalog,
     _expected_task_hours_map,
     _load_checkpoint,
     _load_rows,
     _make_async_url,
+    _merge_project_pairs,
     _norm,
     _project_key,
     _quantize_harvest_hours,
     _resolve_database_url,
     _resolve_harvest_file,
-    _sorted_project_pairs,
     _default_checkpoint_path,
 )
 
@@ -68,6 +71,7 @@ async def _run_verify(
     database_url: str,
     harvest_source_name: str | None,
     only_checkpoint: bool,
+    projects_file: Path | None,
     client_filter: str | None,
     project_filter: str | None,
     show_ok: bool,
@@ -84,13 +88,16 @@ async def _run_verify(
     )
 
     rows = _load_rows(path)
-    if not rows:
+    catalog = _load_projects_catalog(projects_file) if projects_file else []
+    if not rows and not catalog:
         print("Файл пуст.")
         return 1
 
     source_name = harvest_source_name or path.name
     harvest_prefix = f"harvest-import:{source_name}:"
-    all_pairs = _sorted_project_pairs(rows)
+    all_pairs = _merge_project_pairs(rows, catalog)
+    client_currency_map, project_currency_map, _ = _build_harvest_meta_maps(rows, catalog)
+    project_archived_map = _build_harvest_project_archived_map(catalog)
 
     if only_checkpoint:
         ckpt_path = _default_checkpoint_path(path)
@@ -112,6 +119,8 @@ async def _run_verify(
     print(f"Файл: {path}")
     print(f"Harvest prefix: {harvest_prefix}")
     print(f"Строк в CSV: {len(rows)}")
+    if catalog:
+        print(f"Проектов в каталоге: {len(catalog)}")
     print(f"Проектов к проверке: {len(all_pairs)}")
     print()
 
@@ -279,6 +288,26 @@ async def _run_verify(
 
                 project_ok = True
                 issues: list[str] = []
+                pair_key = _project_key(client_name, project_name)
+                exp_client_cur = client_currency_map.get(_norm(client_name), "USD")
+                exp_project_cur = project_currency_map.get(pair_key, exp_client_cur)
+                exp_archived = project_archived_map.get(pair_key)
+
+                if (client.currency or "").strip().upper()[:10] != exp_client_cur:
+                    project_ok = False
+                    issues.append(
+                        f"валюта клиента: файл {exp_client_cur}, БД {client.currency}"
+                    )
+                if (project.currency or "").strip().upper()[:10] != exp_project_cur:
+                    project_ok = False
+                    issues.append(
+                        f"валюта проекта: файл {exp_project_cur}, БД {project.currency}"
+                    )
+                if exp_archived is not None and bool(project.is_archived) != exp_archived:
+                    project_ok = False
+                    issues.append(
+                        f"архивность проекта: файл {exp_archived}, БД {bool(project.is_archived)}"
+                    )
 
                 if db_total != exp_total:
                     project_ok = False
@@ -386,6 +415,12 @@ def main() -> int:
         action="store_true",
         help="Проверить только проекты, отмеченные в .harvest-import.checkpoint.json",
     )
+    p.add_argument(
+        "--projects-file",
+        type=Path,
+        default=None,
+        help="Опциональный каталог всех проектов Harvest (.csv/.xlsx) для проверки валют/статусов 1:1.",
+    )
     p.add_argument("--client", type=str, default="", help="Фильтр по клиенту")
     p.add_argument("--project", type=str, default="", help="Фильтр по проекту")
     p.add_argument(
@@ -406,6 +441,12 @@ def main() -> int:
     if harvest_file is None:
         print(f"Файл не найден: {args.file}")
         return 1
+    projects_file = None
+    if args.projects_file:
+        projects_file = _resolve_harvest_file(args.projects_file)
+        if projects_file is None:
+            print(f"Файл каталога проектов не найден: {args.projects_file}")
+            return 1
 
     database_url = _resolve_database_url(args.database_url or None)
     _configure_database_url(database_url)
@@ -417,6 +458,7 @@ def main() -> int:
                 database_url=database_url,
                 harvest_source_name=(args.harvest_source_name or "").strip() or None,
                 only_checkpoint=args.only_checkpoint,
+                projects_file=projects_file,
                 client_filter=(args.client or "").strip() or None,
                 project_filter=(args.project or "").strip() or None,
                 show_ok=args.show_ok,

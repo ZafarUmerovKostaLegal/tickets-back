@@ -590,6 +590,45 @@ def _parse_currency(raw: object) -> str:
     return "EUR"
 
 
+def _normalize_harvest_project_status(raw: object) -> str | None:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    if any(token in text for token in ("archiv", "archive", "closed", "закрыт")):
+        return "archived"
+    if any(token in text for token in ("pause", "paused", "on hold", "на пауз")):
+        return "paused"
+    if any(token in text for token in ("budgeted", "budget", "бюджет")):
+        return "budgeted"
+    if any(token in text for token in ("active", "актив")):
+        return "active"
+    return None
+
+
+def _harvest_project_is_archived(raw: object) -> bool | None:
+    status = _normalize_harvest_project_status(raw)
+    if status is None:
+        return None
+    return status == "archived"
+
+
+def _status_from_catalog_row(row: dict[str, object]) -> tuple[str | None, bool | None]:
+    status_candidates = (
+        "Project Status",
+        "Status",
+        "Project State",
+        "State",
+        "Status Group",
+        "Group",
+        "Project Group",
+    )
+    for col in status_candidates:
+        if col in row:
+            raw = row.get(col)
+            return _normalize_harvest_project_status(raw), _harvest_project_is_archived(raw)
+    return None, None
+
+
 def _parse_billable(raw: object) -> bool:
     s = str(raw or "").strip().lower()
     if s in ("no", "false", "0", "n", "non-billable", "non billable", "nonbillable"):
@@ -773,6 +812,8 @@ class HarvestProjectCatalogEntry:
     project_name: str
     project_code: str | None
     currency: str
+    status: str | None = None
+    is_archived: bool | None = None
 
 
 def _load_projects_catalog(path: Path) -> list[HarvestProjectCatalogEntry]:
@@ -790,12 +831,15 @@ def _load_projects_catalog(path: Path) -> list[HarvestProjectCatalogEntry]:
                 project_name = _csv_field(row, "Project").strip()
                 if not client_name or not project_name:
                     continue
+                status, is_archived = _status_from_catalog_row(row)
                 out.append(
                     HarvestProjectCatalogEntry(
                         client_name=client_name,
                         project_name=project_name,
                         project_code=_optional_text(_csv_field(row, "Project Code")),
                         currency=_parse_currency(_csv_field(row, "Currency")),
+                        status=status,
+                        is_archived=is_archived,
                     )
                 )
         return out
@@ -803,19 +847,53 @@ def _load_projects_catalog(path: Path) -> list[HarvestProjectCatalogEntry]:
         wb = load_workbook(path, read_only=True, data_only=True)
         try:
             ws = wb["Harvest"] if "Harvest" in wb.sheetnames else wb[wb.sheetnames[0]]
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            header_idx: dict[str, int] = {}
+            if header_row:
+                for idx, cell in enumerate(header_row):
+                    key = _norm(str(cell or ""))
+                    if key:
+                        header_idx[key] = idx
+
+            def _idx(*names: str, fallback: int) -> int:
+                for name in names:
+                    i = header_idx.get(_norm(name))
+                    if i is not None:
+                        return i
+                return fallback
+
+            idx_client = _idx("Client", fallback=1)
+            idx_project = _idx("Project", fallback=2)
+            idx_code = _idx("Project Code", fallback=3)
+            idx_currency = _idx("Currency", fallback=19)
+            idx_status = _idx(
+                "Project Status",
+                "Status",
+                "Project State",
+                "State",
+                "Status Group",
+                "Group",
+                "Project Group",
+                fallback=-1,
+            )
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if not row or all(c is None or str(c).strip() == "" for c in row):
                     continue
-                client_name = str(row[1] or "").strip()
-                project_name = str(row[2] or "").strip()
+                client_name = str(row[idx_client] if len(row) > idx_client else "" or "").strip()
+                project_name = str(row[idx_project] if len(row) > idx_project else "" or "").strip()
                 if not client_name or not project_name:
                     continue
+                status_raw = row[idx_status] if idx_status >= 0 and len(row) > idx_status else None
                 out.append(
                     HarvestProjectCatalogEntry(
                         client_name=client_name,
                         project_name=project_name,
-                        project_code=_optional_text(str(row[3] or "")),
-                        currency=_parse_currency(row[19] if len(row) > 19 else None),
+                        project_code=_optional_text(
+                            str(row[idx_code] if len(row) > idx_code else "" or "")
+                        ),
+                        currency=_parse_currency(row[idx_currency] if len(row) > idx_currency else None),
+                        status=_normalize_harvest_project_status(status_raw),
+                        is_archived=_harvest_project_is_archived(status_raw),
                     )
                 )
         finally:
@@ -864,6 +942,17 @@ def _build_harvest_meta_maps(
         for client_key, counts in client_counts.items()
     }
     return client_currency, project_currency, project_code
+
+
+def _build_harvest_project_archived_map(
+    catalog: list[HarvestProjectCatalogEntry],
+) -> dict[str, bool]:
+    out: dict[str, bool] = {}
+    for entry in catalog:
+        if entry.is_archived is None:
+            continue
+        out[_project_key(entry.client_name, entry.project_name)] = bool(entry.is_archived)
+    return out
 
 
 def _csv_field(row: dict[str, str], name: str) -> str:
@@ -1146,6 +1235,7 @@ async def _run(
     client_currency_map, project_currency_map, project_code_map = _build_harvest_meta_maps(
         rows, catalog
     )
+    project_archived_map = _build_harvest_project_archived_map(catalog)
     all_project_pairs = _merge_project_pairs(rows, catalog)
     catalog_only_pairs = {
         (e.client_name, e.project_name)
@@ -2295,13 +2385,19 @@ async def _run(
                     await client_repo.update(client_id, {"currency": exp_client_cur})
                     stats["client_currency_synced"] += 1
                 project_row = await project_repo.get_by_id(client_id, project_id)
-                if project_row and (project_row.currency or "").strip().upper()[:10] != exp_project_cur:
-                    await project_repo.update(
-                        client_id,
-                        project_id,
-                        {"currency": exp_project_cur},
-                    )
-                    stats["project_currency_synced"] += 1
+                if project_row:
+                    patch: dict[str, Any] = {}
+                    if (project_row.currency or "").strip().upper()[:10] != exp_project_cur:
+                        patch["currency"] = exp_project_cur
+                    exp_archived = project_archived_map.get(pkey)
+                    if exp_archived is not None and bool(project_row.is_archived) != exp_archived:
+                        patch["is_archived"] = exp_archived
+                    if patch:
+                        await project_repo.update(client_id, project_id, patch)
+                        if "currency" in patch:
+                            stats["project_currency_synced"] += 1
+                        if "is_archived" in patch:
+                            stats["project_status_synced"] += 1
 
             async def _ensure_harvest_project_shell(
                 client_name: str,
@@ -2367,6 +2463,7 @@ async def _run(
                             currency=exp_project_cur,
                             billable_rate_type=None,
                             project_billable_rate_amount=None,
+                            is_archived=project_archived_map.get(pair_key, False),
                         )
                         project_cache[cache_key] = created_p.id
                         project_meta[created_p.id] = (client_id, client_name, project_name)
@@ -2606,13 +2703,20 @@ async def _run(
                                 _project_key(hr.client_name, hr.project_name),
                                 hr.currency,
                             )
-                            if execute and (existing_p.currency or "").strip().upper()[:10] != exp_project_cur:
-                                await project_repo.update(
-                                    client_id,
-                                    existing_p.id,
-                                    {"currency": exp_project_cur},
-                                )
-                                stats["project_currency_synced"] += 1
+                            if execute:
+                                pair_key = _project_key(hr.client_name, hr.project_name)
+                                patch: dict[str, Any] = {}
+                                if (existing_p.currency or "").strip().upper()[:10] != exp_project_cur:
+                                    patch["currency"] = exp_project_cur
+                                exp_archived = project_archived_map.get(pair_key)
+                                if exp_archived is not None and bool(existing_p.is_archived) != exp_archived:
+                                    patch["is_archived"] = exp_archived
+                                if patch:
+                                    await project_repo.update(client_id, existing_p.id, patch)
+                                    if "currency" in patch:
+                                        stats["project_currency_synced"] += 1
+                                    if "is_archived" in patch:
+                                        stats["project_status_synced"] += 1
                         elif execute:
                             proj_dates = [
                                 r.work_date
@@ -2638,6 +2742,7 @@ async def _run(
                                 currency=project_currency_map.get(pair_key, hr.currency),
                                 billable_rate_type=None,
                                 project_billable_rate_amount=None,
+                                is_archived=project_archived_map.get(pair_key, False),
                             )
                             project_cache[pkey] = created_p.id
                             project_meta[created_p.id] = (client_id, hr.client_name, hr.project_name)
@@ -2789,9 +2894,47 @@ async def _run(
                     batch_tasks_ok = True
                     batch_users_ok = True
                     batch_team_ok = True
+                    batch_meta_ok = True
                     hr_repo = HourlyRateRepository(session)
 
                     for project_id, (_client_id, client_name, project_name) in scope_meta.items():
+                        pkey = _project_key(client_name, project_name)
+                        exp_client_cur = client_currency_map.get(_norm(client_name), "USD")
+                        exp_project_cur = project_currency_map.get(pkey, exp_client_cur)
+                        exp_archived = project_archived_map.get(pkey)
+                        client_row = await client_repo.get_by_id(_client_id)
+                        if client_row is None:
+                            batch_meta_ok = False
+                            print(
+                                f"  [мета] {client_name} / {project_name}: "
+                                "клиент не найден в БД"
+                            )
+                        elif (client_row.currency or "").strip().upper()[:10] != exp_client_cur:
+                            batch_meta_ok = False
+                            print(
+                                f"  [мета] {client_name} / {project_name}: "
+                                f"валюта клиента файл {exp_client_cur}, БД {client_row.currency}"
+                            )
+                        project_row = await project_repo.get_by_id(_client_id, project_id)
+                        if project_row is None:
+                            batch_meta_ok = False
+                            print(
+                                f"  [мета] {client_name} / {project_name}: "
+                                "проект не найден в БД"
+                            )
+                        else:
+                            if (project_row.currency or "").strip().upper()[:10] != exp_project_cur:
+                                batch_meta_ok = False
+                                print(
+                                    f"  [мета] {client_name} / {project_name}: "
+                                    f"валюта проекта файл {exp_project_cur}, БД {project_row.currency}"
+                                )
+                            if exp_archived is not None and bool(project_row.is_archived) != exp_archived:
+                                batch_meta_ok = False
+                                print(
+                                    f"  [мета] {client_name} / {project_name}: "
+                                    f"архивность файл {exp_archived}, БД {bool(project_row.is_archived)}"
+                                )
                         db_total, db_billable, db_non_billable = await aggregate_harvest_file_hours_for_project(
                             session, project_id
                         )
@@ -2930,6 +3073,10 @@ async def _run(
                         return 1
                     if not batch_team_ok:
                         print("ОШИБКА пакета: команда/ставки не совпадают.")
+                        await session.rollback()
+                        return 1
+                    if not batch_meta_ok:
+                        print("ОШИБКА пакета: валюта/статус проекта не совпадают.")
                         await session.rollback()
                         return 1
                     if not batch_users_ok:
@@ -3220,6 +3367,7 @@ async def _run(
             print(
                 f"Клиентов создано: {stats['client_created']}, уже было: {stats['client_exists']}; "
                 f"проектов создано: {stats['project_created']}, уже было: {stats['project_exists']}; "
+                f"статусов проектов синхронизировано: {stats['project_status_synced']}; "
                 f"задач создано: {stats['task_created']}; "
                 f"сотрудников в команде проекта: {stats['project_team_members']}; "
                 f"доступ к проекту выдан: {stats['project_access_granted']}; "
