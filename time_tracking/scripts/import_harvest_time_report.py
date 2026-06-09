@@ -461,6 +461,28 @@ def _norm(s: str | None) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
+def _norm_project_code(code: str | None) -> str | None:
+    text = (code or "").strip()
+    return text.lower() if text else None
+
+
+def _resolve_harvest_project_code(
+    harvest_code: str | None,
+    *,
+    existing_code_owner_name: str | None,
+    new_project_name: str,
+) -> str | None:
+    """Код проекта в TT уникален в рамках клиента; Harvest иногда дублирует код между проектами."""
+    code = (harvest_code or "").strip() or None
+    if not code:
+        return None
+    if existing_code_owner_name is None:
+        return code
+    if _norm(existing_code_owner_name) == _norm(new_project_name):
+        return code
+    return None
+
+
 def _billable_default_for_harvest_task(task_key: str, project_rows: list[HarvestRow]) -> bool:
     """Как в Harvest: задача non-billable только если все часы по ней non-billable."""
     task_rows = [r for r in project_rows if _norm(r.task_name) == task_key]
@@ -1578,6 +1600,46 @@ async def _run(
                 return p
         return None
 
+    async def find_project_by_code(
+        session: AsyncSession,
+        client_id: str,
+        code: str | None,
+    ) -> TimeManagerClientProjectModel | None:
+        target = _norm_project_code(code)
+        if not target:
+            return None
+        r = await session.execute(
+            select(TimeManagerClientProjectModel).where(
+                TimeManagerClientProjectModel.client_id == client_id
+            )
+        )
+        for project in r.scalars().all():
+            if _norm_project_code(project.code) == target:
+                return project
+        return None
+
+    async def harvest_project_code_for_create(
+        session: AsyncSession,
+        client_id: str,
+        project_name: str,
+        harvest_code: str | None,
+    ) -> str | None:
+        raw_code = (harvest_code or "").strip() or None
+        if not raw_code:
+            return None
+        owner = await find_project_by_code(session, client_id, raw_code)
+        resolved = _resolve_harvest_project_code(
+            raw_code,
+            existing_code_owner_name=owner.name if owner else None,
+            new_project_name=project_name,
+        )
+        if resolved is None and owner is not None:
+            print(
+                f"  ВНИМАНИЕ: код «{raw_code}» уже у проекта «{owner.name}» — "
+                f"для «{project_name}» код не задаём (Harvest дублирует Project Code)."
+            )
+        return resolved
+
     async def task_map_for_project(session: AsyncSession, project_id: str) -> dict[str, str]:
         r = await session.execute(
             select(TimeManagerClientTaskModel.name, TimeManagerClientTaskModel.id).where(
@@ -2204,10 +2266,16 @@ async def _run(
                                 for r in rows
                                 if _norm(r.client_name) == ckey and _norm(r.project_name) == _norm(hr.project_name)
                             ]
+                            project_code = await harvest_project_code_for_create(
+                                session,
+                                client_id,
+                                hr.project_name,
+                                hr.project_code,
+                            )
                             created_p = await project_repo.create(
                                 client_id=client_id,
                                 name=hr.project_name,
-                                code=hr.project_code,
+                                code=project_code,
                                 start_date=min(proj_dates) if proj_dates else hr.work_date,
                                 end_date=max(proj_dates) if proj_dates else None,
                                 notes="Imported from Harvest",
@@ -2896,6 +2964,8 @@ def main() -> int:
         )
         return 1
 
+    from sqlalchemy.exc import IntegrityError
+
     database_url = _resolve_database_url(args.database_url or None)
     auth_db_url = (args.auth_db_url or os.environ.get("AUTH_DATABASE_URL") or "").strip()
     _configure_database_url(database_url)
@@ -2929,6 +2999,14 @@ def main() -> int:
             print("Продолжить: та же команда с --execute --batch-size 1")
             print("Статус:   добавьте --progress")
         return 130
+    except IntegrityError as exc:
+        print("\nОШИБКА БД: импорт прерван, текущий пакет не сохранён в checkpoint.")
+        print(f"  {getattr(exc.orig, 'detail', exc) or exc}")
+        print(
+            "\nЗапустите ту же команду снова — продолжит с того же проекта "
+            "(уже загруженные пропускаются автоматически)."
+        )
+        return 1
 
 
 if __name__ == "__main__":

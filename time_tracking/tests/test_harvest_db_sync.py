@@ -8,8 +8,10 @@ from scripts.import_harvest_time_report import (
     ProjectImportExpectation,
     _build_csv_expectations_map,
     _expectation_from_project_rows,
+    _norm_project_code,
     _project_db_matches_expectation,
     _project_key,
+    _resolve_harvest_project_code,
 )
 
 
@@ -95,3 +97,27 @@ def test_project_db_matches_expectation() -> None:
         db_row_count=2,
         db_refs={"harvest-import:report.csv:10"},
     )
+
+
+def test_norm_project_code() -> None:
+    assert _norm_project_code("NBS-10") == "nbs-10"
+    assert _norm_project_code("  ") is None
+    assert _norm_project_code(None) is None
+
+
+def test_resolve_harvest_project_code_conflict() -> None:
+    assert _resolve_harvest_project_code(
+        "NBS-10",
+        existing_code_owner_name=None,
+        new_project_name="PIF Transfer",
+    ) == "NBS-10"
+    assert _resolve_harvest_project_code(
+        "NBS-10",
+        existing_code_owner_name="Land return, cadaster and mortgage",
+        new_project_name="PIF Transfer",
+    ) is None
+    assert _resolve_harvest_project_code(
+        "NBS-10",
+        existing_code_owner_name="PIF Transfer",
+        new_project_name="PIF Transfer",
+    ) == "NBS-10"

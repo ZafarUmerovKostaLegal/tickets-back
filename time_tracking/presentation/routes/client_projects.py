@@ -111,6 +111,27 @@ async def list_all_projects_for_expenses(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+@_global_projects_router.get("/projects")
+async def list_all_client_projects(
+    include_archived: bool = Query(False, alias="includeArchived"),
+    limit: int | None = Query(None, ge=1, le=500, description="Если задано — пагинированный ответ"),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+):
+    """Все проекты (полные карточки) одним запросом — для списка проектов на фронте."""
+    repo = ClientProjectRepository(session)
+    if limit is None:
+        rows = await repo.list_all_global(include_archived=include_archived)
+    else:
+        rows, total = await repo.list_all_global_paginated(
+            include_archived=include_archived, limit=limit, offset=offset
+        )
+    out = await _client_projects_to_out(session, repo, rows)
+    if limit is None:
+        return out
+    return {"items": out, "total": total, "limit": limit, "offset": offset}
+
+
 @_global_projects_router.get(
     "/projects/{project_id}/time-tracking-assignees",
     response_model=ProjectTimeTrackingAssigneesListOut,
