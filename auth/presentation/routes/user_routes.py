@@ -249,6 +249,38 @@ async def get_users_public_batch(
 
 _PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")
 
+_HIDDEN_EMAILS = frozenset({"admin@local"})
+_HIDDEN_LOCAL_PARTS = frozenset({"admin", "info"})
+_HIDDEN_DISPLAY_NAMES = frozenset({"главный администратор"})
+
+
+def _is_hidden_colleague(user: User) -> bool:
+    email = (user.email or "").strip().lower()
+    if email in _HIDDEN_EMAILS:
+        return True
+    if email and "@" in email:
+        if email.split("@", 1)[0] in _HIDDEN_LOCAL_PARTS:
+            return True
+    display = (user.display_name or "").strip().lower().replace("ё", "е")
+    return display in _HIDDEN_DISPLAY_NAMES
+
+
+@router.get("/colleagues", response_model=UserPublicListResponse)
+async def list_colleagues(
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    """Каталог коллег для чата, контактов и выбора участников — любой авторизованный сотрудник."""
+
+    users = await user_repo.get_all(include_archived=False)
+    items = [
+        _user_to_public(u)
+        for u in users
+        if not u.is_blocked and not u.is_archived and not _is_hidden_colleague(u)
+    ]
+    items.sort(key=lambda u: (u.display_name or u.email or "").lower())
+    return UserPublicListResponse(items=items, missing_ids=[])
+
 
 @router.get("/partners", response_model=UserPublicListResponse)
 async def list_partners(

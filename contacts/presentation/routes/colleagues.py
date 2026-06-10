@@ -40,11 +40,14 @@ async def list_colleagues(
 
     auth_rows: list[dict[str, Any]] = []
     try:
-        auth_raw = await auth_get("/users?include_archived=false", authorization=auth_header)
+        auth_raw = await auth_get("/users/colleagues", authorization=auth_header)
         auth_rows = _unwrap_user_list(auth_raw)
-    except HTTPException as exc:
-        if exc.status_code != 403:
-            raise
+        if not auth_rows and isinstance(auth_raw, dict):
+            items = auth_raw.get("items")
+            if isinstance(items, list):
+                auth_rows = [x for x in items if isinstance(x, dict)]
+    except HTTPException:
+        auth_rows = []
 
     by_id: dict[int, ColleagueOut] = {}
     for raw in tt_rows:

@@ -383,6 +383,25 @@ async def get_users_public_batch(
     return r.json()
 
 
+@router.get("/colleagues", response_model=UserPublicListResponse)
+async def list_colleagues(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_auth),
+):
+    """Каталог коллег (public projection) — для чата, контактов, выбора участников."""
+    r = await auth_service_request(
+        "GET",
+        "/users/colleagues",
+        bearer_for_upstream(request, authorization),
+    )
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Auth service error")
+    return r.json()
+
+
 @router.get("/partners", response_model=UserPublicListResponse)
 async def list_partners(
     request: Request,

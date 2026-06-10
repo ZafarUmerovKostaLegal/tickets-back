@@ -33,6 +33,12 @@ def test_build_ui_permissions_accountant_position():
     p = build_ui_permissions("Сотрудник", "user", "Accountant")
     assert p["time_tracking_can_view_reports"] is False
     assert p["hourly_rates_can_view"] is True
+    assert p["vacation_can_manage_schedule"] is True
+
+
+def test_build_ui_permissions_bdm_vacation_manage():
+    p = build_ui_permissions("Сотрудник", "manager", "Contracts and BD Assistant")
+    assert p["vacation_can_manage_schedule"] is True
 
 
 def test_build_ui_permissions_main_admin():

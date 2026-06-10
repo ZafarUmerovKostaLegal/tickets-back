@@ -196,7 +196,8 @@ def build_ui_permissions(
         "attendance_can_edit_workday_settings": role_in_set(r, ATTENDANCE_WORKDAY_WRITE),
         "attendance_can_manage_hikvision_mappings": role_in_set(r, ATTENDANCE_HIKVISION_MAPPINGS),
         "vacation_can_view": role_in_set(r, VACATION_VIEW),
-        "vacation_can_manage_schedule": role_in_set(r, VACATION_MANAGE_SCHEDULE),
+        "vacation_can_manage_schedule": role_in_set(r, VACATION_MANAGE_SCHEDULE)
+        or position_has_tt_full_ops_no_reports(position),
         "expenses_can_view": role_in_set(r, EXPENSES_VIEW),
         "expenses_can_moderate": role_in_set(r, EXPENSES_MODERATE),
         "expenses_can_admin_edit": role_in_set(r, EXPENSES_ADMIN_EDIT),

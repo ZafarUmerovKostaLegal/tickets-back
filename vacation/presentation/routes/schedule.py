@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from application.kind_legend import KIND_LEGEND_ENTRIES, KindLegendEntry
+from application.schedule_employee_sync import SyncScheduleEmployeesResult, sync_schedule_employees_for_year
+from infrastructure.auth_lookup import list_staff_users
 from infrastructure.database import get_session
 from infrastructure.models import AbsenceDay, ScheduleEmployee
 
@@ -59,6 +61,17 @@ class ImportResultOut(BaseModel):
     year: int
     employees_imported: int
     absence_days_imported: int
+
+
+class SyncEmployeesResultOut(BaseModel):
+    year: int
+    created: int = Field(..., alias="created")
+    linked_orphans: int = Field(..., alias="linkedOrphans")
+    updated: int
+    skipped_archived: int = Field(..., alias="skippedArchived")
+    skipped_hidden: int = Field(..., alias="skippedHidden")
+
+    model_config = {"populate_by_name": True}
 
 
 class EmployeeCreateBody(BaseModel):
@@ -138,6 +151,35 @@ async def kind_codes() -> dict[str, str]:
 async def kind_legend() -> list[KindLegendEntry]:
 
     return list(KIND_LEGEND_ENTRIES)
+
+
+@router.post("/employees/sync", response_model=SyncEmployeesResultOut)
+async def sync_employees_from_auth(
+    year: int = Query(..., ge=2000, le=2100),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Привязать всех auth-пользователей к графику на год (активировать строки)."""
+    if not authorization or not authorization.strip():
+        raise HTTPException(status_code=401, detail="Authorization required")
+    staff = await list_staff_users(authorization)
+    try:
+        result = await sync_schedule_employees_for_year(session, year=year, staff_users=staff)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Конфликт при привязке сотрудников к графику (дубликат auth_user_id или ФИО)",
+        ) from None
+    return SyncEmployeesResultOut(
+        year=result.year,
+        created=result.created,
+        linked_orphans=result.linked_orphans,
+        updated=result.updated,
+        skipped_archived=result.skipped_archived,
+        skipped_hidden=result.skipped_hidden,
+    )
 
 
 @router.get("/employees", response_model=list[EmployeeOut])

@@ -74,6 +74,37 @@ async def get_user_public(user_id: int, authorization: str) -> Optional[AuthUser
     return _to_user(r.json())
 
 
+async def list_staff_users(authorization: str) -> list[dict]:
+    """Список пользователей auth для синхронизации графика (нужен Bearer вызывающего)."""
+    settings = get_settings()
+    base = (settings.auth_service_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="AUTH_SERVICE_URL not configured for vacation")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(
+                f"{base}/users",
+                params={"include_archived": "false"},
+                headers={"Authorization": authorization.strip()},
+            )
+    except httpx.RequestError as exc:
+        _log.warning("auth /users unreachable: %r", exc)
+        raise HTTPException(status_code=503, detail="Auth service unavailable") from None
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code == 403:
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators, partners, IT or office managers can sync the schedule roster",
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Auth service error")
+    data = r.json()
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    return []
+
+
 async def list_partners(authorization: str) -> list[AuthUser]:
     """Список партнёров для выбора в заявке (любой авторизованный)."""
 

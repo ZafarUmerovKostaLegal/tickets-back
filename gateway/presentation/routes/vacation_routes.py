@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
 from backend_common.rbac_ui_permissions import VACATION_MANAGE_SCHEDULE, VACATION_VIEW, role_in_set
+from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from infrastructure.auth_upstream import access_token_from_request, verify_bearer_and_get_user
 from infrastructure.config import get_settings
 
@@ -48,7 +49,7 @@ async def vacation_access(request: Request, authorization: Optional[str] = Heade
                 detail="Only authenticated staff roles can view the absence schedule",
             )
     elif method in ("POST", "PATCH", "DELETE"):
-        if not role_in_set(role, VACATION_MANAGE_SCHEDULE):
+        if not role_in_set(role, VACATION_MANAGE_SCHEDULE) and not user_has_tt_full_ops_no_reports(user):
             raise HTTPException(
                 status_code=403,
                 detail="Only administrators, partners and office managers can modify the absence schedule",
