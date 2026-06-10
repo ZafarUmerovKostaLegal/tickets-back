@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
+from application.entry_pricing import _billable_amount_for_entry
+from application.hourly_rate_logic import build_rate_change_plan
+
+
+class _Rate:
+    def __init__(self, amount, currency, valid_from, valid_to, applies_to_project_id=None, rid=""):
+        self.amount = Decimal(str(amount))
+        self.currency = currency
+        self.valid_from = valid_from
+        self.valid_to = valid_to
+        self.applies_to_project_id = applies_to_project_id
+        self.id = rid or f"{applies_to_project_id}-{valid_from}"
+
+
+def test_first_project_override_snapshots_global_before() -> None:
+    # Пользователь имел только общую ставку 100; вводим проектную смену с 2024-01-01.
+    global_rates = [_Rate(100, "USD", None, None, rid="g1")]
+    project_rates: list = []
+    plan = build_rate_change_plan(project_rates, global_rates, date(2024, 1, 1))
+
+    assert plan.update_existing_id is None
+    assert plan.close_existing_id is None
+    assert plan.create_before_amount == Decimal("100")
+    assert plan.create_before_valid_to == date(2023, 12, 31)
+    assert plan.create_new is True
+    assert plan.create_new_valid_to is None
+
+
+def test_existing_open_project_rate_is_closed() -> None:
+    project_rates = [_Rate(150, "USD", None, None, applies_to_project_id="proj-A", rid="p1")]
+    plan = build_rate_change_plan(project_rates, [], date(2024, 6, 1))
+
+    assert plan.close_existing_id == "p1"
+    assert plan.close_valid_to == date(2024, 5, 31)
+    assert plan.create_before_amount is None
+    assert plan.create_new_valid_to is None
+
+
+def test_change_exactly_on_period_start_updates_in_place() -> None:
+    project_rates = [
+        _Rate(150, "USD", date(2024, 1, 1), None, applies_to_project_id="proj-A", rid="p1"),
+    ]
+    plan = build_rate_change_plan(project_rates, [], date(2024, 1, 1))
+
+    assert plan.update_existing_id == "p1"
+    assert plan.create_new is False
+    assert plan.close_existing_id is None
+
+
+def test_new_period_bounded_by_future_rate() -> None:
+    project_rates = [
+        _Rate(150, "USD", None, date(2023, 12, 31), applies_to_project_id="proj-A", rid="p1"),
+        _Rate(200, "USD", date(2025, 1, 1), None, applies_to_project_id="proj-A", rid="p2"),
+    ]
+    # Меняем с 2024-06-01: попадаем в разрыв между p1 и p2.
+    plan = build_rate_change_plan(project_rates, [], date(2024, 6, 1))
+
+    assert plan.close_existing_id is None  # ни один период не покрывает дату
+    assert plan.create_new_valid_to == date(2024, 12, 31)
+
+
+def test_pricing_after_first_override_old_before_new_after() -> None:
+    # Эмулируем результат операции для первого проектного переопределения.
+    rates = [
+        _Rate(100, "USD", None, None, rid="g1"),  # общая (исторически)
+        _Rate(100, "USD", None, date(2023, 12, 31), applies_to_project_id="proj-A", rid="b1"),
+        _Rate(140, "USD", date(2024, 1, 1), None, applies_to_project_id="proj-A", rid="n1"),
+    ]
+    before_amt, _ = _billable_amount_for_entry(
+        Decimal("1"), True, date(2023, 6, 1), rates,
+        project_currency="USD", time_entry_project_id="proj-A",
+    )
+    after_amt, _ = _billable_amount_for_entry(
+        Decimal("1"), True, date(2024, 3, 1), rates,
+        project_currency="USD", time_entry_project_id="proj-A",
+    )
+    assert before_amt == Decimal("100")
+    assert after_amt == Decimal("140")

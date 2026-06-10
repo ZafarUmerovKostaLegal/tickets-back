@@ -8,7 +8,11 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.hourly_rate_logic import intervals_overlap, validate_range_order
+from application.hourly_rate_logic import (
+    build_rate_change_plan,
+    intervals_overlap,
+    validate_range_order,
+)
 from infrastructure.models import UserHourlyRateModel
 from infrastructure.repository_shared import _now_utc, _to_decimal
 
@@ -152,6 +156,80 @@ class HourlyRateRepository:
         row.updated_at = _now_utc()
         self._session.add(row)
         return row
+
+    async def change_project_rate_from(
+        self,
+        *,
+        auth_user_id: int,
+        rate_kind: str,
+        amount: Decimal,
+        currency: str,
+        applies_to_project_id: str,
+        effective_from: date,
+    ) -> dict[str, UserHourlyRateModel | None]:
+        """Меняет ставку пользователя в конкретном проекте с дня effective_from.
+
+        До effective_from действует прежняя ставка, начиная с effective_from —
+        новая. Возвращает словарь с затронутыми записями: new / closed / before /
+        updated.
+        """
+        if rate_kind not in _RATE_KINDS:
+            raise ValueError("Недопустимый тип ставки")
+        if amount <= 0:
+            raise ValueError("Сумма должна быть больше нуля")
+        scope = (applies_to_project_id or "").strip() or None
+        if scope is None:
+            raise ValueError("Не указан проект для смены ставки")
+        cur_norm = (currency or "USD").strip().upper()[:10] or "USD"
+
+        existing = await self.list_by_user_and_kind(auth_user_id, rate_kind)
+        same_cur = [r for r in existing if _rate_currency_key(r) == cur_norm]
+        project_rates = [r for r in same_cur if _applies_scope_match(r, scope)]
+        global_rates = [r for r in same_cur if _applies_scope_match(r, None)]
+
+        plan = build_rate_change_plan(project_rates, global_rates, effective_from)
+
+        if plan.update_existing_id:
+            row = await self.get_by_id(auth_user_id, plan.update_existing_id)
+            if row is None:
+                raise LookupError("not_found")
+            row.amount = amount
+            row.updated_at = _now_utc()
+            self._session.add(row)
+            return {"new": row, "closed": None, "before": None, "updated": row}
+
+        closed: UserHourlyRateModel | None = None
+        if plan.close_existing_id:
+            closed = await self.get_by_id(auth_user_id, plan.close_existing_id)
+            if closed is not None:
+                closed.valid_to = plan.close_valid_to
+                closed.updated_at = _now_utc()
+                self._session.add(closed)
+
+        before: UserHourlyRateModel | None = None
+        if plan.create_before_amount is not None:
+            before = await self.create(
+                auth_user_id=auth_user_id,
+                rate_kind=rate_kind,
+                amount=_to_decimal(plan.create_before_amount),
+                currency=cur_norm,
+                valid_from=None,
+                valid_to=plan.create_before_valid_to,
+                applies_to_project_id=scope,
+            )
+
+        await self._session.flush()
+
+        new_row = await self.create(
+            auth_user_id=auth_user_id,
+            rate_kind=rate_kind,
+            amount=amount,
+            currency=cur_norm,
+            valid_from=effective_from,
+            valid_to=plan.create_new_valid_to,
+            applies_to_project_id=scope,
+        )
+        return {"new": new_row, "closed": closed, "before": before, "updated": None}
 
     async def delete(self, auth_user_id: int, rate_id: str) -> bool:
         row = await self.get_by_id(auth_user_id, rate_id)

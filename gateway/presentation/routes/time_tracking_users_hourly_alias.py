@@ -4,9 +4,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, sta
 from starlette.responses import Response
 
 from presentation.routes.time_tracking_hourly_proxy import (
+    HourlyRateChangeFromBody,
     HourlyRateCreateBody,
     HourlyRatePatchBody,
     get_current_user,
+    hourly_rates_change_from_gateway,
     hourly_rates_create_gateway,
     hourly_rates_delete_gateway,
     hourly_rates_get_gateway,
@@ -67,6 +69,15 @@ async def create_hourly_rate_under_users(
     user: dict = Depends(get_current_user),
 ):
     return await hourly_rates_create_gateway(user_id, body, user)
+
+
+@router.post("/{user_id}/hourly-rates/change-from")
+async def change_hourly_rate_from_under_users(
+    user_id: int,
+    body: HourlyRateChangeFromBody,
+    user: dict = Depends(get_current_user),
+):
+    return await hourly_rates_change_from_gateway(user_id, body, user)
 
 
 @router.patch("/{user_id}/hourly-rates/{rate_id}")

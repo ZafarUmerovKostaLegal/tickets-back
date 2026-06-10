@@ -13,7 +13,13 @@ from infrastructure.repositories import (
     TimeTrackingUserRepository,
 )
 from presentation.deps import require_bearer_user
-from presentation.schemas import HourlyRateCreateBody, HourlyRateOut, HourlyRatePatchBody
+from presentation.schemas import (
+    HourlyRateChangeFromBody,
+    HourlyRateChangeFromResult,
+    HourlyRateCreateBody,
+    HourlyRateOut,
+    HourlyRatePatchBody,
+)
 
 router = APIRouter(prefix="/users", tags=["hourly_rates"])
 
@@ -101,6 +107,47 @@ async def create_hourly_rate(
     await session.commit()
     await session.refresh(row)
     return HourlyRateOut.model_validate(row)
+
+
+@router.post("/{auth_user_id}/hourly-rates/change-from", response_model=HourlyRateChangeFromResult)
+async def change_hourly_rate_from(
+    auth_user_id: int,
+    body: HourlyRateChangeFromBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> HourlyRateChangeFromResult:
+    await ensure_time_entry_subject_allowed(session, viewer, auth_user_id, write=True)
+    await _ensure_user(session, auth_user_id)
+    project_id = (body.applies_to_project_id or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="Не указан проект для смены ставки")
+    projects = ClientProjectRepository(session)
+    if await projects.get_by_id_global(project_id) is None:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    repo = HourlyRateRepository(session)
+    try:
+        result = await repo.change_project_rate_from(
+            auth_user_id=auth_user_id,
+            rate_kind=body.rate_kind.value,
+            amount=body.amount,
+            currency=body.currency,
+            applies_to_project_id=project_id,
+            effective_from=body.effective_from,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="Ставка не найдена") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    await session.commit()
+    for row in result.values():
+        if row is not None:
+            await session.refresh(row)
+    return HourlyRateChangeFromResult(
+        new_rate=HourlyRateOut.model_validate(result["new"]),
+        closed_rate=HourlyRateOut.model_validate(result["closed"]) if result["closed"] else None,
+        before_rate=HourlyRateOut.model_validate(result["before"]) if result["before"] else None,
+        updated_rate=HourlyRateOut.model_validate(result["updated"]) if result["updated"] else None,
+    )
 
 
 @router.patch("/{auth_user_id}/hourly-rates/{rate_id}", response_model=HourlyRateOut)

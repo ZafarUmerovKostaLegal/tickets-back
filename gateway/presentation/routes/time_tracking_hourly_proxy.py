@@ -103,6 +103,16 @@ class HourlyRatePatchBody(BaseModel):
     valid_to: Optional[date] = Field(None, alias="validTo")
 
 
+class HourlyRateChangeFromBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    rate_kind: str = Field(..., alias="rateKind")
+    amount: Decimal
+    currency: str = "USD"
+    applies_to_project_id: str = Field(..., alias="appliesToProjectId")
+    effective_from: date = Field(..., alias="effectiveFrom")
+
+
 async def hourly_rates_list_gateway(
     auth_user_id: int,
     kind: str,
@@ -157,6 +167,32 @@ async def hourly_rates_create_gateway(auth_user_id: int, body: HourlyRateCreateB
     r = await send_upstream_request(
         "POST",
         f"{base}/users/{auth_user_id}/hourly-rates",
+        json=body.model_dump(mode="json", by_alias=False),
+        headers=merge_upstream_headers(),
+        timeout=10.0,
+        unavailable_status=503,
+        unavailable_detail="Time tracking service unavailable",
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    return r.json()
+
+
+async def hourly_rates_change_from_gateway(
+    auth_user_id: int,
+    body: HourlyRateChangeFromBody,
+    user: dict,
+) -> Any:
+    rk = (body.rate_kind or "").strip()
+    if rk == "cost":
+        _ensure_manage_cost_rates(user)
+    elif rk == "billable":
+        _ensure_manage_billable_rates(user)
+    else:
+        raise HTTPException(status_code=400, detail="rateKind must be billable or cost")
+    base = _time_tracking_base()
+    r = await send_upstream_request(
+        "POST",
+        f"{base}/users/{auth_user_id}/hourly-rates/change-from",
         json=body.model_dump(mode="json", by_alias=False),
         headers=merge_upstream_headers(),
         timeout=10.0,

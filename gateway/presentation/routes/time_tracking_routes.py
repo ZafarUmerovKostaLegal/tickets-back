@@ -38,9 +38,11 @@ from presentation.schemas.time_manager_client_tasks import (
 )
 
 from presentation.routes.time_tracking_hourly_proxy import (
+    HourlyRateChangeFromBody,
     HourlyRateCreateBody,
     HourlyRatePatchBody,
     get_current_user,
+    hourly_rates_change_from_gateway,
     hourly_rates_create_gateway,
     hourly_rates_delete_gateway,
     hourly_rates_get_gateway,
@@ -466,6 +468,15 @@ async def create_hourly_rate(
     user: dict = Depends(get_current_user),
 ):
     return await hourly_rates_create_gateway(auth_user_id, body, user)
+
+
+@router.post("/users/{auth_user_id}/hourly-rates/change-from")
+async def change_hourly_rate_from(
+    auth_user_id: int,
+    body: HourlyRateChangeFromBody,
+    user: dict = Depends(get_current_user),
+):
+    return await hourly_rates_change_from_gateway(auth_user_id, body, user)
 
 
 @router.patch("/users/{auth_user_id}/hourly-rates/{rate_id}")
@@ -1212,6 +1223,11 @@ async def reports_time(
         "billable_hours": totals.get("billable_hours", 0),
         "non_billable_hours": totals.get("non_billable_hours", 0),
         "billable_percent": totals.get("billable_percent", 0),
+        "billable_amount": totals.get("billable_amount"),
+        "currency": totals.get("currency"),
+        "currencies": totals.get("currencies", []),
+        "billable_amount_by_currency": totals.get("billable_amount_by_currency", {}),
+        "hours_by_currency": totals.get("hours_by_currency", {}),
     }
     return payload
 

@@ -697,17 +697,45 @@ def _totals_from_group_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     billable_hours = Decimal(0)
     billable_amount = Decimal(0)
     source_entry_count = 0
+    by_currency_amount: dict[str, Decimal] = defaultdict(Decimal)
+    by_currency_total_hours: dict[str, Decimal] = defaultdict(Decimal)
+    by_currency_billable_hours: dict[str, Decimal] = defaultdict(Decimal)
     for row in rows:
-        total_hours += _d(row.get("total_hours"))
-        billable_hours += _d(row.get("billable_hours"))
-        billable_amount += _d(row.get("billable_amount"))
+        t = _d(row.get("total_hours"))
+        b = _d(row.get("billable_hours"))
+        a = _d(row.get("billable_amount"))
+        cur = str(row.get("currency") or "USD").strip().upper() or "USD"
+        total_hours += t
+        billable_hours += b
+        billable_amount += a
+        by_currency_amount[cur] += a
+        by_currency_total_hours[cur] += t
+        by_currency_billable_hours[cur] += b
         source_entry_count += int(row.get("source_entry_count") or 0)
+    currencies = sorted(by_currency_amount.keys())
+    amount_single = _money(billable_amount) if len(currencies) <= 1 else None
+    primary_currency = currencies[0] if len(currencies) == 1 else "MIXED"
     return {
         "total_hours": _hours(total_hours),
         "billable_hours": _hours(billable_hours),
         "non_billable_hours": _hours(total_hours - billable_hours),
         "billable_percent": _percent_billable(total_hours, billable_hours),
-        "billable_amount": _money(billable_amount),
+        "billable_amount": amount_single,
+        "currency": primary_currency,
+        "currencies": currencies,
+        "billable_amount_by_currency": {
+            cur: _money(amt) for cur, amt in sorted(by_currency_amount.items())
+        },
+        "hours_by_currency": {
+            cur: {
+                "total_hours": _hours(by_currency_total_hours[cur]),
+                "billable_hours": _hours(by_currency_billable_hours[cur]),
+                "non_billable_hours": _hours(
+                    by_currency_total_hours[cur] - by_currency_billable_hours[cur]
+                ),
+            }
+            for cur in sorted(by_currency_total_hours.keys())
+        },
         "source_entry_count": source_entry_count,
     }
 

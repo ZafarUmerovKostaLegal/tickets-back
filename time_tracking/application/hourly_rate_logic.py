@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 _MIN = date(1, 1, 1)
@@ -74,3 +75,81 @@ def pick_rate_for_date(
         return start, rid
 
     return max(candidates, key=_key)
+
+
+@dataclass
+class RateChangePlan:
+    """План смены ставки с конкретного дня (effective_from).
+
+    - update_existing_id: период уже начинается ровно в этот день — просто меняем сумму.
+    - close_existing_id / close_valid_to: закрыть действующий период днём раньше.
+    - create_before_amount / create_before_valid_to: при первом проектном
+      переопределении сохранить период «до X» по старой (действующей) ставке,
+      чтобы расчёт до X не обнулялся (проектные ставки имеют приоритет над общими).
+    - create_new / create_new_valid_to: создать новый период с новой суммой с дня X.
+    """
+
+    update_existing_id: str | None = None
+    close_existing_id: str | None = None
+    close_valid_to: date | None = None
+    create_before_amount: Any | None = None
+    create_before_valid_to: date | None = None
+    create_new: bool = True
+    create_new_valid_to: date | None = None
+
+
+def build_rate_change_plan(
+    project_rates: list[Any],
+    global_rates: list[Any],
+    effective_from: date,
+    *,
+    valid_from_attr: str = "valid_from",
+    valid_to_attr: str = "valid_to",
+) -> RateChangePlan:
+    """Строит план смены проектной ставки пользователя с дня effective_from.
+
+    Старая ставка действует до дня перед effective_from, новая — с effective_from.
+    Функция чистая (без БД), чтобы её можно было покрыть юнит-тестами.
+    """
+
+    def _vf(r: Any) -> date | None:
+        return getattr(r, valid_from_attr, None)
+
+    covering = pick_rate_for_date(
+        project_rates,
+        effective_from,
+        valid_from_attr=valid_from_attr,
+        valid_to_attr=valid_to_attr,
+    )
+
+    if covering is not None and effective_start(_vf(covering)) == effective_from:
+        return RateChangePlan(
+            update_existing_id=str(getattr(covering, "id", "") or ""),
+            create_new=False,
+        )
+
+    day_before = effective_from - timedelta(days=1)
+    future_starts = sorted(
+        effective_start(_vf(r))
+        for r in project_rates
+        if effective_start(_vf(r)) > effective_from
+    )
+    new_valid_to = (future_starts[0] - timedelta(days=1)) if future_starts else None
+
+    plan = RateChangePlan(create_new_valid_to=new_valid_to)
+
+    if covering is not None:
+        plan.close_existing_id = str(getattr(covering, "id", "") or "")
+        plan.close_valid_to = day_before
+    elif not project_rates:
+        eff_global = pick_rate_for_date(
+            global_rates,
+            effective_from,
+            valid_from_attr=valid_from_attr,
+            valid_to_attr=valid_to_attr,
+        )
+        if eff_global is not None:
+            plan.create_before_amount = getattr(eff_global, "amount", None)
+            plan.create_before_valid_to = day_before
+
+    return plan

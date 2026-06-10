@@ -140,6 +140,37 @@ class HourlyRatePatchBody(BaseModel):
     valid_to: Optional[date] = Field(None, alias="validTo")
 
 
+class HourlyRateChangeFromBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    rate_kind: RateKind = Field(..., alias="rateKind")
+    amount: Decimal = Field(..., description="Новая ставка, действует с effectiveFrom")
+    currency: str = "USD"
+    applies_to_project_id: str = Field(
+        ...,
+        alias="appliesToProjectId",
+        description="Проект, для которого меняется ставка пользователя.",
+    )
+    effective_from: date = Field(
+        ...,
+        alias="effectiveFrom",
+        description="С этого дня действует новая ставка; до него — прежняя.",
+    )
+
+
+class HourlyRateChangeFromResult(BaseModel):
+    new_rate: HourlyRateOut = Field(..., description="Новый период с новой ставкой")
+    closed_rate: Optional[HourlyRateOut] = Field(
+        None, description="Прежний период, закрытый днём раньше effectiveFrom"
+    )
+    before_rate: Optional[HourlyRateOut] = Field(
+        None, description="Сохранённый период «до даты» при первом переопределении в проекте"
+    )
+    updated_rate: Optional[HourlyRateOut] = Field(
+        None, description="Период обновлён на месте (начинался ровно с effectiveFrom)"
+    )
+
+
 class TeamWorkloadSummaryOut(BaseModel):
     total_hours: Decimal
     team_capacity_hours: Decimal = Field(
