@@ -35,7 +35,7 @@ from infrastructure.schema_patches import (
     apply_report_performance_indexes_patch,
 )
 from application.settings_sync import renormalize_time_entries_to_minute
-from presentation.deps import require_bearer_user
+from presentation.deps import require_bearer_user, require_tt_reports_viewer
 from presentation.exception_handlers import register_exception_handlers
 from presentation.routes import (
     invoices,
@@ -108,6 +108,7 @@ app.add_middleware(
 app.add_middleware(SqlInjectionGuardMiddleware)
 
 _tt_auth = [Depends(require_bearer_user)]
+_tt_reports_auth = [Depends(require_bearer_user), Depends(require_tt_reports_viewer)]
 
 app.include_router(health.router)
 app.include_router(client_tasks.router, dependencies=_tt_auth)
@@ -120,8 +121,8 @@ app.include_router(hourly_rates.router, dependencies=_tt_auth)
 app.include_router(time_entries.router, dependencies=_tt_auth)
 app.include_router(project_access.router, dependencies=_tt_auth)
 app.include_router(users.router, dependencies=_tt_auth)
-app.include_router(reports.router, dependencies=_tt_auth)
-app.include_router(report_partner_confirmations.router, dependencies=_tt_auth)
-app.include_router(report_snapshots.router, dependencies=_tt_auth)
+app.include_router(reports.router, dependencies=_tt_reports_auth)
+app.include_router(report_partner_confirmations.router, dependencies=_tt_reports_auth)
+app.include_router(report_snapshots.router, dependencies=_tt_reports_auth)
 app.include_router(invoices.router, dependencies=_tt_auth)
 app.include_router(client_projects._global_projects_router, dependencies=_tt_auth)

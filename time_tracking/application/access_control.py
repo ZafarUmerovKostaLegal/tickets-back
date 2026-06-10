@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from infrastructure.repositories import (
     ClientProjectRepository,
     TimeTrackingUserRepository,
@@ -29,7 +30,7 @@ async def viewer_can_bypass_work_week_submission_lock(
     viewer: dict,
 ) -> bool:
 
-    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return True
     ur = TimeTrackingUserRepository(session)
     row = await ur.get_by_auth_user_id(_viewer_id(viewer))
@@ -38,6 +39,25 @@ async def viewer_can_bypass_work_week_submission_lock(
 
 def _org_role(viewer: dict) -> str:
     return (viewer.get("role") or "").strip()
+
+
+def _can_view_tt(viewer: dict) -> bool:
+    if user_has_tt_full_ops_no_reports(viewer):
+        return True
+    return _org_role(viewer) in _VIEW_ROLES_TIME_ENTRIES
+
+
+def _can_manage_tt(viewer: dict) -> bool:
+    if user_has_tt_full_ops_no_reports(viewer):
+        return True
+    return _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES
+
+
+def ensure_can_view_tt_reports(viewer: dict) -> None:
+    if user_has_tt_full_ops_no_reports(viewer):
+        raise HTTPException(status_code=403, detail="Отчётность недоступна для вашей должности")
+    if _org_role(viewer) not in _VIEW_ROLES_TIME_ENTRIES:
+        raise HTTPException(status_code=403, detail="Недостаточно прав для просмотра отчётности")
 
 
 def _viewer_id(viewer: dict) -> int:
@@ -57,12 +77,11 @@ async def ensure_time_entry_subject_allowed(
 
     if _viewer_id(viewer) == target_auth_user_id:
         return
-    role = _org_role(viewer)
     if write:
-        if role in _MANAGE_ROLES_TIME_ENTRIES:
+        if _can_manage_tt(viewer):
             return
     else:
-        if role in _VIEW_ROLES_TIME_ENTRIES:
+        if _can_view_tt(viewer):
             return
 
     ur = TimeTrackingUserRepository(session)
@@ -100,12 +119,12 @@ async def ensure_can_grant_time_entry_edit_unlock(
 
     vid = _viewer_id(viewer)
     role = _org_role(viewer)
-    if vid == target_auth_user_id and role not in _MANAGE_ROLES_TIME_ENTRIES:
+    if vid == target_auth_user_id and not _can_manage_tt(viewer):
         raise HTTPException(
             status_code=403,
             detail="Разблокировку может выдать только менеджер или администратор",
         )
-    if role in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return
     ur = TimeTrackingUserRepository(session)
     row = await ur.get_by_auth_user_id(vid)
@@ -132,8 +151,7 @@ async def ensure_can_read_tt_user_row(
 
     if _viewer_id(viewer) == target_auth_user_id:
         return
-    role = _org_role(viewer)
-    if role in _VIEW_ROLES_TIME_ENTRIES:
+    if _can_view_tt(viewer):
         return
     ur = TimeTrackingUserRepository(session)
     row = await ur.get_by_auth_user_id(_viewer_id(viewer))
@@ -149,8 +167,7 @@ async def ensure_can_read_tt_user_row(
 
 async def ensure_can_list_all_tt_users(viewer: dict) -> None:
 
-    role = _org_role(viewer)
-    if role in _VIEW_ROLES_TIME_ENTRIES:
+    if _can_view_tt(viewer):
         return
     raise HTTPException(
         status_code=403,
@@ -170,7 +187,7 @@ async def ensure_managed_scope_allowed(viewer: dict, manager_auth_user_id: int) 
 
     if _viewer_id(viewer) == manager_auth_user_id:
         return
-    if _org_role(viewer) in _VIEW_ROLES_TIME_ENTRIES:
+    if _can_view_tt(viewer):
         return
     raise HTTPException(status_code=403, detail="Недостаточно прав для зоны видимости менеджера")
 
@@ -179,7 +196,7 @@ async def ensure_weekly_capacity_patch_allowed(viewer: dict, target_auth_user_id
 
     if _viewer_id(viewer) == target_auth_user_id:
         return
-    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return
     raise HTTPException(
         status_code=403,
@@ -191,7 +208,7 @@ def ensure_upsert_user_allowed(viewer: dict, body_auth_user_id: int) -> None:
 
     if _viewer_id(viewer) == body_auth_user_id:
         return
-    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return
     raise HTTPException(
         status_code=403,
@@ -200,13 +217,13 @@ def ensure_upsert_user_allowed(viewer: dict, body_auth_user_id: int) -> None:
 
 
 def ensure_delete_tt_user_allowed(viewer: dict) -> None:
-    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return
     raise HTTPException(status_code=403, detail="Удаление из учёта времени — только для администраторов")
 
 
 def ensure_create_manual_tt_user_allowed(viewer: dict) -> None:
-    if _org_role(viewer) in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(viewer):
         return
     raise HTTPException(
         status_code=403,
@@ -226,8 +243,7 @@ async def ensure_can_list_project_assignees(
     cpr = ClientProjectRepository(session)
     if await cpr.get_by_id_global(pid) is None:
         raise HTTPException(status_code=404, detail="Проект не найден")
-    role = _org_role(viewer)
-    if role in _VIEW_ROLES_TIME_ENTRIES:
+    if _can_view_tt(viewer):
         return
     par = UserProjectAccessRepository(session)
     viewer_id = _viewer_id(viewer)

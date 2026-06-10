@@ -41,6 +41,15 @@ async def require_bearer_user(
     return data
 
 
+async def require_tt_reports_viewer(
+    user: dict = Depends(require_bearer_user),
+) -> dict:
+    from application.access_control import ensure_can_view_tt_reports
+
+    ensure_can_view_tt_reports(user)
+    return user
+
+
 async def invoice_actor_auth_user_id(
     user: dict = Depends(require_bearer_user),
     actor_auth_user_id: int | None = Query(None, alias="actorAuthUserId"),

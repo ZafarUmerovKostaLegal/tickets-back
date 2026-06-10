@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from infrastructure.auth_upstream import verify_bearer_and_get_user
 from infrastructure.config import get_settings
 from infrastructure.upstream_auth_context import merge_upstream_headers
@@ -33,6 +34,8 @@ def _role(user: dict) -> str:
 
 
 def _ensure_billable_rates_view(user: dict) -> None:
+    if user_has_tt_full_ops_no_reports(user):
+        return
     if _role(user) not in ROLES_CAN_VIEW:
         raise HTTPException(
             status_code=403,
@@ -49,6 +52,8 @@ def _ensure_cost_rates_view(user: dict) -> None:
 
 
 def _ensure_manage_billable_rates(user: dict) -> None:
+    if user_has_tt_full_ops_no_reports(user):
+        return
     if _role(user) not in ROLES_CAN_MANAGE:
         raise HTTPException(
             status_code=403,

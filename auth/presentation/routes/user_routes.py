@@ -62,7 +62,9 @@ async def get_current_user(
 
 
 def _user_to_response(user: User, *, omit_permissions: bool = False) -> UserResponse:
-    perms = None if omit_permissions else build_ui_permissions(user.role, user.time_tracking_role)
+    perms = None if omit_permissions else build_ui_permissions(
+        user.role, user.time_tracking_role, user.position
+    )
     return UserResponse(
         id=user.id,
         email=user.email,

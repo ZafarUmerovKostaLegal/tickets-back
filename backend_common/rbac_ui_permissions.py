@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from backend_common.tt_position_access import position_has_tt_full_ops_no_reports
+
 RBAC_UI_VERSION = 1
 
 
@@ -174,12 +176,14 @@ def role_in_set(role: str, allowed: frozenset[str]) -> bool:
 def build_ui_permissions(
     org_role: Optional[str],
     time_tracking_role: Optional[str],
+    position: Optional[str] = None,
 ) -> dict[str, Any]:
 
     r = org_role
     tt = (time_tracking_role or "").strip().lower()
     is_tt_user = tt == "user"
     is_tt_manager = tt == "manager"
+    pos_tt_ops = position_has_tt_full_ops_no_reports(position)
 
     caps: dict[str, Any] = {
         "v": RBAC_UI_VERSION,
@@ -196,16 +200,17 @@ def build_ui_permissions(
         "expenses_can_view": role_in_set(r, EXPENSES_VIEW),
         "expenses_can_moderate": role_in_set(r, EXPENSES_MODERATE),
         "expenses_can_admin_edit": role_in_set(r, EXPENSES_ADMIN_EDIT),
-        "time_tracking_can_view_directory": role_in_set(r, TIME_TRACKING_VIEW_DIRECTORY),
-        "time_tracking_can_manage_org_users": role_in_set(r, TIME_TRACKING_MANAGE_ORG),
-        "time_tracking_can_view_time_entries_scope": role_in_set(r, _VIEW_TIME_ENTRIES),
-        "time_tracking_can_manage_time_entries_scope": role_in_set(r, _MANAGE_TIME_ENTRIES),
+        "time_tracking_can_view_directory": role_in_set(r, TIME_TRACKING_VIEW_DIRECTORY) or pos_tt_ops,
+        "time_tracking_can_manage_org_users": role_in_set(r, TIME_TRACKING_MANAGE_ORG) or pos_tt_ops,
+        "time_tracking_can_view_time_entries_scope": role_in_set(r, _VIEW_TIME_ENTRIES) or pos_tt_ops,
+        "time_tracking_can_manage_time_entries_scope": role_in_set(r, _MANAGE_TIME_ENTRIES) or pos_tt_ops,
+        "time_tracking_can_view_reports": (role_in_set(r, _VIEW_TIME_ENTRIES) and not pos_tt_ops),
         "time_tracking_is_tt_user": is_tt_user,
         "time_tracking_is_tt_manager": is_tt_manager,
         "inventory_can_write": role_in_set(r, INVENTORY_WRITE),
         "notifications_can_write": role_in_set(r, NOTIFICATIONS_WRITE),
-        "hourly_rates_can_view": role_in_set(r, HOURLY_VIEW),
-        "hourly_rates_can_manage": role_in_set(r, HOURLY_MANAGE),
+        "hourly_rates_can_view": role_in_set(r, HOURLY_VIEW) or pos_tt_ops,
+        "hourly_rates_can_manage": role_in_set(r, HOURLY_MANAGE) or pos_tt_ops,
         "hourly_rates_admin_only_operations": role_in_set(r, HOURLY_ADMIN_RATES),
     }
     return caps

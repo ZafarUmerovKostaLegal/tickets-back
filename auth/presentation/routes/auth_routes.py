@@ -371,6 +371,6 @@ async def me(
         is_archived=user.is_archived,
         created_at=user.created_at,
         updated_at=user.updated_at,
-        permissions=build_ui_permissions(user.role, user.time_tracking_role),
+        permissions=build_ui_permissions(user.role, user.time_tracking_role, user.position),
         time_tracking_role=user.time_tracking_role,
     )

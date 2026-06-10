@@ -37,6 +37,7 @@ from presentation.schemas.time_manager_client_tasks import (
     TimeManagerClientTaskPatchBody,
 )
 
+from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from presentation.routes.time_tracking_hourly_proxy import (
     HourlyRateChangeFromBody,
     HourlyRateCreateBody,
@@ -113,15 +114,36 @@ def _alias_free_payload(body: BaseModel, label: str, *, exclude_unset: bool = Fa
         raise HTTPException(status_code=500, detail=f"Invalid {label} payload: {exc}") from exc
 
 
-def require_view_role(user: dict = Depends(get_current_user)):
-    role = (user.get("role") or "").strip()
-    if role not in {
+def _org_role(user: dict) -> str:
+    return (user.get("role") or "").strip()
+
+
+def _can_view_tt(user: dict) -> bool:
+    if user_has_tt_full_ops_no_reports(user):
+        return True
+    return _org_role(user) in {
         "Главный администратор",
         "Администратор",
         "Партнер",
         "IT отдел",
         "Офис менеджер",
-    }:
+    }
+
+
+def _can_manage_tt(user: dict) -> bool:
+    if user_has_tt_full_ops_no_reports(user):
+        return True
+    return _org_role(user) in {"Главный администратор", "Администратор", "Партнер"}
+
+
+def _can_view_tt_reports(user: dict) -> bool:
+    if user_has_tt_full_ops_no_reports(user):
+        return False
+    return _can_view_tt(user)
+
+
+def require_view_role(user: dict = Depends(get_current_user)):
+    if not _can_view_tt(user):
         raise HTTPException(
             status_code=403,
             detail="Only administrators and office managers can view time tracking users",
@@ -130,11 +152,19 @@ def require_view_role(user: dict = Depends(get_current_user)):
 
 
 def require_manage_role(user: dict = Depends(get_current_user)):
-    role = (user.get("role") or "").strip()
-    if role not in {"Главный администратор", "Администратор", "Партнер"}:
+    if not _can_manage_tt(user):
         raise HTTPException(
             status_code=403,
             detail="Only administrators can update or delete time tracking users",
+        )
+    return user
+
+
+def require_reports_view_role(user: dict = Depends(get_current_user)):
+    if not _can_view_tt_reports(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Отчётность недоступна для вашей должности",
         )
     return user
 
@@ -148,14 +178,7 @@ def require_client_contacts_view(user: dict = Depends(get_current_user)):
     tt = _time_tracking_role(user)
     if tt in {"user", "manager"}:
         return user
-    role = (user.get("role") or "").strip()
-    if role in {
-        "Главный администратор",
-        "Администратор",
-        "Партнер",
-        "IT отдел",
-        "Офис менеджер",
-    }:
+    if _can_view_tt(user):
         return user
     raise HTTPException(
         status_code=403,
@@ -181,14 +204,7 @@ async def require_view_project_access(
     my_id = user.get("id")
     if my_id is not None and int(my_id) == auth_user_id:
         return user
-    role = (user.get("role") or "").strip()
-    if role in {
-        "Главный администратор",
-        "Администратор",
-        "Партнер",
-        "IT отдел",
-        "Офис менеджер",
-    }:
+    if _can_view_tt(user):
         return user
     if my_id is None:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
@@ -211,8 +227,7 @@ async def require_manage_project_access(
     auth_user_id: int,
     user: dict = Depends(get_current_user),
 ):
-    role = (user.get("role") or "").strip()
-    if role in {"Главный администратор", "Администратор", "Партнер"}:
+    if _can_manage_tt(user):
         return user
     my_id = user.get("id")
     if my_id is None:
@@ -286,8 +301,7 @@ async def require_time_entry_read(
 
     if _current_auth_user_id(user) == auth_user_id:
         return user
-    role = (user.get("role") or "").strip()
-    if role in _VIEW_ROLES_TIME_ENTRIES:
+    if _can_view_tt(user):
         return user
     tt_role = await _fetch_time_tracking_user_role(_current_auth_user_id(user))
     if tt_role == "manager":
@@ -311,8 +325,7 @@ async def require_time_entry_write(
 
     if _current_auth_user_id(user) == auth_user_id:
         return user
-    role = (user.get("role") or "").strip()
-    if role in _MANAGE_ROLES_TIME_ENTRIES:
+    if _can_manage_tt(user):
         return user
     tt_role = await _fetch_time_tracking_user_role(_current_auth_user_id(user))
     if tt_role == "manager":
@@ -335,8 +348,8 @@ async def require_grant_time_entry_unlock(
 ):
 
     rid = _current_auth_user_id(user)
-    role = (user.get("role") or "").strip()
-    if rid == auth_user_id and role not in _MANAGE_ROLES_TIME_ENTRIES:
+    role = _org_role(user)
+    if rid == auth_user_id and not _can_manage_tt(user):
         raise HTTPException(
             status_code=403,
             detail="Разблокировку может выдать только менеджер или администратор",
@@ -1101,24 +1114,24 @@ async def delete_user(
 
 
 @router.get("/reports/meta")
-async def reports_meta(_: dict = Depends(get_current_user)):
+async def reports_meta(_: dict = Depends(require_reports_view_role)):
     return await _tt_json("GET", "/reports/meta")
 
 
 @router.get("/reports/users-for-filter")
-async def reports_users_for_filter(_: dict = Depends(require_view_role)):
+async def reports_users_for_filter(_: dict = Depends(require_reports_view_role)):
     return await _tt_json("GET", "/reports/users-for-filter")
 
 
 @router.get("/reports/snapshots")
-async def reports_snapshots_list(_: dict = Depends(require_view_role)):
+async def reports_snapshots_list(_: dict = Depends(require_reports_view_role)):
     return await _tt_json("GET", "/reports/snapshots", timeout=30.0)
 
 
 @router.get("/reports/snapshots/{snapshot_id}")
 async def reports_snapshot_detail(
     snapshot_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", f"/reports/snapshots/{snapshot_id}", timeout=30.0)
 
@@ -1128,7 +1141,7 @@ async def reports_snapshot_row_patch(
     snapshot_id: str,
     row_id: str,
     body: dict = Body(...),
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json(
         "PATCH",
@@ -1141,7 +1154,7 @@ async def reports_snapshot_row_patch(
 @router.post("/reports/partner-confirmations/submit-from-preview")
 async def reports_partner_confirmation_submit_from_preview(
     body: dict = Body(...),
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json(
         "POST",
@@ -1154,7 +1167,7 @@ async def reports_partner_confirmation_submit_from_preview(
 @router.post("/reports/partner-confirmations/submit")
 async def reports_partner_confirmation_submit(
     body: dict = Body(...),
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json(
         "POST",
@@ -1167,7 +1180,7 @@ async def reports_partner_confirmation_submit(
 @router.post("/reports/partner-confirmations/{request_id}/confirm")
 async def reports_partner_confirmation_confirm(
     request_id: str,
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json(
         "POST",
@@ -1179,14 +1192,14 @@ async def reports_partner_confirmation_confirm(
 
 @router.get("/reports/partner-confirmations/pending")
 async def reports_partner_confirmation_pending(
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", "/reports/partner-confirmations/pending", timeout=30.0)
 
 
 @router.get("/reports/partner-confirmations/confirmed")
 async def reports_partner_confirmation_confirmed(
-    _: dict = Depends(require_view_role),
+    _: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", "/reports/partner-confirmations/confirmed", timeout=30.0)
 
@@ -1195,7 +1208,7 @@ async def reports_partner_confirmation_confirmed(
 async def reports_time(
     group_by: str,
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     params = dict(request.query_params)
     # Frontend screens historically aggregated only current page.
@@ -1236,7 +1249,7 @@ async def reports_time(
 async def reports_time_export(
     group_by: str,
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     r = await _tt_request(
         "GET", f"/reports/time/{group_by}/export", params=request.query_params, timeout=60.0,
@@ -1254,7 +1267,7 @@ async def reports_time_export(
 async def reports_expenses(
     group_by: str,
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", f"/reports/expenses/{group_by}", params=request.query_params, timeout=30.0)
 
@@ -1263,7 +1276,7 @@ async def reports_expenses(
 async def reports_expenses_export(
     group_by: str,
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     r = await _tt_request(
         "GET", f"/reports/expenses/{group_by}/export", params=request.query_params, timeout=60.0,
@@ -1280,7 +1293,7 @@ async def reports_expenses_export(
 @router.get("/reports/uninvoiced")
 async def reports_uninvoiced(
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", "/reports/uninvoiced", params=request.query_params, timeout=30.0)
 
@@ -1288,7 +1301,7 @@ async def reports_uninvoiced(
 @router.get("/reports/uninvoiced/export")
 async def reports_uninvoiced_export(
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     r = await _tt_request(
         "GET", "/reports/uninvoiced/export", params=request.query_params, timeout=60.0,
@@ -1305,7 +1318,7 @@ async def reports_uninvoiced_export(
 @router.get("/reports/project-budget")
 async def reports_project_budget(
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     return await _tt_json("GET", "/reports/project-budget", params=request.query_params, timeout=30.0)
 
@@ -1313,7 +1326,7 @@ async def reports_project_budget(
 @router.get("/reports/project-budget/export")
 async def reports_project_budget_export(
     request: Request,
-    user: dict = Depends(require_view_role),
+    user: dict = Depends(require_reports_view_role),
 ):
     r = await _tt_request(
         "GET", "/reports/project-budget/export", params=request.query_params, timeout=60.0,
