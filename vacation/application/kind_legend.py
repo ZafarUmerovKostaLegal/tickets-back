@@ -13,7 +13,12 @@ class KindLegendEntry(BaseModel):
     color_text_hex: str = Field(description="Цвет текста на плашке для контраста")
 
 
+# Категории, которые сотрудник может запросить заявкой (с подтверждением партнёра).
 REQUESTABLE_KIND_CODES: tuple[int, ...] = (1, 3, 5)
+
+# Категории, для которых при ручном внесении в график обязателен документ-основание.
+# По умолчанию — все категории (для каждой нужно приложить основание/доп. документы).
+DOCUMENT_REQUIRED_KIND_CODES: tuple[int, ...] = (1, 2, 3, 4, 5)
 
 KIND_LEGEND_ENTRIES: list[KindLegendEntry] = [
     KindLegendEntry(
@@ -24,11 +29,25 @@ KIND_LEGEND_ENTRIES: list[KindLegendEntry] = [
         color_text_hex="#4A148C",
     ),
     KindLegendEntry(
+        kind_code=2,
+        kind="sick_leave",
+        label_ru="Больничный",
+        color_hex="#FFCDD2",
+        color_text_hex="#B71C1C",
+    ),
+    KindLegendEntry(
         kind_code=3,
         kind="day_off",
         label_ru="Day Off (нерабочий)",
         color_hex="#81D4FA",
         color_text_hex="#01579B",
+    ),
+    KindLegendEntry(
+        kind_code=4,
+        kind="business_trip",
+        label_ru="Командировка",
+        color_hex="#C8E6C9",
+        color_text_hex="#1B5E20",
     ),
     KindLegendEntry(
         kind_code=5,
@@ -42,3 +61,9 @@ KIND_LEGEND_ENTRIES: list[KindLegendEntry] = [
 KIND_BY_KEY: dict[str, int] = {e.kind: e.kind_code for e in KIND_LEGEND_ENTRIES}
 KIND_BY_CODE: dict[int, str] = {e.kind_code: e.kind for e in KIND_LEGEND_ENTRIES}
 KIND_LABELS_RU: dict[int, str] = {e.kind_code: e.label_ru for e in KIND_LEGEND_ENTRIES}
+ALL_KIND_CODES: tuple[int, ...] = tuple(e.kind_code for e in KIND_LEGEND_ENTRIES)
+
+
+def document_required_for(kind_code: int) -> bool:
+    """Нужен ли документ-основание для ручной записи данной категории."""
+    return int(kind_code) in DOCUMENT_REQUIRED_KIND_CODES

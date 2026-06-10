@@ -13,6 +13,7 @@ from presentation.middleware.schema_readiness import SchemaReadinessMiddleware
 from presentation.routes.health import router as health_router
 from presentation.routes.schedule import router as schedule_router
 from presentation.routes.leave_requests import router as leave_requests_router
+from presentation.routes.manual_entries import router as manual_entries_router
 
 _log = logging.getLogger("vacation.startup")
 _STARTUP_RETRIES = 30
@@ -42,6 +43,9 @@ _UPGRADE_SQL = (
     END $$""",
     "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS leave_request_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_absence_days_leave_request_id ON absence_days(leave_request_id)",
+    # manual schedule entries + supporting documents (основания), added 2026
+    "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS manual_entry_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_absence_days_manual_entry_id ON absence_days(manual_entry_id)",
 )
 
 
@@ -142,3 +146,4 @@ app.add_middleware(SchemaReadinessMiddleware)
 app.include_router(health_router)
 app.include_router(schedule_router)
 app.include_router(leave_requests_router)
+app.include_router(manual_entries_router)

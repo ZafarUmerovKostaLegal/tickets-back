@@ -66,6 +66,12 @@ class AbsenceDay(Base):
         nullable=True,
         index=True,
     )
+    manual_entry_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("manual_absence_entries.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     employee: Mapped["ScheduleEmployee"] = relationship("ScheduleEmployee", back_populates="absence_days")
 
@@ -102,3 +108,71 @@ class LeaveRequest(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ManualAbsenceEntry(Base):
+    """Ручная запись в график (вносит администратор/партнёр/офис-менеджер).
+
+    Для каждой ручной записи обязательны документы-основания (см. AbsenceDocument),
+    например приказ о командировке на период 5–10 числа. Из записи материализуются
+    дни в absence_days (с привязкой manual_entry_id).
+    """
+
+    __tablename__ = "manual_absence_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("schedule_employees.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind_code: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    date_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    date_to: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    documents: Mapped[list["AbsenceDocument"]] = relationship(
+        "AbsenceDocument",
+        back_populates="manual_entry",
+        cascade="all, delete-orphan",
+    )
+
+
+class AbsenceDocument(Base):
+    """Документ-основание для ручной записи в график (или вложение к заявке)."""
+
+    __tablename__ = "absence_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    manual_entry_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("manual_absence_entries.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    leave_request_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("leave_requests.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    manual_entry: Mapped["ManualAbsenceEntry | None"] = relationship(
+        "ManualAbsenceEntry",
+        back_populates="documents",
+    )
