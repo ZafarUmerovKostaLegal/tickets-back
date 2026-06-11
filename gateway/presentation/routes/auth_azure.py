@@ -4,6 +4,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
+from pydantic import BaseModel
 
 from infrastructure.config import get_settings
 from infrastructure.oauth_state_jwt import parse_oauth_state_token
@@ -11,6 +12,40 @@ from infrastructure.oauth_state_jwt import parse_oauth_state_token
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth/azure", tags=["auth"])
+
+
+class AzureExchangeBody(BaseModel):
+    code: str
+
+
+@router.post(
+    "/exchange",
+    summary="Обмен Azure authorization code на JWT (мобильные и native-клиенты)",
+    description=(
+        "После OAuth в Flutter/native передайте `code` из redirect URI. "
+        "Ответ: `{ \"access_token\": \"...\", \"token_type\": \"bearer\" }`. "
+        "Redirect URI при обмене должен совпадать с `AUTH_REDIRECT_URI` на сервере и с тем, "
+        "что указан в запросе авторизации MSAL/AppAuth."
+    ),
+)
+async def azure_exchange(body: AzureExchangeBody):
+    settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                f"{settings.auth_service_url.rstrip('/')}/auth/exchange",
+                json={"code": body.code},
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail="Auth service unavailable") from e
+    if r.status_code >= 400:
+        detail = r.text or "Auth exchange failed"
+        try:
+            detail = r.json().get("detail", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    return r.json()
 
 
 def _clear_oauth_cookies(resp: RedirectResponse) -> None:
