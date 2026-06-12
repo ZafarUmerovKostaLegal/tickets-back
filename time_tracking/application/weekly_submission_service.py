@@ -12,6 +12,7 @@ from application.weekly_period import (
     is_work_week_edit_deadline_passed,
     local_today,
     previous_closed_saturday_fri_for_anchor,
+    work_week_start_end_inclusive,
 )
 from infrastructure.repository_time_entry_unlocks import TimeEntryEditUnlockRepository
 from infrastructure.repository_users import TimeTrackingUserRepository
@@ -34,6 +35,25 @@ async def is_work_date_locked_for_user(
         return True
     repo = WeeklySubmissionRepository(session)
     return await repo.is_work_date_locked(auth_user_id, work_date)
+
+
+async def submit_reporting_week_for_user(
+    session: AsyncSession,
+    auth_user_id: int,
+    *,
+    anchor_date: date,
+) -> tuple[date, date, bool]:
+    """Сдать рабочую неделю (суббота–пятница), содержащую anchor_date. Возвращает (week_start, week_end, created)."""
+    w0, w1 = work_week_start_end_inclusive(anchor_date)
+    repo = WeeklySubmissionRepository(session)
+    before = await repo.is_work_date_locked(auth_user_id, w0)
+    await repo.upsert_submission(
+        auth_user_id=auth_user_id,
+        week_start=w0,
+        week_end=w1,
+        auto=False,
+    )
+    return w0, w1, not before
 
 
 async def run_weekly_auto_submit(session: AsyncSession) -> int:

@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 
 from application.team_workload_math import capacity_for_period, workload_percent
+from application.weekly_period import work_week_start_end_inclusive
 from presentation.schemas import TeamWorkloadMemberOut, TeamWorkloadSummaryOut
 
 
@@ -16,7 +17,14 @@ def build_team_workload_members_and_summary(
     *,
     date_from: date,
     date_to: date,
+    entry_counts: Mapping[int, int] | None = None,
+    submitted_user_dates: set[tuple[int, date]] | None = None,
 ) -> tuple[list[TeamWorkloadMemberOut], TeamWorkloadSummaryOut]:
+    counts = entry_counts or {}
+    submitted = submitted_user_dates or set()
+    today_anchor = date_to
+    rw0, rw1 = work_week_start_end_inclusive(today_anchor)
+
     members: list[TeamWorkloadMemberOut] = []
     total_hours = Decimal("0")
     billable_sum = Decimal("0")
@@ -32,9 +40,11 @@ def build_team_workload_members_and_summary(
         non_sum += nonb
         team_cap += cap
         team_weekly += user.weekly_capacity_hours
+        uid = int(user.auth_user_id)
+        week_ok = (uid, rw0) in submitted
         members.append(
             TeamWorkloadMemberOut(
-                auth_user_id=user.auth_user_id,
+                auth_user_id=uid,
                 display_name=user.display_name,
                 email=user.email,
                 picture=user.picture,
@@ -43,6 +53,8 @@ def build_team_workload_members_and_summary(
                 billable_hours=bill,
                 non_billable_hours=nonb,
                 workload_percent=workload_percent(tot, cap),
+                active_entry_count=int(counts.get(uid, 0)),
+                reporting_week_submitted=week_ok,
             )
         )
 

@@ -53,6 +53,7 @@ from presentation.routes import (
     team_workload,
     time_entries,
     users,
+    weekly_submissions,
 )
 
 
@@ -119,6 +120,7 @@ app.include_router(clients.router, dependencies=_tt_auth)
 app.include_router(team_workload.router, dependencies=_tt_auth)
 app.include_router(hourly_rates.router, dependencies=_tt_auth)
 app.include_router(time_entries.router, dependencies=_tt_auth)
+app.include_router(weekly_submissions.router, dependencies=_tt_auth)
 app.include_router(project_access.router, dependencies=_tt_auth)
 app.include_router(users.router, dependencies=_tt_auth)
 app.include_router(reports.router, dependencies=_tt_reports_auth)

@@ -26,12 +26,14 @@ from application.services.reports.budget_report_service import (
     _spent_hours_project,
     _spent_money_project,
 )
+from application.time_rounding import hours_from_seconds
 from infrastructure.repositories import (
     ClientProjectRepository,
     ClientRepository,
     ClientTaskRepository,
     TimeEntryRepository,
     TimeTrackingUserRepository,
+    UserProjectAccessRepository,
 )
 from infrastructure.repository_invoices import InvoiceRepository
 
@@ -68,9 +70,19 @@ async def build_client_project_dashboard(
     client_row = await cr.get_by_id(client_id)
 
     entry_repo = TimeEntryRepository(session)
+    access_repo = UserProjectAccessRepository(session)
+    df_eff = date_from or date(2000, 1, 1)
+    dt_eff = date_to or date.today()
+
     tot, bill, nonb = await entry_repo.aggregate_totals_for_project(project_id, date_from, date_to)
     weeks = await entry_repo.aggregate_hours_by_week_for_project(project_id, date_from, date_to)
     by_user = await entry_repo.aggregate_by_user_for_project(date_from, date_to, project_id)
+
+    from_access = await access_repo.list_auth_user_ids_for_project(project_id)
+    from_entries = await entry_repo.list_auth_users_with_entries_on_project(
+        df_eff, dt_eff, project_id
+    )
+    team_member_ids = sorted(set(from_access) | set(from_entries) | set(by_user.keys()))
 
     entries = await entry_repo.list_entries_for_project(project_id, date_from, date_to)
     entry_ids = [e.id for e in entries]
@@ -96,7 +108,7 @@ async def build_client_project_dashboard(
 
     for e in entries:
 
-        h = _d(e.hours)
+        h = hours_from_seconds(int(e.duration_seconds))
         uid = e.auth_user_id
         tid = (
             str(e.task_id)
@@ -136,12 +148,10 @@ async def build_client_project_dashboard(
         task_user_cost[tid][uid] += c_amt
 
     user_repo = TimeTrackingUserRepository(session)
-    by_auth = {u.auth_user_id: u for u in await user_repo.list_users()}
-
-    def _member_sort_key(item: tuple[int, tuple[Decimal, Decimal, Decimal]]) -> str:
-        uid, _ = item
-        u = by_auth.get(uid)
-        return (u.display_name or u.email or str(uid)).lower() if u else str(uid).lower()
+    by_auth = {
+        u.auth_user_id: u
+        for u in await user_repo.list_by_auth_user_ids(team_member_ids)
+    }
 
     def _member_sort_key_uid(uid: int) -> str:
         u = by_auth.get(uid)
@@ -169,9 +179,8 @@ async def build_client_project_dashboard(
         return members
 
     team: list[dict] = []
-    for uid, (ut, ub, un) in sorted(by_user.items(), key=_member_sort_key):
-        if ut <= 0:
-            continue
+    for uid in sorted(team_member_ids, key=_member_sort_key_uid):
+        ut, ub, un = by_user.get(uid, (_ZERO, _ZERO, _ZERO))
         u = by_auth.get(uid)
         label = (u.display_name or u.email or str(uid)) if u else str(uid)
         team.append(
@@ -181,8 +190,9 @@ async def build_client_project_dashboard(
                 "hours": _hours_json(ut),
                 "billable_hours": _hours_json(ub),
                 "non_billable_hours": _hours_json(un),
-                "billable_amount": float(_money(user_bill[uid])),
-                "internal_cost_amount": float(_money(user_cost[uid])),
+                "billable_amount": float(_money(user_bill.get(uid, _ZERO))),
+                "internal_cost_amount": float(_money(user_cost.get(uid, _ZERO))),
+                "has_project_access": uid in set(from_access),
             }
         )
 
@@ -265,8 +275,6 @@ async def build_client_project_dashboard(
             }
         )
 
-    df_eff = date_from or date(2000, 1, 1)
-    dt_eff = date_to or date.today()
     raw_exp = await _fetch_expense_report_data(df_eff, dt_eff, None, [project_id])
     exp_uzs = Decimal(0)
     exp_equiv = Decimal(0)

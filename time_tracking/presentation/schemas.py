@@ -196,6 +196,14 @@ class TeamWorkloadMemberOut(BaseModel):
     billable_hours: Decimal
     non_billable_hours: Decimal
     workload_percent: int
+    active_entry_count: int = Field(
+        0,
+        description="Число активных (не void) записей за период",
+    )
+    reporting_week_submitted: bool = Field(
+        False,
+        description="Сдана ли текущая рабочая неделя (сб–пт), пересекающаяся с периодом",
+    )
 
 
 class TeamWorkloadOut(BaseModel):

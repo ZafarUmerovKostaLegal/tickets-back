@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, case, cast, delete, func, select
+from sqlalchemy import Numeric, and_, case, cast, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.types import DateTime
 
@@ -17,18 +17,24 @@ class TimeEntryRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    def _aggregate_triplet(self):
+    @staticmethod
+    def _hours_from_duration_sql():
+        """Канонические часы из duration_seconds (как в таймшите и renormalize)."""
+        sec = cast(TimeEntryModel.duration_seconds, Numeric)
+        return func.round(sec / 3600, 6)
 
+    def _aggregate_triplet(self):
+        hrs = self._hours_from_duration_sql()
         return (
             func.coalesce(
-                func.sum(case((TimeEntryModel.is_billable.is_(True), TimeEntryModel.hours), else_=0)),
+                func.sum(case((TimeEntryModel.is_billable.is_(True), hrs), else_=0)),
                 0,
             ).label("billable"),
             func.coalesce(
-                func.sum(case((TimeEntryModel.is_billable.is_(False), TimeEntryModel.hours), else_=0)),
+                func.sum(case((TimeEntryModel.is_billable.is_(False), hrs), else_=0)),
                 0,
             ).label("non_bill"),
-            func.coalesce(func.sum(TimeEntryModel.hours), 0).label("total"),
+            func.coalesce(func.sum(hrs), 0).label("total"),
         )
 
     def _project_entry_conditions(
@@ -73,6 +79,26 @@ class TimeEntryRepository:
                 _to_decimal(row.non_bill),
             )
         return out
+
+    async def count_active_by_user(
+        self,
+        date_from: date,
+        date_to: date,
+    ) -> dict[int, int]:
+        q = (
+            select(
+                TimeEntryModel.auth_user_id,
+                func.count(TimeEntryModel.id).label("cnt"),
+            )
+            .where(
+                TimeEntryModel.work_date >= date_from,
+                TimeEntryModel.work_date <= date_to,
+                TimeEntryModel.voided_at.is_(None),
+            )
+            .group_by(TimeEntryModel.auth_user_id)
+        )
+        r = await self._session.execute(q)
+        return {int(row.auth_user_id): int(row.cnt) for row in r.all()}
 
     async def aggregate_totals_for_project(
         self,

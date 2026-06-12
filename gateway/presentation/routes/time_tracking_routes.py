@@ -1,6 +1,7 @@
 
 
 import json
+from datetime import date
 from decimal import Decimal
 from typing import Literal, Optional
 
@@ -570,6 +571,29 @@ async def proxy_delete_time_entry(
     if out is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     return out
+
+
+class WeeklySubmissionSubmitBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    work_date: Optional[date] = Field(None, alias="workDate")
+
+
+@router.post("/users/{auth_user_id}/weekly-submissions")
+async def proxy_submit_weekly_time(
+    auth_user_id: int,
+    body: WeeklySubmissionSubmitBody | None = Body(None),
+    _: dict = Depends(require_time_entry_write),
+):
+    payload = None
+    if body is not None and body.work_date is not None:
+        payload = {"workDate": body.work_date.isoformat()}
+    return await _tt_json(
+        "POST",
+        f"/users/{auth_user_id}/weekly-submissions",
+        json=payload,
+        timeout=15.0,
+    )
 
 
 @router.post("/users/{auth_user_id}/time-entry-edit-unlock")
