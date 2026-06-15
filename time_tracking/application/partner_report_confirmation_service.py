@@ -6,8 +6,11 @@ from datetime import date
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.access_control import _MANAGE_ROLES_TIME_ENTRIES, _VIEW_ROLES_TIME_ENTRIES
 from application.project_partner_users import list_partner_auth_user_ids_for_project
+from application.report_viewer_scope import (
+    list_partner_project_ids_for_viewer,
+    viewer_can_see_all_partner_confirmations,
+)
 from infrastructure.repository_access import UserProjectAccessRepository
 from infrastructure.repository_clients import ClientProjectRepository
 from infrastructure.repository_partner_report_confirmations import (
@@ -29,7 +32,7 @@ def _viewer_id(viewer: dict) -> int:
 
 
 def _viewer_can_see_all_confirmations(viewer: dict) -> bool:
-    return _org_role(viewer) in (_MANAGE_ROLES_TIME_ENTRIES | _VIEW_ROLES_TIME_ENTRIES)
+    return viewer_can_see_all_partner_confirmations(viewer)
 
 
 async def build_report_confirmation_title(
@@ -269,22 +272,31 @@ async def list_confirmed_partner_confirmations(
     viewer: dict,
     *,
     authorization: str | None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    before: date | None = None,
 ) -> list[dict]:
     vid = _viewer_id(viewer)
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
     if _viewer_can_see_all_confirmations(viewer):
-        rows = await conf_repo.list_all_fully_confirmed()
+        rows = await conf_repo.list_all_fully_confirmed(
+            date_from=date_from,
+            date_to=date_to,
+            before=before,
+        )
     else:
-        partner_projects: set[str] = set()
-        for pid in await access_repo.list_project_ids(vid):
-            pals = await list_partner_auth_user_ids_for_project(
-                session, access_repo, pid, authorization=authorization
+        partner_projects = set(
+            await list_partner_project_ids_for_viewer(
+                session, viewer, authorization=authorization
             )
-            if vid in pals:
-                partner_projects.add(pid)
+        )
         rows = await conf_repo.list_confirmed_visible_for(
-            vid, partner_project_ids=partner_projects
+            vid,
+            partner_project_ids=partner_projects,
+            date_from=date_from,
+            date_to=date_to,
+            before=before,
         )
     out: list[dict] = []
     for m in rows:

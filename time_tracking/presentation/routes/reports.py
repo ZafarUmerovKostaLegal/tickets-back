@@ -7,10 +7,15 @@ import traceback
 from datetime import date
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _log = logging.getLogger(__name__)
+
+from application.report_viewer_scope import (
+    apply_partner_confirmed_only_filter,
+    resolve_report_project_ids,
+)
 
 from application.services.reports.time_report_service import (
     get_time_report,
@@ -32,6 +37,7 @@ from application.services.reports.budget_report_service import (
 from application.services.reports.export_service import export_report
 from infrastructure.database import get_session
 from infrastructure.repository_users import TimeTrackingUserRepository
+from presentation.deps import require_bearer_user
 from presentation.schemas_reports import (
     ExportFormat,
     ExpenseGroupBy,
@@ -126,6 +132,32 @@ def _parse_bool(raw: str | None) -> bool | None:
     return raw.lower() in ("1", "true", "yes")
 
 
+async def _scoped_project_ids(
+    session: AsyncSession,
+    viewer: dict,
+    authorization: str | None,
+    date_from: date,
+    date_to: date,
+    project_id: Optional[str],
+    partner_confirmed_only: Optional[str],
+) -> list[str] | None:
+    pids = await resolve_report_project_ids(
+        session,
+        viewer,
+        authorization=authorization,
+        requested_project_ids=_parse_ids_str(project_id),
+    )
+    if _parse_bool(partner_confirmed_only):
+        pids = await apply_partner_confirmed_only_filter(
+            session,
+            date_from,
+            date_to,
+            pids,
+            enabled=True,
+        )
+    return pids
+
+
 @router.get("/meta", response_model=ReportMetaOut)
 async def get_reports_meta():
     return ReportMetaOut(
@@ -163,19 +195,31 @@ async def get_time_report_endpoint(
     task_id: Optional[str] = Query(None, description="Comma-separated task IDs"),
     is_billable: Optional[str] = Query(None, description="true/false"),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     page: int = Query(1, ge=1),
     per_page: int = Query(2000, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         return await get_time_report(
             session,
             group_by=group_by.value,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             task_ids=_parse_ids_str(task_id),
             is_billable=_parse_bool(is_billable),
@@ -203,15 +247,27 @@ async def export_time_report_endpoint(
     task_id: Optional[str] = Query(None),
     is_billable: Optional[str] = Query(None),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     format: ExportFormat = Query(ExportFormat.csv),
     export: str = Query(
         "detail",
         description="detail: построчно (как раньше); summary: одна строка на группу, как в превью отчёта",
     ),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         ex = (export or "detail").strip().lower()
         if ex not in ("detail", "summary"):
             raise HTTPException(
@@ -225,7 +281,7 @@ async def export_time_report_endpoint(
                 date_from=df,
                 date_to=dt,
                 client_ids=_parse_ids_str(client_id),
-                project_ids=_parse_ids_str(project_id),
+                project_ids=scoped_pids,
                 user_ids=_parse_ids_int(user_id),
                 task_ids=_parse_ids_str(task_id),
                 is_billable=_parse_bool(is_billable),
@@ -238,7 +294,7 @@ async def export_time_report_endpoint(
                 date_from=df,
                 date_to=dt,
                 client_ids=_parse_ids_str(client_id),
-                project_ids=_parse_ids_str(project_id),
+                project_ids=scoped_pids,
                 user_ids=_parse_ids_int(user_id),
                 task_ids=_parse_ids_str(task_id),
                 is_billable=_parse_bool(is_billable),
@@ -263,19 +319,31 @@ async def get_expense_report_endpoint(
     client_id: Optional[str] = Query(None),
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         return await get_expense_report(
             session,
             group_by=group_by.value,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             page=page,
             per_page=per_page,
@@ -297,18 +365,30 @@ async def export_expense_report_endpoint(
     client_id: Optional[str] = Query(None),
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     format: ExportFormat = Query(ExportFormat.csv),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         rows = await get_expense_report_all_rows(
             session,
             group_by=group_by.value,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
         )
         return export_report(rows, format.value, "expenses", group_by.value, df, dt)
@@ -330,18 +410,30 @@ async def get_uninvoiced_report_endpoint(
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         return await get_uninvoiced_report(
             session,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             include_fixed_fee=include_fixed_fee,
             page=page,
@@ -364,17 +456,29 @@ async def export_uninvoiced_report_endpoint(
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     format: ExportFormat = Query(ExportFormat.csv),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         rows = await get_uninvoiced_report_all_rows(
             session,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             include_fixed_fee=include_fixed_fee,
         )
@@ -397,18 +501,30 @@ async def get_budget_report_endpoint(
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         return await get_budget_report(
             session,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             include_fixed_fee=include_fixed_fee,
             page=page,
@@ -431,17 +547,29 @@ async def export_budget_report_endpoint(
     project_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
+    partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     format: ExportFormat = Query(ExportFormat.csv),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     df, dt = period
     try:
+        scoped_pids = await _scoped_project_ids(
+            session,
+            viewer,
+            authorization,
+            df,
+            dt,
+            project_id,
+            partner_confirmed_only,
+        )
         rows = await get_budget_report_all_rows(
             session,
             date_from=df,
             date_to=dt,
             client_ids=_parse_ids_str(client_id),
-            project_ids=_parse_ids_str(project_id),
+            project_ids=scoped_pids,
             user_ids=_parse_ids_int(user_id),
             include_fixed_fee=include_fixed_fee,
         )

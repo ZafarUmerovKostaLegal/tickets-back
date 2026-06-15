@@ -120,7 +120,38 @@ async def partner_report_confirmation_confirmed(
     session: AsyncSession = Depends(get_session),
     viewer: dict = Depends(require_bearer_user),
     authorization: str | None = Header(None, alias="Authorization"),
+    date_from: Optional[str] = Query(None, alias="dateFrom"),
+    date_to: Optional[str] = Query(None, alias="dateTo"),
+    before: Optional[str] = Query(
+        None,
+        description="Архив: подтверждения с dateTo строго раньше этой даты (YYYY-MM-DD)",
+    ),
 ):
+    df: date | None = None
+    dt: date | None = None
+    bf: date | None = None
+    if date_from:
+        try:
+            df = date.fromisoformat(str(date_from).strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid dateFrom")
+    if date_to:
+        try:
+            dt = date.fromisoformat(str(date_to).strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid dateTo")
+    if before:
+        try:
+            bf = date.fromisoformat(str(before).strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid before")
+    if df and dt and dt < df:
+        raise HTTPException(status_code=400, detail="dateTo не может быть раньше dateFrom")
     return await list_confirmed_partner_confirmations(
-        session, viewer, authorization=authorization
+        session,
+        viewer,
+        authorization=authorization,
+        date_from=df,
+        date_to=dt,
+        before=bf,
     )

@@ -224,8 +224,32 @@ class PartnerReportConfirmationRepository:
         n = int((await self._s.execute(q)).scalar_one() or 0)
         return n > 0
 
+    def _confirmed_period_filters(
+        self,
+        q,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        before: date | None = None,
+    ):
+        if before is not None:
+            return q.where(ReportPartnerConfirmationRequestModel.date_to < before)
+        if date_from is not None and date_to is not None:
+            return q.where(
+                and_(
+                    ReportPartnerConfirmationRequestModel.date_from <= date_to,
+                    ReportPartnerConfirmationRequestModel.date_to >= date_from,
+                )
+            )
+        return q
+
     async def list_all_fully_confirmed(
         self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        before: date | None = None,
+        limit_to_project_ids: set[str] | None = None,
     ) -> list[ReportPartnerConfirmationRequestModel]:
         q = (
             select(ReportPartnerConfirmationRequestModel)
@@ -233,6 +257,15 @@ class PartnerReportConfirmationRepository:
             .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
             .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
         )
+        q = self._confirmed_period_filters(
+            q, date_from=date_from, date_to=date_to, before=before
+        )
+        if limit_to_project_ids is not None:
+            if not limit_to_project_ids:
+                return []
+            q = q.where(
+                ReportPartnerConfirmationRequestModel.project_id.in_(limit_to_project_ids)
+            )
         return list((await self._s.execute(q)).scalars().all())
 
     async def list_pending_for_partner(
@@ -258,12 +291,18 @@ class PartnerReportConfirmationRepository:
         viewer_id: int,
         *,
         partner_project_ids: set[str],
+        date_from: date | None = None,
+        date_to: date | None = None,
+        before: date | None = None,
     ) -> list[ReportPartnerConfirmationRequestModel]:
         q = (
             select(ReportPartnerConfirmationRequestModel)
             .where(ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED)
             .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
             .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
+        )
+        q = self._confirmed_period_filters(
+            q, date_from=date_from, date_to=date_to, before=before
         )
         rows = list((await self._s.execute(q)).scalars().all())
         vid = int(viewer_id)

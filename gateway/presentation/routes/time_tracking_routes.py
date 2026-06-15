@@ -1223,9 +1223,15 @@ async def reports_partner_confirmation_pending(
 
 @router.get("/reports/partner-confirmations/confirmed")
 async def reports_partner_confirmation_confirmed(
+    request: Request,
     _: dict = Depends(require_reports_view_role),
 ):
-    return await _tt_json("GET", "/reports/partner-confirmations/confirmed", timeout=30.0)
+    return await _tt_json(
+        "GET",
+        "/reports/partner-confirmations/confirmed",
+        params=dict(request.query_params),
+        timeout=30.0,
+    )
 
 
 @router.get("/reports/time/{group_by}")
