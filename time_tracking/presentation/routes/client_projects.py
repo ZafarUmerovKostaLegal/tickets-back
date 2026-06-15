@@ -24,6 +24,7 @@ from application.project_billable_rate_sync import (
     upsert_user_project_scoped_billable_rate,
 )
 from application.project_dashboard import build_client_project_dashboard
+from application.project_partner_index import build_project_partner_participant_index
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.report_builder import _load_user_rates
 from application.services.reports._base import _ZERO, _d, _hours, _money
@@ -122,6 +123,7 @@ async def list_all_client_projects(
     limit: int | None = Query(None, ge=1, le=500, description="Если задано — пагинированный ответ"),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     """Все проекты (полные карточки) одним запросом — для списка проектов на фронте."""
     repo = ClientProjectRepository(session)
@@ -136,6 +138,7 @@ async def list_all_client_projects(
         repo,
         rows,
         include_budget_metrics=include_budget_metrics,
+        authorization=authorization,
     )
     if limit is None:
         return out
@@ -368,6 +371,7 @@ async def _client_projects_to_out(
     rows: list,
     *,
     include_budget_metrics: bool = True,
+    authorization: str | None = None,
 ) -> list[TimeManagerClientProjectOut]:
     pids = [r.id for r in rows]
     usage_map = await repo.time_entries_counts_by_project_ids(pids)
@@ -376,10 +380,18 @@ async def _client_projects_to_out(
         if include_budget_metrics
         else {}
     )
+    partners_by_project, participants_by_project = await build_project_partner_participant_index(
+        session,
+        pids,
+        authorization=authorization,
+    )
     out: list[TimeManagerClientProjectOut] = []
     for r in rows:
         row_out = _project_out(r, usage_map.get(r.id, 0))
-        bm = budget_map.get(str(r.id), {})
+        pid = str(r.id)
+        row_out.partner_auth_user_ids = partners_by_project.get(pid, [])
+        row_out.participant_auth_user_ids = participants_by_project.get(pid, [])
+        bm = budget_map.get(pid, {})
         row_out.budget_display_value = bm.get("budget_display_value")
         row_out.budget_spent_value = bm.get("budget_spent_value")
         row_out.budget_remaining_value = bm.get("budget_remaining_value")
@@ -516,6 +528,7 @@ async def list_client_projects(
     limit: int | None = Query(None, ge=1, le=500, description="Если задано — пагинированный ответ"),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     await _require_client(session, client_id)
     repo = ClientProjectRepository(session)
@@ -525,7 +538,9 @@ async def list_client_projects(
         rows, total = await repo.list_for_client_paginated(
             client_id, include_archived=include_archived, limit=limit, offset=offset
         )
-    out = await _client_projects_to_out(session, repo, rows)
+    out = await _client_projects_to_out(
+        session, repo, rows, authorization=authorization,
+    )
     if limit is None:
         return out
     return {"items": out, "total": total, "limit": limit, "offset": offset}

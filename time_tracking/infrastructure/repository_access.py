@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +67,21 @@ class UserProjectAccessRepository:
             )
         )
         return [int(x) for x in r.scalars().all()]
+
+    async def list_access_by_project_ids(self, project_ids: list[str]) -> dict[str, list[int]]:
+        pids = [str(p).strip() for p in project_ids if str(p).strip()]
+        if not pids:
+            return {}
+        r = await self._session.execute(
+            select(
+                TimeTrackingUserProjectAccessModel.project_id,
+                TimeTrackingUserProjectAccessModel.auth_user_id,
+            ).where(TimeTrackingUserProjectAccessModel.project_id.in_(pids))
+        )
+        out: dict[str, list[int]] = defaultdict(list)
+        for project_id, auth_user_id in r.all():
+            out[str(project_id)].append(int(auth_user_id))
+        return dict(out)
 
     async def list_peer_auth_user_ids_for_manager(self, manager_auth_user_id: int) -> list[int]:
 

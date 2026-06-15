@@ -619,6 +619,16 @@ class TimeManagerClientProjectOut(BaseModel):
     budget_progress_percent: Optional[float] = Field(None, alias="budgetProgressPercent")
     logged_hours_value: Optional[float] = Field(None, alias="loggedHoursValue")
     has_budget_configured: Optional[bool] = Field(None, alias="hasBudgetConfigured")
+    partner_auth_user_ids: list[int] = Field(
+        default_factory=list,
+        alias="partnerAuthUserIds",
+        description="Партнёры с доступом к проекту (должность/роль org).",
+    )
+    participant_auth_user_ids: list[int] = Field(
+        default_factory=list,
+        alias="participantAuthUserIds",
+        description="Все сотрудники с доступом к списанию времени на проекте.",
+    )
 
 
 class InitialProjectAccessMember(BaseModel):
