@@ -139,6 +139,53 @@ async def health_correspondence():
     )
 
 
+@router.get("/time-tracking", summary="Проверка доступности time_tracking с gateway")
+async def health_time_tracking():
+    base = (get_settings().time_tracking_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "TIME_TRACKING_SERVICE_URL not configured",
+                "hint": "Задайте TIME_TRACKING_SERVICE_URL, например http://time_tracking:1241",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Time tracking unreachable from gateway",
+                "time_tracking_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+                "hint": (
+                    "Проверьте: docker compose ps time_tracking; "
+                    "docker compose logs time_tracking --tail 80"
+                ),
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Time tracking /health not OK",
+                "time_tracking_service_url": base,
+                "upstream_status": r.status_code,
+                "upstream_body": r.text[:500],
+            },
+        )
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "time_tracking": "reachable",
+            "time_tracking_service_url": base,
+        }
+    )
+
+
 @router.get("/todos", summary="Проверка доступности микросервиса todos с gateway")
 async def health_todos():
 
