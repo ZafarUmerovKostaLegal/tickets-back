@@ -579,6 +579,26 @@ class WeeklySubmissionSubmitBody(BaseModel):
     work_date: Optional[date] = Field(None, alias="workDate")
 
 
+@router.get("/users/{auth_user_id}/weekly-submissions")
+async def proxy_list_weekly_submissions(
+    auth_user_id: int,
+    date_from: Optional[date] = Query(None, alias="from"),
+    date_to: Optional[date] = Query(None, alias="to"),
+    _: dict = Depends(require_time_entry_read),
+):
+    params: dict[str, str] = {}
+    if date_from is not None:
+        params["from"] = date_from.isoformat()
+    if date_to is not None:
+        params["to"] = date_to.isoformat()
+    return await _tt_json(
+        "GET",
+        f"/users/{auth_user_id}/weekly-submissions",
+        params=params or None,
+        timeout=15.0,
+    )
+
+
 @router.post("/users/{auth_user_id}/weekly-submissions")
 async def proxy_submit_weekly_time(
     auth_user_id: int,

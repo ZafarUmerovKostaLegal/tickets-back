@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from application.weekly_submission_service import (
 from application.weekly_period import local_today
 from infrastructure.database import get_session
 from infrastructure.repositories import TimeTrackingUserRepository
+from infrastructure.repository_weekly_submissions import WeeklySubmissionRepository
 from infrastructure.report_cache import invalidate_all_reports
 from presentation.deps import require_bearer_user
 
@@ -47,6 +48,36 @@ async def _ensure_user(session: AsyncSession, auth_user_id: int) -> None:
     ur = TimeTrackingUserRepository(session)
     if not await ur.get_by_auth_user_id(auth_user_id):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+
+@router.get(
+    "/{auth_user_id}/weekly-submissions",
+    response_model=list[WeeklySubmissionOut],
+    summary="Сданные рабочие недели (суббота–пятница) для блокировки правок на фронте",
+)
+async def list_weekly_submissions(
+    auth_user_id: int,
+    date_from: date | None = Query(None, alias="from"),
+    date_to: date | None = Query(None, alias="to"),
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> list[WeeklySubmissionOut]:
+    await ensure_time_entry_subject_allowed(session, viewer, auth_user_id, write=False)
+    await _ensure_user(session, auth_user_id)
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=400, detail="Параметр to не может быть раньше from")
+    repo = WeeklySubmissionRepository(session)
+    rows = await repo.list_for_user_in_range(auth_user_id, date_from, date_to)
+    return [
+        WeeklySubmissionOut(
+            auth_user_id=auth_user_id,
+            week_start=r.week_start,
+            week_end=r.week_end,
+            status=r.status,
+            created=False,
+        )
+        for r in rows
+    ]
 
 
 @router.post(

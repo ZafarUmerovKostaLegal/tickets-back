@@ -30,6 +30,26 @@ class WeeklySubmissionRepository:
         r = await self._session.execute(q)
         return r.first() is not None
 
+    async def list_for_user_in_range(
+        self,
+        auth_user_id: int,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[WeeklyTimeSubmissionModel]:
+        q = select(WeeklyTimeSubmissionModel).where(
+            and_(
+                WeeklyTimeSubmissionModel.auth_user_id == auth_user_id,
+                WeeklyTimeSubmissionModel.status == _STATUS_LOCKED,
+            )
+        )
+        if date_from is not None:
+            q = q.where(WeeklyTimeSubmissionModel.week_end >= date_from)
+        if date_to is not None:
+            q = q.where(WeeklyTimeSubmissionModel.week_start <= date_to)
+        q = q.order_by(WeeklyTimeSubmissionModel.week_start.desc())
+        r = await self._session.execute(q)
+        return list(r.scalars().all())
+
     async def upsert_submission(
         self,
         *,
