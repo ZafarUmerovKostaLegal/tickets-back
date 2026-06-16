@@ -338,11 +338,14 @@ async def logout_invalidate_session(
     token = access_token_from_request(request, authorization)
     if not token:
         raise HTTPException(status_code=401, detail="Authorization required")
+    payload = token_service.decode_token(token)
     uc = GetCurrentUserUseCase(user_repo, token_service)
     user = await uc.execute(token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    await InvalidateSessionUseCase(user_repo).execute(user.id)
+    token_jti = payload.get("jti") if payload else None
+    logout_jti = token_jti.strip() if isinstance(token_jti, str) and token_jti.strip() else None
+    await InvalidateSessionUseCase(user_repo).execute(user.id, logout_jti)
     await session.commit()
     resp = Response(status_code=204)
     _clear_session_cookie(resp)

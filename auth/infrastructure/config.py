@@ -58,6 +58,13 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("ADMIN_BOOTSTRAP_SECRET", "admin_bootstrap_secret"),
     )
+    auth_max_concurrent_sessions: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices("AUTH_MAX_CONCURRENT_SESSIONS"),
+        description="Максимум одновременных активных входов (устройств) на одного пользователя.",
+    )
     service_name: str = "auth"
 
 

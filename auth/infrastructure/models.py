@@ -34,6 +34,17 @@ class RolePermissionModel(Base):
     __table_args__ = (UniqueConstraint("role_id", "permission_key", name="uq_role_permissions_role_key"),)
 
 
+class UserAuthSessionModel(Base):
+    __tablename__ = "user_auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class UserModel(Base):
     __tablename__ = "users"
 

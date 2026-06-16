@@ -7,6 +7,8 @@ import bcrypt
 from domain.entities import User
 from domain.roles import Role
 from application.ports import UserRepositoryPort, TokenServicePort, RoleRepositoryPort
+from application.session_policy import session_jti_is_valid
+from infrastructure.config import get_settings
 
 
 class AzureLoginUseCase:
@@ -38,7 +40,11 @@ class AzureLoginUseCase:
                 if updated is not None:
                     user = updated
         jti = str(uuid.uuid4())
-        await self._user_repo.set_active_session_jti(user.id, jti)
+        await self._user_repo.register_session_jti(
+            user.id,
+            jti,
+            max_sessions=get_settings().auth_max_concurrent_sessions,
+        )
         token = self._token_service.create_access_token(user.id, user.azure_oid, jti)
         return user, token
 
@@ -88,7 +94,11 @@ class AdminLoginUseCase:
                 role=Role.MAIN_ADMIN.value,
             )
         jti = str(uuid.uuid4())
-        await self._user_repo.set_active_session_jti(user.id, jti)
+        await self._user_repo.register_session_jti(
+            user.id,
+            jti,
+            max_sessions=get_settings().auth_max_concurrent_sessions,
+        )
         return self._token_service.create_access_token(user.id, user.azure_oid, jti)
 
 
@@ -145,19 +155,27 @@ class GetCurrentUserUseCase:
         user = await self._user_repo.get_by_id(int(user_id))
         if not user:
             return None
-        return self._session_matches(payload, user)
-
-    def _session_matches(self, payload: dict, user: User) -> Optional[User]:
-        token_jti = payload.get("jti")
-        stored = user.active_session_jti
-        if stored:
-            if not token_jti or token_jti != stored:
-                return None
-        else:
-
-            if token_jti:
-                return None
+        active_jtis = await self._user_repo.list_active_session_jtis(user.id)
+        if not self._session_matches(payload, user, active_jtis):
+            return None
         return user
+
+    def _session_matches(
+        self,
+        payload: dict,
+        user: User,
+        active_jtis: list[str],
+    ) -> bool:
+        token_jti = payload.get("jti")
+        if isinstance(token_jti, str):
+            token_jti = token_jti.strip() or None
+        else:
+            token_jti = None
+        return session_jti_is_valid(
+            token_jti,
+            active_jtis,
+            legacy_jti=user.active_session_jti,
+        )
 
 
 class InvalidateSessionUseCase:
@@ -166,8 +184,11 @@ class InvalidateSessionUseCase:
     def __init__(self, user_repo: UserRepositoryPort):
         self._user_repo = user_repo
 
-    async def execute(self, user_id: int) -> None:
-        await self._user_repo.set_active_session_jti(user_id, secrets.token_urlsafe(48))
+    async def execute(self, user_id: int, jti: Optional[str] = None) -> None:
+        if jti:
+            await self._user_repo.remove_session_jti(user_id, jti)
+        else:
+            await self._user_repo.clear_all_session_jtis(user_id)
 
 
 class UpdateProfileUseCase:

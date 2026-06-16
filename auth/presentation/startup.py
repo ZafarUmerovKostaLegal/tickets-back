@@ -20,6 +20,17 @@ _USER_COLUMN_PATCHES: Sequence[str] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_jti VARCHAR(64)",
 )
 
+_LEGACY_SESSION_MIGRATION = """
+INSERT INTO user_auth_sessions (user_id, jti, created_at)
+SELECT u.id, u.active_session_jti, NOW()
+FROM users u
+WHERE u.active_session_jti IS NOT NULL
+  AND TRIM(u.active_session_jti) <> ''
+  AND NOT EXISTS (
+      SELECT 1 FROM user_auth_sessions s WHERE s.jti = u.active_session_jti
+  )
+"""
+
 
 def seed_default_roles(sync_conn) -> None:
 
@@ -86,3 +97,7 @@ async def ensure_auth_schema(conn) -> None:
 
     for statement in _USER_COLUMN_PATCHES:
         await conn.execute(text(statement))
+    try:
+        await conn.execute(text(_LEGACY_SESSION_MIGRATION))
+    except Exception:
+        pass

@@ -3,7 +3,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities import User
 from application.ports import UserRepositoryPort, RoleRepositoryPort
-from infrastructure.models import UserModel, RoleModel, RolePermissionModel, LocalAdminCredentialModel
+from infrastructure.models import UserModel, RoleModel, RolePermissionModel, LocalAdminCredentialModel, UserAuthSessionModel
 
 
 class RoleRepository(RoleRepositoryPort):
@@ -210,6 +210,59 @@ class UserRepository(UserRepositoryPort):
         )
         await self._session.flush()
         return await self.get_by_id(user_id)
+
+    async def list_active_session_jtis(self, user_id: int) -> list[str]:
+        result = await self._session.execute(
+            select(UserAuthSessionModel.jti)
+            .where(UserAuthSessionModel.user_id == user_id)
+            .order_by(UserAuthSessionModel.created_at.asc())
+        )
+        return [row[0] for row in result.all()]
+
+    async def register_session_jti(self, user_id: int, jti: str, *, max_sessions: int) -> None:
+        jti = (jti or "").strip()
+        if not jti:
+            return
+        limit = max(1, int(max_sessions))
+        await self._session.execute(
+            delete(UserAuthSessionModel).where(UserAuthSessionModel.jti == jti)
+        )
+        self._session.add(UserAuthSessionModel(user_id=user_id, jti=jti))
+        await self._session.flush()
+        result = await self._session.execute(
+            select(UserAuthSessionModel)
+            .where(UserAuthSessionModel.user_id == user_id)
+            .order_by(UserAuthSessionModel.created_at.asc())
+        )
+        rows = list(result.scalars().all())
+        while len(rows) > limit:
+            oldest = rows.pop(0)
+            await self._session.delete(oldest)
+        await self._session.flush()
+        await self._session.execute(
+            update(UserModel).where(UserModel.id == user_id).values(active_session_jti=None)
+        )
+
+    async def remove_session_jti(self, user_id: int, jti: str) -> None:
+        jti = (jti or "").strip()
+        if not jti:
+            return
+        await self._session.execute(
+            delete(UserAuthSessionModel).where(
+                UserAuthSessionModel.user_id == user_id,
+                UserAuthSessionModel.jti == jti,
+            )
+        )
+        await self._session.flush()
+
+    async def clear_all_session_jtis(self, user_id: int) -> None:
+        await self._session.execute(
+            delete(UserAuthSessionModel).where(UserAuthSessionModel.user_id == user_id)
+        )
+        await self._session.execute(
+            update(UserModel).where(UserModel.id == user_id).values(active_session_jti=None)
+        )
+        await self._session.flush()
 
     async def get_local_admin_credentials(self) -> Optional[tuple[str, str]]:
 

@@ -111,7 +111,22 @@ class UserRepositoryPort(ABC):
 
     @abstractmethod
     async def set_active_session_jti(self, user_id: int, jti: Optional[str]) -> Optional[User]:
+        pass
 
+    @abstractmethod
+    async def list_active_session_jtis(self, user_id: int) -> list[str]:
+        pass
+
+    @abstractmethod
+    async def register_session_jti(self, user_id: int, jti: str, *, max_sessions: int) -> None:
+        pass
+
+    @abstractmethod
+    async def remove_session_jti(self, user_id: int, jti: str) -> None:
+        pass
+
+    @abstractmethod
+    async def clear_all_session_jtis(self, user_id: int) -> None:
         pass
 
     @abstractmethod
