@@ -44,6 +44,7 @@ from infrastructure.repositories import (
     UserProjectAccessRepository,
 )
 from presentation.deps import require_bearer_user
+from application.project_time_entry import is_project_closed_for_time_entries
 from presentation.routes.client_access import ensure_client_not_archived, get_client_or_404
 from presentation.schemas import (
     ProjectType,
@@ -87,6 +88,7 @@ async def list_all_projects_for_expenses(
     from infrastructure.repositories import ClientRepository
 
     cr = ClientRepository(session)
+    today = date.today()
     if limit is None:
         clients = {c.id: c for c in await cr.list_all(include_archived=True)}
         rows = await repo.list_all_global(include_archived=include_archived)
@@ -96,17 +98,27 @@ async def list_all_projects_for_expenses(
         )
         cids = {r.client_id for r in rows}
         clients = await cr.get_by_ids(cids)
-    items = [
-        {
-            "id": r.id,
-            "name": r.name,
-            "code": r.code,
-            "clientId": r.client_id,
-            "clientName": clients[r.client_id].name if r.client_id in clients else None,
-            "isArchived": r.is_archived,
-        }
-        for r in rows
-    ]
+    items = []
+    for r in rows:
+        if not include_archived and is_project_closed_for_time_entries(
+            is_archived=bool(r.is_archived),
+            end_date=r.end_date,
+            as_of=today,
+        ):
+            continue
+        items.append(
+            {
+                "id": r.id,
+                "name": r.name,
+                "code": r.code,
+                "clientId": r.client_id,
+                "clientName": clients[r.client_id].name if r.client_id in clients else None,
+                "isArchived": r.is_archived,
+                "endDate": r.end_date.isoformat() if r.end_date else None,
+                "currency": getattr(r, "currency", None) or "USD",
+                "projectType": r.project_type,
+            }
+        )
     if limit is None:
         return items
     return {"items": items, "total": total, "limit": limit, "offset": offset}

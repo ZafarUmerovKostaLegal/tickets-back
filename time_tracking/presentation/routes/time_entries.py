@@ -10,6 +10,7 @@ from application.access_control import (
     ensure_time_entry_subject_allowed,
     viewer_can_bypass_work_week_submission_lock,
 )
+from application.project_time_entry import is_project_closed_for_time_entries
 from application.time_entry_task import resolve_time_entry_task_for_project
 from application.weekly_submission_service import is_work_date_locked_for_user
 from infrastructure.database import get_session
@@ -48,6 +49,8 @@ def _normalize_project_id(project_id: str | None) -> str | None:
 async def _validate_project_if_set(
     session: AsyncSession,
     project_id: str | None,
+    *,
+    work_date: date | None = None,
 ) -> str | None:
 
     pid = _normalize_project_id(project_id)
@@ -57,7 +60,12 @@ async def _validate_project_if_set(
     proj = await cpr.get_by_id_global(pid)
     if not proj:
         raise HTTPException(status_code=400, detail="Проект не найден")
-    if proj.is_archived:
+    as_of = work_date or date.today()
+    if is_project_closed_for_time_entries(
+        is_archived=bool(proj.is_archived),
+        end_date=proj.end_date,
+        as_of=as_of,
+    ):
         raise HTTPException(status_code=400, detail="Проект в архиве, списание времени недоступно")
     return pid
 
@@ -145,7 +153,7 @@ async def create_time_entry(
         body.work_date,
         detail="Период уже сдан. Редактирование даты запрещено (обратитесь к менеджеру).",
     )
-    project_id = await _validate_project_if_set(session, body.project_id)
+    project_id = await _validate_project_if_set(session, body.project_id, work_date=body.work_date)
     await _require_project_access_if_set(session, auth_user_id, project_id)
     tid, bb = await resolve_time_entry_task_for_project(session, project_id, body.task_id)
     is_billable = body.is_billable if tid is None else bool(bb)
@@ -214,7 +222,11 @@ async def patch_time_entry(
     )
     project_changed_clears_task = False
     if "project_id" in patch:
-        project_id = await _validate_project_if_set(session, patch.get("project_id"))
+        project_id = await _validate_project_if_set(
+            session,
+            patch.get("project_id"),
+            work_date=patch.get("work_date") or row.work_date,
+        )
         patch["project_id"] = project_id
         await _require_project_access_if_set(session, auth_user_id, project_id)
         new_norm = _normalize_project_id(
@@ -222,6 +234,13 @@ async def patch_time_entry(
         )
         if new_norm != row_norm_project_id and "task_id" not in patch:
             project_changed_clears_task = True
+    else:
+        eff_work = patch.get("work_date") or row.work_date
+        await _validate_project_if_set(
+            session,
+            row_norm_project_id,
+            work_date=eff_work,
+        )
 
     eff_proj = patch["project_id"] if "project_id" in patch else row.project_id
     if project_changed_clears_task:
