@@ -13,6 +13,8 @@ from enum import Enum
 class TimeGroupBy(str, Enum):
     clients = "clients"
     projects = "projects"
+    tasks = "tasks"
+    team = "team"
 
 
 class ExpenseGroupBy(str, Enum):

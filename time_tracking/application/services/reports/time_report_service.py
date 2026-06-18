@@ -38,7 +38,7 @@ from application.services.reports._base import (
     build_response,
 )
 
-TIME_GROUP_OPTIONS = frozenset({"clients", "projects"})
+TIME_GROUP_OPTIONS = frozenset({"clients", "projects", "tasks", "team"})
 
 
 MAX_ENTRY_LOG_ROWS = 100_000
@@ -442,6 +442,40 @@ async def get_time_report(
         gid = _get_group_id(e, group_by, projects_map)
         p = projects_map.get(e.project_id) if e.project_id else None
         project_currency = (getattr(p, "currency", None) or "USD") if p else "USD"
+        h = _d(e.hours)
+
+        if group_by == "team":
+            bkt = buckets.setdefault(
+                gid,
+                {
+                    "total": _ZERO,
+                    "billable": _ZERO,
+                    "amount": _ZERO,
+                    "currency": project_currency,
+                    "last_recorded_at": None,
+                    "raw_entry_count": 0,
+                    "user_id": e.auth_user_id,
+                },
+            )
+            if bkt["last_recorded_at"] is None or e.created_at > bkt["last_recorded_at"]:
+                bkt["last_recorded_at"] = e.created_at
+            bkt["total"] += h
+            bkt["raw_entry_count"] = int(bkt.get("raw_entry_count", 0)) + 1
+            if e.is_billable:
+                bkt["billable"] += h
+                br = rates_map.get(e.auth_user_id)
+                amt, effective_cur = _billable_amount_for_entry(
+                    h,
+                    True,
+                    e.work_date,
+                    br,
+                    project_currency=project_currency,
+                    time_entry_project_id=e.project_id,
+                )
+                bkt["amount"] += amt
+                bkt["currency"] = effective_cur or project_currency
+            continue
+
         eline: dict[str, Any] | None = None
         if group_by != "clients":
             sline = _time_entry_line_snake(e, **line_ctx)
@@ -461,7 +495,6 @@ async def get_time_report(
         )
         if bkt["last_recorded_at"] is None or e.created_at > bkt["last_recorded_at"]:
             bkt["last_recorded_at"] = e.created_at
-        h = _d(e.hours)
         bkt["total"] += h
         bkt["raw_entry_count"] = int(bkt.get("raw_entry_count", 0)) + 1
         uid = e.auth_user_id
@@ -521,7 +554,22 @@ async def get_time_report(
         all_rows.append(row)
 
     totals_all = _totals_from_group_rows(all_rows)
-    all_rows.sort(key=lambda r: r.get("total_hours", 0), reverse=True)
+    if group_by == "tasks":
+        all_rows.sort(
+            key=lambda r: (
+                (r.get("task_name") or "").casefold(),
+                (r.get("currency") or ""),
+            )
+        )
+    elif group_by == "team":
+        all_rows.sort(
+            key=lambda r: (
+                (r.get("user_name") or "").casefold(),
+                (r.get("currency") or ""),
+            )
+        )
+    else:
+        all_rows.sort(key=lambda r: r.get("total_hours", 0), reverse=True)
     total_entries_count = len(all_rows)
     start = (page - 1) * per_page
     results = all_rows[start : start + per_page]
@@ -658,9 +706,8 @@ async def get_time_report_flat_entries(
     for e in entries:
         sline = _time_entry_line_snake(e, **line_ctx)
         g = _get_group_id(e, group_by, projects_map)
-        if isinstance(g, tuple) and len(g) == 2:
-            a, b = g
-            sline["report_group_id"] = f"{a}|{b}"
+        if isinstance(g, tuple):
+            sline["report_group_id"] = "|".join(str(x) for x in g)
         else:
             sline["report_group_id"] = str(g) if g is not None else None
         sline["report_group_by"] = group_by
@@ -668,9 +715,8 @@ async def get_time_report_flat_entries(
     for e in voided_entries:
         sline = _time_entry_line_snake(e, **line_ctx)
         g = _get_group_id(e, group_by, projects_map)
-        if isinstance(g, tuple) and len(g) == 2:
-            a, b = g
-            sline["report_group_id"] = f"{a}|{b}"
+        if isinstance(g, tuple):
+            sline["report_group_id"] = "|".join(str(x) for x in g)
         else:
             sline["report_group_id"] = str(g) if g is not None else None
         sline["report_group_by"] = group_by
@@ -715,6 +761,10 @@ def _totals_from_group_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     currencies = sorted(by_currency_amount.keys())
     amount_single = _money(billable_amount) if len(currencies) <= 1 else None
     primary_currency = currencies[0] if len(currencies) == 1 else "MIXED"
+    by_currency = [
+        {"currency": cur, "billable_amount": _money(by_currency_amount[cur])}
+        for cur in currencies
+    ]
     return {
         "total_hours": _hours(total_hours),
         "billable_hours": _hours(billable_hours),
@@ -723,6 +773,7 @@ def _totals_from_group_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "billable_amount": amount_single,
         "currency": primary_currency,
         "currencies": currencies,
+        "by_currency": by_currency,
         "billable_amount_by_currency": {
             cur: _money(amt) for cur, amt in sorted(by_currency_amount.items())
         },
@@ -740,6 +791,13 @@ def _totals_from_group_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _user_is_contractor(u: Any) -> bool:
+    if u is None:
+        return False
+    pos = (getattr(u, "position", None) or "").strip().lower()
+    return "подряд" in pos or "contractor" in pos
+
+
 def _get_group_id(e: Any, group_by: str, projects_map: dict) -> Any:
     p = projects_map.get(e.project_id) if e.project_id else None
     pc = (getattr(p, "currency", None) or "USD") if p else "USD"
@@ -748,6 +806,10 @@ def _get_group_id(e: Any, group_by: str, projects_map: dict) -> Any:
     if group_by == "clients":
         cid = p.client_id if p else None
         return (cid, pc) if cid is not None else (None, pc)
+    if group_by == "tasks":
+        return (e.task_id or "", e.project_id or "", pc)
+    if group_by == "team":
+        return (e.auth_user_id, pc)
     raise ValueError(f"Unsupported time report group_by: {group_by!r}")
 
 
@@ -887,6 +949,40 @@ def _build_row(
             group_by=group_by,
             line_ctx=line_ctx,
         )
+    elif group_by == "tasks":
+        tasks_map = line_ctx["tasks_map"]
+        tid = ""
+        pid = ""
+        pcur = row["currency"]
+        if isinstance(gid, tuple) and len(gid) == 3:
+            tid, pid, pcur = gid
+        t = tasks_map.get(tid) if tid else None
+        p = projects_map.get(pid) if pid else None
+        c = clients_map.get(p.client_id) if (p and p.client_id) else None
+        row["task_id"] = tid or None
+        row["task_name"] = t.name if t else ("(без задачи)" if not tid else None)
+        row["project_id"] = pid or None
+        row["project_name"] = p.name if p else None
+        row["client_id"] = p.client_id if p else None
+        row["client_name"] = c.name if c else None
+        row["group_currency"] = pcur
+        row["report_group_id"] = f"{tid}|{pid}|{pcur}"
+        row["users"] = _build_users_list(
+            bkt["user_buckets"],
+            users_map,
+            group_by=group_by,
+            line_ctx=line_ctx,
+        )
+    elif group_by == "team":
+        uid = bkt.get("user_id")
+        if isinstance(gid, tuple) and len(gid) == 2:
+            uid = gid[0]
+        u = users_map.get(uid) if uid is not None else None
+        row["user_id"] = uid
+        row["user_name"] = (u.display_name or u.email) if u else str(uid or "")
+        row["avatar_url"] = u.picture if u else None
+        row["is_contractor"] = _user_is_contractor(u)
+        row["report_group_id"] = f"{uid}|{row['currency']}"
     else:
         raise ValueError(f"Unsupported time report group_by: {group_by!r}")
 
@@ -915,6 +1011,39 @@ def _row_time_report_summary_for_export(r: dict[str, Any], *, group_by: str) -> 
             "client_name",
             "project_id",
             "project_name",
+            "report_group_id",
+            "total_hours",
+            "billable_hours",
+            "billable_percent",
+            "currency",
+            "billable_amount",
+            "source_entry_count",
+            "last_recorded_at",
+        )
+    elif group_by == "tasks":
+        keys = (
+            "task_id",
+            "task_name",
+            "client_id",
+            "client_name",
+            "project_id",
+            "project_name",
+            "group_currency",
+            "report_group_id",
+            "total_hours",
+            "billable_hours",
+            "billable_percent",
+            "currency",
+            "billable_amount",
+            "source_entry_count",
+            "last_recorded_at",
+        )
+    elif group_by == "team":
+        keys = (
+            "user_id",
+            "user_name",
+            "avatar_url",
+            "is_contractor",
             "report_group_id",
             "total_hours",
             "billable_hours",

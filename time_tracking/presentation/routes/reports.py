@@ -49,7 +49,7 @@ from presentation.schemas_reports import (
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-_TIME_GROUP_OPTIONS = frozenset({"clients", "projects"})
+_TIME_GROUP_OPTIONS = frozenset({"clients", "projects", "tasks", "team"})
 _EXPENSE_GROUP_OPTIONS = frozenset({"clients", "projects", "categories", "team"})
 
 
@@ -163,6 +163,8 @@ async def get_reports_meta():
     return ReportMetaOut(
         reportTypes=sorted(["time", "expenses", "uninvoiced", "project-budget"]),
         groupOptions=sorted(list(_TIME_GROUP_OPTIONS | _EXPENSE_GROUP_OPTIONS)),
+        pageSizeMax=500,
+        currencies=["USD", "EUR", "UZS"],
     )
 
 
@@ -184,7 +186,7 @@ async def get_users_for_filter(session: AsyncSession = Depends(get_session)):
 @router.get(
     "/time/{group_by}",
     response_model=ReportResponseOut,
-    summary="Time report grouped by clients or projects",
+    summary="Time report grouped by clients, projects, tasks, or team",
 )
 async def get_time_report_endpoint(
     group_by: TimeGroupBy,
