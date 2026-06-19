@@ -196,7 +196,6 @@ async def sync_project_billable_rates_to_assigned_users(
     if amount <= 0:
         return
     cur = normalize_currency(proj.currency)
-    vf, vt = proj.start_date, proj.end_date
     for uid in uids:
         await upsert_user_project_scoped_billable_rate(
             session,
@@ -204,8 +203,8 @@ async def sync_project_billable_rates_to_assigned_users(
             project_id=project_id,
             amount=amount,
             currency=cur,
-            valid_from=vf,
-            valid_to=vt,
+            valid_from=None,
+            valid_to=None,
         )
 
 

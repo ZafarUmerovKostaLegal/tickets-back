@@ -885,6 +885,22 @@ async def apply_hourly_rates_applies_to_project_patch(conn: AsyncConnection) -> 
     )
 
 
+async def apply_project_scoped_billable_rates_open_interval_patch(conn: AsyncConnection) -> None:
+    """Project-scoped billable rates must not be limited by project start/end dates."""
+
+    await conn.execute(
+        text(
+            """
+            UPDATE time_tracking_user_hourly_rates
+            SET valid_from = NULL,
+                valid_to = NULL
+            WHERE rate_kind = 'billable'
+              AND applies_to_project_id IS NOT NULL
+            """
+        )
+    )
+
+
 async def apply_report_performance_indexes_patch(conn: AsyncConnection) -> None:
     """Add composite indexes that speed up the time-report queries."""
     await conn.execute(

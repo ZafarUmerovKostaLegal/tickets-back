@@ -999,6 +999,14 @@ async def list_time_tracking_assignees_for_project(
     return await _tt_json("GET", f"/projects/{project_id}/time-tracking-assignees")
 
 
+@router.get("/projects/{project_id}/participants")
+async def list_project_participants_for_project(
+    project_id: str,
+    _: dict = Depends(require_view_time_tracking_user_directory),
+):
+    return await _tt_json("GET", f"/projects/{project_id}/participants")
+
+
 @router.get("/clients/{client_id}/projects")
 async def list_client_projects(
     client_id: str,

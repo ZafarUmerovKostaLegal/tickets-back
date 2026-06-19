@@ -352,6 +352,33 @@ class ProjectTimeTrackingAssigneesListOut(BaseModel):
     assignees: list[ProjectTimeTrackingAssigneeOut]
 
 
+class ProjectParticipantOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    auth_user_id: int = Field(..., alias="authUserId")
+    display_name: Optional[str] = Field(None, alias="displayName")
+    email: Optional[str] = None
+    position: Optional[str] = None
+    is_archived: bool = Field(False, alias="isArchived")
+    is_blocked: bool = Field(False, alias="isBlocked")
+    has_project_access: bool = Field(..., alias="hasProjectAccess")
+    has_time_entries: bool = Field(..., alias="hasTimeEntries")
+    has_billable_rate: bool = Field(..., alias="hasBillableRate")
+    billable_hourly_amount: Optional[float] = Field(None, alias="billableHourlyAmount")
+    billable_rate_currency: Optional[str] = Field(None, alias="billableRateCurrency")
+
+
+class ProjectParticipantsListOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    client_id: str = Field(..., alias="clientId")
+    currency: str
+    uses_shared_billable_rate: bool = Field(..., alias="usesSharedBillableRate")
+    shared_billable_hourly_amount: Optional[float] = Field(None, alias="sharedBillableHourlyAmount")
+    participants: list[ProjectParticipantOut]
+
+
 class ProjectAccessOut(BaseModel):
 
 

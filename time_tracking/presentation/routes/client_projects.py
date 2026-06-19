@@ -25,6 +25,7 @@ from application.project_billable_rate_sync import (
 )
 from application.project_dashboard import build_client_project_dashboard
 from application.project_partner_index import build_project_partner_participant_index
+from application.project_participants import list_project_participants_with_rates
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.report_builder import _load_user_rates
 from application.services.reports._base import _ZERO, _d, _hours, _money
@@ -55,6 +56,7 @@ from presentation.schemas import (
     TimeManagerClientProjectPatchBody,
     ProjectTimeTrackingAssigneesListOut,
     ProjectTimeTrackingAssigneeOut,
+    ProjectParticipantsListOut,
 )
 
 router = APIRouter(prefix="/clients", tags=["client_projects"])
@@ -199,6 +201,16 @@ async def list_time_tracking_assignees_for_project(
     for uid in sorted(set(uids), key=_label_lower):
         u = by_uid.get(uid)
         if u is None:
+            items.append(
+                ProjectTimeTrackingAssigneeOut(
+                    auth_user_id=uid,
+                    display_name=None,
+                    email=f"user-{uid}@unknown.local",
+                    position=None,
+                    is_archived=False,
+                    is_blocked=False,
+                )
+            )
             continue
         items.append(
             ProjectTimeTrackingAssigneeOut(
@@ -211,6 +223,23 @@ async def list_time_tracking_assignees_for_project(
             )
         )
     return ProjectTimeTrackingAssigneesListOut(assignees=items)
+
+
+@_global_projects_router.get(
+    "/projects/{project_id}/participants",
+    response_model=ProjectParticipantsListOut,
+    summary="Участники проекта с billable-ставками (доступ + записи времени)",
+)
+async def list_project_participants(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> ProjectParticipantsListOut:
+    await ensure_can_list_project_assignees(session, viewer, project_id.strip())
+    payload = await list_project_participants_with_rates(session, project_id=project_id.strip())
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectParticipantsListOut.model_validate(payload)
 
 
 @_global_projects_router.get("/projects/{project_id}/expense-categories")
@@ -740,8 +769,8 @@ async def create_client_project(
                             project_id=pid_str,
                             amount=_d(amt),
                             currency=proj_currency,
-                            valid_from=row.start_date,
-                            valid_to=row.end_date,
+                            valid_from=None,
+                            valid_to=None,
                         )
                         applied_project_scoped_rate = True
                 # If we just upserted a positive project-scoped rate in this request,

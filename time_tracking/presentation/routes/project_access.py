@@ -95,8 +95,8 @@ async def put_project_access(
                     project_id=pid_key,
                     amount=amt,
                     currency=proj_row.currency or "USD",
-                    valid_from=proj_row.start_date,
-                    valid_to=proj_row.end_date,
+                    valid_from=None,
+                    valid_to=None,
                 )
         await validate_hourly_rates_for_project_access(
             session, auth_user_id=auth_user_id, project_ids=newly_added
