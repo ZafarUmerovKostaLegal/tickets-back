@@ -1394,7 +1394,10 @@ async def _run(
 
     completed_project_keys: set[str] = set(completed_from_checkpoint)
     if sync_from_db:
-        print("\nСверка CSV с БД (пропуск уже загруженных проектов)...")
+        if batch_size > 0:
+            print("\nСверка CSV с БД (пропуск уже загруженных проектов)...")
+        else:
+            print("\nСверка CSV с БД (информативно; диф-режим обрабатывает все проекты)...")
         async with session_factory() as scan_session:
             completed_project_keys = await _discover_complete_projects_in_db(
                 scan_session,
@@ -1430,11 +1433,19 @@ async def _run(
         await engine.dispose()
         return 0
 
-    pending_project_pairs = [
-        pair
-        for pair in scope_project_pairs
-        if _project_key(*pair) not in completed_project_keys
-    ]
+    # В пакетном режиме (--batch-size) пропускаем уже завершённые проекты (резюм).
+    # В обычном диф-режиме обрабатываем ВСЕ проекты: контентный диф сам пропустит
+    # уже существующие строки и добавит недостающие. Это гарантирует, что ни одно
+    # расхождение по часам не будет пропущено (агрегатная сверка discover могла
+    # счесть проект «совпавшим», не проверяя отдельные строки).
+    if batch_size > 0:
+        pending_project_pairs = [
+            pair
+            for pair in scope_project_pairs
+            if _project_key(*pair) not in completed_project_keys
+        ]
+    else:
+        pending_project_pairs = list(scope_project_pairs)
     total_projects = len(all_project_pairs)
     done_count = sum(
         1 for pair in all_project_pairs if _project_key(*pair) in completed_project_keys
@@ -1748,6 +1759,10 @@ async def _run(
         user_rows = scoped_rows if scoped_rows is not None else [
             r for r in rows if r.harvest_user_key == harvest_user_key
         ]
+        # Ставки берём по строкам ИМЕННО этого проекта (scoped_rows) и пишем их
+        # с привязкой к проекту (applies_to_project_id=project_id). Так сумма
+        # совпадает с Harvest для каждого проекта, даже если у сотрудника на
+        # разных проектах разные ставки. Глобальные/ручные ставки НЕ трогаем.
         billable_intervals = _harvest_user_rate_intervals(user_rows)
         cost_intervals = _harvest_user_rate_intervals(
             user_rows, rate_attr="cost_rate", billable_only=False
@@ -1759,53 +1774,44 @@ async def _run(
         display = _harvest_display_name(sample_row)
 
         for project_id in project_ids:
+            # Перезаписываем только harvest project-scoped ставки этого проекта
+            # (идемпотентно для повторных прогонов); глобальные не удаляем.
             await _delete_user_project_scoped_billable_rates(session, auth_user_id, project_id)
+            for row in await hr.list_by_user_and_kind(auth_user_id, "cost"):
+                if getattr(row, "applies_to_project_id", None) == project_id:
+                    await hr.delete(auth_user_id, row.id)
 
-        currencies = {normalize_currency(c) for _, c, _, _ in billable_intervals}
-        for row in await hr.list_by_user_and_kind(auth_user_id, "billable"):
-            if getattr(row, "applies_to_project_id", None):
-                continue
-            if _rate_currency_key(row) in currencies:
-                await hr.delete(auth_user_id, row.id)
+            for amt, cur, vf, vt in billable_intervals:
+                try:
+                    await hr.create(
+                        auth_user_id=auth_user_id,
+                        rate_kind="billable",
+                        amount=amt,
+                        currency=cur,
+                        valid_from=vf,
+                        valid_to=vt,
+                        applies_to_project_id=project_id,
+                    )
+                    stats["hourly_rate_billable"] += 1
+                except ValueError as e:
+                    stats["hourly_rate_error"] += 1
+                    print(f"  ОШИБКА billable-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
 
-        cost_currencies = {normalize_currency(c) for _, c, _, _ in cost_intervals}
-        for row in await hr.list_by_user_and_kind(auth_user_id, "cost"):
-            if getattr(row, "applies_to_project_id", None):
-                continue
-            if _rate_currency_key(row) in cost_currencies:
-                await hr.delete(auth_user_id, row.id)
-
-        for amt, cur, vf, vt in billable_intervals:
-            try:
-                await hr.create(
-                    auth_user_id=auth_user_id,
-                    rate_kind="billable",
-                    amount=amt,
-                    currency=cur,
-                    valid_from=vf,
-                    valid_to=vt,
-                    applies_to_project_id=None,
-                )
-                stats["hourly_rate_billable"] += 1
-            except ValueError as e:
-                stats["hourly_rate_error"] += 1
-                print(f"  ОШИБКА billable-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
-
-        for amt, cur, vf, vt in cost_intervals:
-            try:
-                await hr.create(
-                    auth_user_id=auth_user_id,
-                    rate_kind="cost",
-                    amount=amt,
-                    currency=cur,
-                    valid_from=vf,
-                    valid_to=vt,
-                    applies_to_project_id=None,
-                )
-                stats["hourly_rate_cost"] += 1
-            except ValueError as e:
-                stats["hourly_rate_error"] += 1
-                print(f"  ОШИБКА cost-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
+            for amt, cur, vf, vt in cost_intervals:
+                try:
+                    await hr.create(
+                        auth_user_id=auth_user_id,
+                        rate_kind="cost",
+                        amount=amt,
+                        currency=cur,
+                        valid_from=vf,
+                        valid_to=vt,
+                        applies_to_project_id=project_id,
+                    )
+                    stats["hourly_rate_cost"] += 1
+                except ValueError as e:
+                    stats["hourly_rate_error"] += 1
+                    print(f"  ОШИБКА cost-ставки {display}: {amt} {cur} ({vf}–{vt}): {e}")
 
         if billable_intervals:
             parts = ", ".join(
