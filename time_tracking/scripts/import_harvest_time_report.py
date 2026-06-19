@@ -365,6 +365,21 @@ def _format_progress(done: int, total: int, client_name: str, project_name: str)
     )
 
 
+def _glob_harvest_reports(directory: Path) -> list[Path]:
+    """Любые harvest_time_report*.csv / *.xlsx в каталоге, новейшие первыми."""
+    try:
+        matches = [
+            p
+            for pattern in ("harvest_time_report*.csv", "harvest_time_report*.xlsx")
+            for p in directory.glob(pattern)
+            if p.is_file()
+        ]
+    except OSError:
+        return []
+    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches
+
+
 def _harvest_file_candidates(preferred: Path) -> list[Path]:
     seen: set[str] = set()
     out: list[Path] = []
@@ -375,7 +390,33 @@ def _harvest_file_candidates(preferred: Path) -> list[Path]:
             seen.add(key)
             out.append(p)
 
-    add(preferred)
+    # Если --file не передан (preferred == зашитый дефолт), приоритет — самый свежий
+    # harvest_time_report*.csv в папке сервиса (его «тянем» по умолчанию). Если --file
+    # указан явно и существует, он будет первым.
+    try:
+        is_default = preferred.resolve() == DEFAULT_HARVEST_FILE.resolve()
+    except OSError:
+        is_default = False
+
+    if not is_default:
+        add(preferred)
+
+    # Авто-поиск: любой harvest_time_report*.csv (напр. "harvest_time_report (1).csv")
+    # в папке сервиса и типичных местах — берём самый свежий по дате изменения.
+    search_dirs = [
+        TT_ROOT,
+        Path("/tmp"),
+        REPO_ROOT / "timetrackinck",
+        Path.cwd(),
+        Path.cwd() / "timetrackinck",
+    ]
+    for directory in search_dirs:
+        for match in _glob_harvest_reports(directory):
+            add(match)
+
+    if is_default:
+        add(preferred)
+
     names = [HARVEST_CSV_NAME, HARVEST_XLSX_NAME]
     for base in HARVEST_REPORT_BASENAME_FALLBACKS:
         names.append(f"{base}.csv")
@@ -746,6 +787,46 @@ def _user_has_billable_rate_for_harvest_rows(
 
 def _harvest_seconds_for_hours(hours: Decimal) -> int:
     return int((_quantize_harvest_hours(hours) * Decimal(3600)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _norm_notes_for_key(s: str | None) -> str:
+    """Нормализация заметки для контентного ключа: схлопнуть пробелы, убрать края."""
+    return " ".join((s or "").split())
+
+
+def _entry_content_key(
+    *,
+    work_date: object,
+    auth_user_id: int,
+    project_id: str | None,
+    task_name: str | None,
+    hours: object,
+    is_billable: bool,
+    notes: str | None,
+) -> str:
+    """Стабильный контентный ключ записи времени.
+
+    Ключ = дата + пользователь + проект + имя задачи + часы + billable + заметка.
+    Не зависит от имени файла Harvest, номера строки и id задачи (id может
+    поменяться при слиянии дублей задач, имя — нет). Используется для
+    мультимножественного дифа: добавляем только те строки CSV, которых ещё нет
+    в БД (с учётом легитимных повторов). Существующие записи не трогаем.
+    """
+    h = hours if isinstance(hours, Decimal) else Decimal(str(hours or "0"))
+    h = _quantize_harvest_hours(h)
+    wd = work_date.isoformat() if hasattr(work_date, "isoformat") else str(work_date)
+    parts = "|".join(
+        [
+            wd,
+            str(int(auth_user_id)),
+            (project_id or "").strip(),
+            _norm(task_name or ""),
+            format(h, "f"),
+            "1" if is_billable else "0",
+            _norm_notes_for_key(notes),
+        ]
+    )
+    return hashlib.sha1(parts.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -2095,7 +2176,9 @@ async def _run(
                 )
         return out
 
-    harvest_file_prefix = f"harvest-import:{harvest_source_name}:"
+    # Сверка учитывает ВСЕ harvest-записи проекта (и старые из прошлых файлов,
+    # и новые контентные ref), т.к. диф добавляет недостающее к уже имеющемуся.
+    harvest_file_prefix = "harvest-import:"
 
     async def aggregate_harvest_file_hours_for_project(
         session: AsyncSession,
@@ -2335,35 +2418,16 @@ async def _run(
                         )
                 await session.flush()
 
-            # Всегда (даже без --replace): убрать прежние Harvest-импорты этих проектов,
-            # сделанные из ДРУГОГО файла отчёта (например, при переименовании отчёта).
-            # Иначе записи задвоятся и сверка часов не сойдётся. Ручные записи (без
-            # префикса harvest-import:) не трогаем.
+            # Режим дифа (по умолчанию, без --replace): существующие записи НЕ удаляем
+            # и НЕ меняем. Дубли исключаются мультимножественным дифом по контентному
+            # ключу (дата+пользователь+проект+задача+часы+billable+заметка), который не
+            # зависит от имени файла отчёта и номера строки. Удаление доступно только
+            # под явным --replace.
             if execute and not replace and batch_size <= 0:
-                current_prefix = f"harvest-import:{harvest_source_name}:"
-                pairs = sorted({(r.client_name, r.project_name) for r in rows})
-                stale_total = 0
-                for client_name, project_name in pairs:
-                    existing_client = await find_client_by_name(session, client_name)
-                    if existing_client is None:
-                        continue
-                    existing_project = await find_project(session, existing_client.id, project_name)
-                    if existing_project is None:
-                        continue
-                    result = await session.execute(
-                        delete(TimeEntryModel).where(
-                            TimeEntryModel.project_id == existing_project.id,
-                            TimeEntryModel.external_reference_url.like("harvest-import:%"),
-                            TimeEntryModel.external_reference_url.notlike(f"{current_prefix}%"),
-                        )
-                    )
-                    stale_total += int(result.rowcount or 0)
-                if stale_total:
-                    print(
-                        f"Удалены устаревшие Harvest-записи из других файлов отчёта: "
-                        f"{stale_total} шт. (повторный импорт даст чистый 1:1)."
-                    )
-                await session.flush()
+                print(
+                    "Режим дифа: существующие записи не трогаем; добавим только "
+                    "отсутствующие в БД строки из отчёта Harvest."
+                )
 
             client_cache: dict[str, str] = {}
             project_cache: dict[tuple[str, str], str] = {}
@@ -2613,33 +2677,54 @@ async def _run(
                             print(
                                 f"Удалены старые записи: {client_name} / {project_name} — {deleted} шт."
                             )
-                    elif batch_size > 0:
-                        result = await session.execute(
-                            delete(TimeEntryModel).where(
-                                TimeEntryModel.project_id == existing_project.id,
-                                TimeEntryModel.external_reference_url.like("harvest-import:%"),
-                            )
-                        )
-                        removed = int(result.rowcount or 0)
-                        if removed:
-                            print(
-                                f"Удалены Harvest-записи перед импортом: "
-                                f"{client_name} / {project_name} — {removed} шт."
-                            )
-                    else:
-                        result = await session.execute(
-                            delete(TimeEntryModel).where(
-                                TimeEntryModel.project_id == existing_project.id,
-                                TimeEntryModel.external_reference_url.like("harvest-import:%"),
-                                TimeEntryModel.external_reference_url.notlike(f"{current_prefix}%"),
-                            )
-                        )
-                        stale = int(result.rowcount or 0)
-                        if stale:
-                            print(
-                                f"Удалены устаревшие Harvest-записи: {client_name} / {project_name} — {stale} шт."
-                            )
+                    # Без --replace ничего не удаляем: диф по контентному ключу сам
+                    # пропустит уже существующие записи и добавит только отсутствующие.
                 await session.flush()
+
+            # Контентный диф: подсчитываем уже существующие в БД harvest-записи
+            # (по контентному ключу). Добавлять будем только недостающие строки CSV.
+            db_content_counts: Counter = Counter()
+            consumed_content_counts: Counter = Counter()
+            if not team_only:
+                task_name_by_id: dict[str, str] = {}
+                for t in (
+                    await session.execute(
+                        select(TimeManagerClientTaskModel.id, TimeManagerClientTaskModel.name)
+                    )
+                ).all():
+                    task_name_by_id[str(t.id)] = t.name or ""
+                existing_rows = (
+                    await session.execute(
+                        select(
+                            TimeEntryModel.work_date,
+                            TimeEntryModel.auth_user_id,
+                            TimeEntryModel.project_id,
+                            TimeEntryModel.task_id,
+                            TimeEntryModel.hours,
+                            TimeEntryModel.is_billable,
+                            TimeEntryModel.description,
+                        ).where(
+                            TimeEntryModel.voided_at.is_(None),
+                            TimeEntryModel.external_reference_url.like("harvest-import:%"),
+                        )
+                    )
+                ).all()
+                for er in existing_rows:
+                    db_content_counts[
+                        _entry_content_key(
+                            work_date=er.work_date,
+                            auth_user_id=er.auth_user_id,
+                            project_id=er.project_id,
+                            task_name=task_name_by_id.get(str(er.task_id or ""), ""),
+                            hours=er.hours,
+                            is_billable=er.is_billable,
+                            notes=er.description,
+                        )
+                    ] += 1
+                print(
+                    f"Контентный диф: в БД уже есть {sum(db_content_counts.values())} "
+                    f"harvest-записей ({len(db_content_counts)} уникальных ключей)."
+                )
 
             for batch_index, batch_pairs in enumerate(import_batches, 1):
                 batch_set = set(batch_pairs)
@@ -2814,13 +2899,32 @@ async def _run(
                             tt_by_auth[auth_user_id] = refreshed
 
                     description = hr.notes
+                    if not team_only:
+                        # Мультимножественный диф: первые N одинаковых строк (N — сколько
+                        # уже есть в БД) считаем существующими и пропускаем; легитимные
+                        # повторы сверх этого числа добавляем. Существующее не трогаем.
+                        content_key = _entry_content_key(
+                            work_date=hr.work_date,
+                            auth_user_id=auth_user_id,
+                            project_id=project_id,
+                            task_name=hr.task_name,
+                            hours=hr.hours,
+                            is_billable=hr.is_billable,
+                            notes=description,
+                        )
+                        if (
+                            db_content_counts.get(content_key, 0)
+                            - consumed_content_counts[content_key]
+                            > 0
+                        ):
+                            consumed_content_counts[content_key] += 1
+                            stats["entry_duplicate"] += 1
+                            continue
+                        consumed_content_counts[content_key] += 1
                     if execute and not team_only:
                         if granter is None:
                             granter = auth_user_id
-                        import_ref = hr.import_ref(harvest_source_name)
-                        if await entry_exists_by_import_ref(session, import_ref):
-                            stats["entry_duplicate"] += 1
-                            continue
+                        import_ref = f"harvest-import:content:{content_key}"
                         sec = _harvest_seconds_for_hours(hr.hours)
                         try:
                             entry_id = str(uuid.uuid4())
@@ -3208,8 +3312,9 @@ async def _run(
                     return 0
 
                 print(
-                    f"\nЗаписей времени: создано {stats['entry_created']}, "
-                    f"дубликаты {stats['entry_duplicate']}, ошибок {stats['entry_error']}"
+                    f"\nЗаписей времени: добавлено {stats['entry_created']}, "
+                    f"уже было в БД и пропущено {stats['entry_duplicate']}, "
+                    f"ошибок {stats['entry_error']}"
                 )
 
                 print("\nСверка часов по проектам (Billable? из колонки 8 файла):")
@@ -3324,25 +3429,43 @@ async def _run(
                     f"(billable {expected_billable_total}, non-billable {expected_non_billable_total}), "
                     f"БД {db_hours_total} (billable {db_billable_total}, non-billable {db_non_billable_total})"
                 )
+                # Жёсткая сверка «БД == файл 1:1» имеет смысл только в режиме --replace
+                # (полная перезаливка проекта). В диф-режиме в БД легитимно может быть
+                # больше: ручные записи, записи из прежних импортов, проекты, чья полная
+                # история шире присланного отчёта. Поэтому здесь — предупреждения, без отката.
+                strict = replace
                 if not hours_ok or db_hours_total != expected_hours_total:
-                    print("ОШИБКА: сумма часов в БД не совпадает с файлом Harvest.")
-                    await session.rollback()
-                    return 1
+                    if strict:
+                        print("ОШИБКА: сумма часов в БД не совпадает с файлом Harvest.")
+                        await session.rollback()
+                        return 1
+                    print(
+                        "ВНИМАНИЕ (диф): часы в БД ≠ суммы из файла — допустимо, "
+                        "если в БД есть ручные/прежние записи. Откат не делаю."
+                    )
 
                 if not tasks_ok:
-                    print("ОШИБКА: часы или billable-флаг задач не совпадают с Harvest.")
-                    await session.rollback()
-                    return 1
+                    if strict:
+                        print("ОШИБКА: часы или billable-флаг задач не совпадают с Harvest.")
+                        await session.rollback()
+                        return 1
+                    print("ВНИМАНИЕ (диф): часы/флаги задач отличаются от файла — допустимо.")
 
                 if not team_ok:
-                    print("ОШИБКА: не у всех сотрудников из CSV есть доступ к проекту и/или ставки.")
-                    await session.rollback()
-                    return 1
+                    if strict:
+                        print("ОШИБКА: не у всех сотрудников из CSV есть доступ к проекту и/или ставки.")
+                        await session.rollback()
+                        return 1
+                    print(
+                        "ВНИМАНИЕ (диф): не у всех сотрудников есть доступ/ставка — проверьте список выше."
+                    )
 
                 if not users_ok:
-                    print("ОШИБКА: пользователи или их часы/строки не совпадают с Harvest.")
-                    await session.rollback()
-                    return 1
+                    if strict:
+                        print("ОШИБКА: пользователи или их часы/строки не совпадают с Harvest.")
+                        await session.rollback()
+                        return 1
+                    print("ВНИМАНИЕ (диф): часы/строки пользователей отличаются от файла — допустимо.")
 
                 if stats["hourly_rate_error"] > 0:
                     print(f"\nОШИБКА: не удалось выставить ставок: {stats['hourly_rate_error']}")
@@ -3379,17 +3502,28 @@ async def _run(
                 f"TT из auth: {stats['tt_user_created']}, placeholder Harvest: {stats['tt_user_harvest_placeholder']}; "
                 f"billable-ставок: {stats['hourly_rate_billable']}, cost-ставок: {stats['hourly_rate_cost']}; "
                 f"записей времени: {stats['entry_created'] or stats['entry_planned']} "
-                f"(дубликаты: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
+                f"(уже в БД и пропущено: {stats['entry_duplicate']}, ошибок: {stats['entry_error']})."
             )
             expected = len(rows)
-            imported = stats["entry_created"] + stats["entry_duplicate"] if execute else stats["entry_planned"]
+            if execute:
+                imported = stats["entry_created"] + stats["entry_duplicate"]
+            else:
+                imported = stats["entry_planned"] + stats["entry_duplicate"]
             if imported + stats["entry_error"] < expected:
                 print(
                     f"ВНИМАНИЕ: в отчёте {expected} строк, обработано {imported} "
-                    f"(+ ошибок: {stats['entry_error']})."
+                    f"(+ ошибок: {stats['entry_error']}). Часть строк не разобрана — проверьте лог."
                 )
             elif execute:
-                print(f"Все {expected} строк отчёта в БД (создано {stats['entry_created']}, дубликаты {stats['entry_duplicate']}).")
+                print(
+                    f"Все {expected} строк отчёта учтены в БД "
+                    f"(добавлено {stats['entry_created']}, уже было {stats['entry_duplicate']})."
+                )
+            else:
+                print(
+                    f"Dry-run диф: добавит {stats['entry_planned']} новых строк, "
+                    f"пропустит {stats['entry_duplicate']} (уже в БД) из {expected}."
+                )
     finally:
         await engine.dispose()
     return 0
