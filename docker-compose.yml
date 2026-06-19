@@ -151,27 +151,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Утилита очистки БД: весь репозиторий монтируется в /work (см. scripts/wipe_all_keep_tt_users.py).
-  # Запуск: docker compose --profile tools run --rm wipe_keep_tt --dry-run
-  wipe_keep_tt:
-    profiles:
-      - tools
-    build:
-      context: .
-      dockerfile: scripts/Dockerfile.wipe
-    working_dir: /work
-    volumes:
-      - .:/work
-    environment:
-      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
-      TIME_TRACKING_DATABASE_URL: ${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
-      TICKETS_DATABASE_URL: ${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
-      TODOS_DATABASE_URL: ${TODOS_DATABASE_URL:-postgresql://todos:todos@todos_db:5432/kosta_todos}
-      NOTIFICATIONS_DATABASE_URL: ${NOTIFICATIONS_DATABASE_URL:-postgresql://notifications:notifications@notifications_db:5432/kosta_notifications}
-      INVENTORY_DATABASE_URL: ${INVENTORY_DATABASE_URL:-postgresql://inventory:inventory@inventory_db:5432/kosta_inventory}
-      ATTENDANCE_DATABASE_URL: ${ATTENDANCE_DATABASE_URL:-postgresql://attendance:attendance@attendance_db:5432/kosta_attendance}
-      EXPENSES_DATABASE_URL: ${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
-      VACATION_DATABASE_URL: ${VACATION_DATABASE_URL:-}
 
   # Сервис резервного копирования (профиль backup).
   # Включение: docker compose --profile backup up -d backup
