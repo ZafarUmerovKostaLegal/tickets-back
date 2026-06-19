@@ -3633,6 +3633,26 @@ def main() -> int:
         p.error("--batch-size must be >= 0")
 
     harvest_file = _resolve_harvest_file(args.file)
+    if harvest_file is not None:
+        # Если в папках найдено несколько отчётов Harvest — предупреждаем, какой
+        # выбран (самый свежий по дате изменения), чтобы не залить устаревший файл.
+        all_found: list[Path] = []
+        seen_found: set[str] = set()
+        for directory in (TT_ROOT, Path("/tmp"), REPO_ROOT / "timetrackinck", Path.cwd()):
+            for m in _glob_harvest_reports(directory):
+                rp = str(m.resolve())
+                if rp not in seen_found:
+                    seen_found.add(rp)
+                    all_found.append(m.resolve())
+        if len(all_found) > 1:
+            print("ВНИМАНИЕ: найдено несколько файлов отчёта Harvest:")
+            for m in all_found:
+                mark = "  <-- ВЫБРАН" if str(m) == str(harvest_file) else ""
+                print(f"  - {m}{mark}")
+            print(
+                "Выбран самый свежий по дате изменения. Если нужен другой — удалите "
+                "лишние или укажите явно через --file.\n"
+            )
     if harvest_file is None:
         print(f"Файл не найден: {args.file}")
         print(f"Ожидаемые имена: {HARVEST_CSV_NAME} или {HARVEST_XLSX_NAME}")
