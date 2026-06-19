@@ -1,5 +1,0 @@
-# Минимальные зависимости для scripts/wipe_all_keep_tt_users.py,
-# scripts/purge_* (запуск на сервере через python, без Docker).
-sqlalchemy==2.0.36
-asyncpg==0.30.0
-python-dotenv==1.0.1

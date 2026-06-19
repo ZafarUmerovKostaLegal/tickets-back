@@ -8,12 +8,13 @@ from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from infrastructure.config import get_settings
-from infrastructure.upstream_auth_context import merge_upstream_headers
+from infrastructure.upstream_auth_context import get_incoming_authorization, merge_upstream_headers
 from infrastructure.upstream_http import (
     raise_for_upstream_status,
     send_upstream_request,
     service_base_url,
 )
+from presentation.time_tracking_user_provision import provision_time_tracking_user_from_auth
 
 
 def _base() -> str:
@@ -196,6 +197,7 @@ async def project_access_put_gateway(
     *,
     granted_by_auth_user_id: int,
 ) -> Any:
+    await provision_time_tracking_user_from_auth(auth_user_id, get_incoming_authorization())
     base = _base()
     payload = {
         "project_ids": list(body.project_ids),

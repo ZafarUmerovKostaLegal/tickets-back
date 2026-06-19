@@ -11,7 +11,7 @@ from starlette.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from infrastructure.config import get_settings
-from infrastructure.upstream_auth_context import merge_upstream_headers
+from infrastructure.upstream_auth_context import get_incoming_authorization, merge_upstream_headers
 from infrastructure.upstream_http import (
     raise_for_upstream_status,
     send_upstream_request,
@@ -50,6 +50,10 @@ from presentation.routes.time_tracking_hourly_proxy import (
     hourly_rates_get_gateway,
     hourly_rates_list_gateway,
     hourly_rates_patch_gateway,
+)
+from presentation.time_tracking_user_provision import (
+    provision_time_tracking_users_for_project_members,
+    sync_eligible_auth_users_to_time_tracking,
 )
 from presentation.routes.time_tracking_te_proxy import (
     ProjectAccessPutBody,
@@ -666,6 +670,7 @@ async def list_partner_users(user: dict = Depends(require_view_time_tracking_use
 async def list_users(user: dict = Depends(require_view_time_tracking_user_directory)):
     role = (user.get("role") or "").strip()
     if role in _VIEW_ROLES_TIME_ENTRIES:
+        await sync_eligible_auth_users_to_time_tracking(get_incoming_authorization())
         return await _tt_json("GET", "/users")
     mid = _current_auth_user_id(user)
     tt_role = await _fetch_time_tracking_user_role(mid)
@@ -1087,6 +1092,16 @@ async def create_client_project(
     body: TimeManagerClientProjectCreateBody,
     _: dict = Depends(require_manage_role),
 ):
+    member_ids: list[int] = []
+    if body.initial_project_access_members:
+        member_ids = [int(m.auth_user_id) for m in body.initial_project_access_members]
+    elif body.initial_time_tracking_user_auth_ids:
+        member_ids = [int(x) for x in body.initial_time_tracking_user_auth_ids]
+    if member_ids:
+        await provision_time_tracking_users_for_project_members(
+            member_ids,
+            get_incoming_authorization(),
+        )
     payload = _alias_free_payload(body, "project")
     return await _tt_json("POST", f"/clients/{client_id}/projects", json=payload)
 

@@ -115,6 +115,54 @@ async def fetch_auth_user_detail(authorization: str, auth_user_id: int) -> dict 
     return data if isinstance(data, dict) else None
 
 
+async def fetch_auth_user_public(authorization: str, auth_user_id: int) -> dict | None:
+
+    authz = (authorization or "").strip()
+    if not authz:
+        return None
+    base = (get_settings().auth_service_url or "").strip().rstrip("/")
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"{base}/users/{int(auth_user_id)}/public",
+                headers={"Authorization": authz},
+            )
+    except httpx.RequestError as e:
+        _log.debug("auth user %s public: %s", auth_user_id, e)
+        return None
+    if r.status_code != 200:
+        _log.debug("auth user %s public: HTTP %s", auth_user_id, r.status_code)
+        return None
+    data = r.json()
+    return data if isinstance(data, dict) else None
+
+
+async def fetch_auth_user_for_tt_provision(
+    authorization: str,
+    auth_user_id: int,
+    *,
+    default_tt_role: str = "user",
+) -> dict | None:
+
+    detail = await fetch_auth_user_detail(authorization, auth_user_id)
+    if detail:
+        return detail
+    public = await fetch_auth_user_public(authorization, auth_user_id)
+    if not public:
+        return None
+    merged = dict(public)
+    tt_role = (
+        (merged.get("time_tracking_role") or merged.get("timeTrackingRole") or "") or ""
+    ).strip()
+    if not tt_role:
+        merged["time_tracking_role"] = default_tt_role
+    if merged.get("is_blocked") is None:
+        merged["is_blocked"] = False
+    return merged
+
+
 async def fetch_auth_user_position(authorization: str, auth_user_id: int) -> str | None:
 
     data = await fetch_auth_user_detail(authorization, auth_user_id)
@@ -143,7 +191,7 @@ async def ensure_time_tracking_user_from_auth(
         raise ValueError(
             "Нужен заголовок Authorization, чтобы добавить пользователя в учёт времени из auth."
         )
-    detail = await fetch_auth_user_detail(authz, auth_user_id)
+    detail = await fetch_auth_user_for_tt_provision(authz, auth_user_id)
     if not detail:
         raise ValueError(
             f"Не удалось загрузить пользователя id={auth_user_id} из auth (проверьте токен и права на просмотр профиля)."
