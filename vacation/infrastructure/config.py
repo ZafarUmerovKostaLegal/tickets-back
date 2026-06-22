@@ -33,7 +33,14 @@ class Settings(BaseSettings):
     auth_service_url: str = Field(default="http://auth:1236", validation_alias="AUTH_SERVICE_URL")
     media_path: str = Field(default="/app/media", validation_alias="MEDIA_PATH")
     frontend_url: str = Field(default="", validation_alias="FRONTEND_URL")
-    public_api_base_url: str = Field(default="", validation_alias="GATEWAY_BASE_URL")
+    public_api_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GATEWAY_BASE_URL",
+            "PUBLIC_API_BASE_URL",
+            "VACATION_PUBLIC_API_BASE_URL",
+        ),
+    )
 
     smtp_host: str = Field(default="", validation_alias="VACATION_SMTP_HOST")
     smtp_port: int = Field(default=587, validation_alias="VACATION_SMTP_PORT")

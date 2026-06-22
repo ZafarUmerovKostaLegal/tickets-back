@@ -37,11 +37,24 @@ def smtp_missing(settings: Settings) -> list[str]:
     return miss
 
 
+def email_action_missing(settings: Settings) -> list[str]:
+    miss: list[str] = []
+    if not (settings.email_action_secret or "").strip():
+        miss.append("VACATION_EMAIL_ACTION_SECRET")
+    if not (settings.public_api_base_url or "").strip():
+        miss.append("GATEWAY_BASE_URL")
+    return miss
+
+
+def email_action_ready(settings: Settings) -> bool:
+    return not email_action_missing(settings)
+
+
 def _action_urls(settings: Settings, request_id: int) -> tuple[str | None, str | None]:
-    sec = (settings.email_action_secret or "").strip()
-    base_api = (settings.public_api_base_url or "").strip().rstrip("/")
-    if not sec or not base_api:
+    if email_action_missing(settings):
         return None, None
+    sec = settings.email_action_secret.strip()
+    base_api = settings.public_api_base_url.strip().rstrip("/")
     try:
         ttl = int(settings.email_action_ttl_seconds)
         t_ap = sign_email_action_token(sec, request_id=request_id, action="approve", ttl_seconds=ttl)
@@ -93,10 +106,14 @@ def _build_html(req: LeaveRequest, approve_url: str | None, decline_url: str | N
             f'PDF-заявка приложена к этому письму.</p></div>'
         )
     else:
+        missing = email_action_missing(get_settings())
+        missing_txt = ", ".join(f"<b>{name}</b>" for name in missing) if missing else (
+            "<b>VACATION_EMAIL_ACTION_SECRET</b> и <b>GATEWAY_BASE_URL</b>"
+        )
         actions = (
             f'<div style="padding:12px 14px;background:#fff7ed;border-radius:10px;border:1px solid #fdba74;">'
             f'<p style="margin:0;font-size:13px;color:#7c2d12;">Кнопки решения не активны: задайте '
-            f'<b>VACATION_EMAIL_ACTION_SECRET</b> и <b>GATEWAY_BASE_URL</b> в env сервиса vacation.</p>'
+            f'{missing_txt} в env сервиса vacation и перезапустите контейнер.</p>'
             f'</div>'
         )
     open_block = ""
@@ -160,6 +177,13 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
         return False
 
     approve_url, decline_url = _action_urls(settings, req.id)
+    if not approve_url or not decline_url:
+        missing = email_action_missing(settings)
+        _log.warning(
+            "vacation mail: кнопки решения отключены (%s), request_id=%s",
+            ", ".join(missing) if missing else "unknown",
+            req.id,
+        )
     open_link = None
     base_front = (settings.frontend_url or "").strip().rstrip("/")
     if base_front:

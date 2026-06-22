@@ -202,14 +202,7 @@ def render_leave_request_pdf(req: LeaveRequest) -> bytes:
         y -= 4 * mm
         y = _draw_wrapped(c, f"Примечание: {req.reason.strip()}", left, y, text_w, font)
 
-    y -= 16 * mm
-    _draw_underline(c, left + 35 * mm, y, 45 * mm)
-    _draw_underline(c, left + 85 * mm, y, 45 * mm)
-
-    y -= 14 * mm
-    _draw_underline(c, left, y, text_w)
-
-    y -= 16 * mm
+    y -= 20 * mm
     sub_d = _submission_date(req)
     date_line = _date_phrase(sub_d)
     c.drawRightString(right, y, date_line)

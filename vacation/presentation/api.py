@@ -6,7 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from infrastructure.config import get_settings
 from infrastructure.database import Base, engine
+from infrastructure.email_send import email_action_missing, email_action_ready
 from infrastructure import models
 from infrastructure.schema_readiness import mark_schema_ready
 from presentation.middleware.schema_readiness import SchemaReadinessMiddleware
@@ -107,6 +109,12 @@ def _schema_task_done(task: asyncio.Task[None]) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if not email_action_ready(settings):
+        _log.warning(
+            "Кнопки согласования в письмах отключены — задайте в env vacation: %s",
+            ", ".join(email_action_missing(settings)),
+        )
     if engine is None:
         yield
         return
