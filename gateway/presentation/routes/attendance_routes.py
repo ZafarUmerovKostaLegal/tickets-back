@@ -66,6 +66,9 @@ ROLES_CAN_MANAGE_HIKVISION_MAPPINGS = {
 }
 
 
+ROLES_CAN_VIEW_ATTENDANCE_RANGE = ROLES_CAN_MANAGE_HIKVISION_MAPPINGS
+
+
 async def get_current_user(
     request: Request,
     authorization: Optional[str] = Header(None, alias="Authorization"),
@@ -80,6 +83,15 @@ async def get_current_user(
     return user
 
 
+def _require_attendance_range_access(user: dict) -> None:
+    role = (user.get("role") or "").strip()
+    if role not in ROLES_CAN_VIEW_ATTENDANCE_RANGE:
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators, partners and office managers can view attendance markers in vacation",
+        )
+
+
 def _allowed_camera_ips() -> list[str]:
 
     s = get_settings()
@@ -91,6 +103,22 @@ def _parse_iso_date(value: Optional[str]) -> date:
     if value and value.strip():
         return date.fromisoformat(value.strip())
     return date.today()
+
+
+def _parse_required_iso_date(value: str, *, field_name: str) -> date:
+    try:
+        return date.fromisoformat((value or "").strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD") from None
+
+
+def _iter_dates(start: date, end: date) -> list[date]:
+    days = (end - start).days
+    if days < 0:
+        raise HTTPException(status_code=400, detail="date_from must be before or equal to date_to")
+    if days > 370:
+        raise HTTPException(status_code=400, detail="Date range is too large")
+    return [start + timedelta(days=i) for i in range(days + 1)]
 
 
 def _parse_event_dt(raw: Optional[str]) -> Optional[datetime]:
@@ -602,6 +630,45 @@ async def get_daily_attendance_report(
         },
         "items": items,
         "unmapped_events": unmapped_events,
+    }
+
+
+@router.get("/report/range")
+async def get_attendance_range_report(
+    date_from: str = Query(..., description="Дата начала в формате YYYY-MM-DD"),
+    date_to: str = Query(..., description="Дата конца в формате YYYY-MM-DD"),
+    _: dict = Depends(get_current_user),
+):
+    user = _
+    _require_attendance_range_access(user)
+    start = _parse_required_iso_date(date_from, field_name="date_from")
+    end = _parse_required_iso_date(date_to, field_name="date_to")
+
+    items: list[dict] = []
+    for day in _iter_dates(start, end):
+        daily = await get_daily_attendance_report(day=day.isoformat(), _=user)
+        for item in daily.get("items") or []:
+            status = (item.get("status") or "").strip()
+            app_user_id = item.get("app_user_id")
+            if status not in {"late", "absent"} or app_user_id is None:
+                continue
+            items.append(
+                {
+                    "date": daily.get("date") or day.isoformat(),
+                    "app_user_id": app_user_id,
+                    "status": status,
+                    "first_event_time": item.get("first_event_time"),
+                    "camera_employee_no": item.get("camera_employee_no"),
+                    "display_name": item.get("display_name"),
+                    "explanation_text": item.get("explanation_text"),
+                    "explanation_file_url": item.get("explanation_file_url"),
+                }
+            )
+
+    return {
+        "date_from": start.isoformat(),
+        "date_to": end.isoformat(),
+        "items": items,
     }
 
 

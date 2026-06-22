@@ -9,6 +9,7 @@ ensure_service_in_path("vacation")
 from application.schedule_employee_sync import sync_schedule_employees_for_year
 from infrastructure.models import ScheduleEmployee
 from infrastructure.orm_base import Base
+from presentation.routes.schedule import EmployeePatchBody
 
 
 @pytest.fixture
@@ -64,3 +65,10 @@ async def test_sync_skips_hidden_admin(session: AsyncSession):
     result = await sync_schedule_employees_for_year(session, year=2026, staff_users=staff)
     assert result.skipped_hidden == 1
     assert result.created == 0
+
+
+def test_employee_patch_body_allows_clearing_auth_user_id():
+    body = EmployeePatchBody.model_validate({"authUserId": None})
+
+    assert body.auth_user_id is None
+    assert "auth_user_id" in body.model_fields_set

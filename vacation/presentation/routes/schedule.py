@@ -97,7 +97,7 @@ class EmployeePatchBody(BaseModel):
         if (
             self.full_name is None
             and self.planned_period_note is None
-            and self.auth_user_id is None
+            and "auth_user_id" not in self.model_fields_set
             and self.email is None
         ):
             raise ValueError("Укажите хотя бы одно поле для обновления")
@@ -318,7 +318,7 @@ async def patch_employee(
         emp.full_name = body.full_name.strip()
     if body.planned_period_note is not None:
         emp.planned_period_note = body.planned_period_note.strip() if body.planned_period_note.strip() else None
-    if body.auth_user_id is not None:
+    if "auth_user_id" in body.model_fields_set:
         emp.auth_user_id = body.auth_user_id
     if body.email is not None:
         emp.email = body.email.strip() if body.email.strip() else None
