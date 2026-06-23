@@ -42,6 +42,8 @@ from presentation.routes import (
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    from infrastructure.attendance_range_snapshot import start_snapshot_scheduler, stop_snapshot_scheduler
+
     s = get_settings()
     dsn = (s.sentry_dsn or "").strip()
     if dsn:
@@ -55,7 +57,11 @@ async def _lifespan(app: FastAPI):
             )
         except Exception:
             pass
-    yield
+    await start_snapshot_scheduler()
+    try:
+        yield
+    finally:
+        await stop_snapshot_scheduler()
 
 
 app = FastAPI(

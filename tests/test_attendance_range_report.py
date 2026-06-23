@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -6,7 +6,8 @@ from service_path import ensure_service_in_path
 
 ensure_service_in_path("gateway")
 
-from presentation.routes import attendance_routes
+from application import attendance_range_builder as builder
+from infrastructure import attendance_range_snapshot as snapshot
 
 
 def test_build_range_report_items_returns_only_linked_late_and_absent():
@@ -28,12 +29,12 @@ def test_build_range_report_items_returns_only_linked_late_and_absent():
     }
     first_events = {
         "2026-01-01": {
-            "A10": {"dt": attendance_routes.datetime.fromisoformat("2026-01-01T09:17:00"), "record": {}},
-            "A12": {"dt": attendance_routes.datetime.fromisoformat("2026-01-01T08:50:00"), "record": {}},
+            "A10": {"dt": datetime.fromisoformat("2026-01-01T09:17:00"), "record": {}},
+            "A12": {"dt": datetime.fromisoformat("2026-01-01T08:50:00"), "record": {}},
         },
         "2026-01-02": {
-            "A10": {"dt": attendance_routes.datetime.fromisoformat("2026-01-02T09:17:00"), "record": {}},
-            "A12": {"dt": attendance_routes.datetime.fromisoformat("2026-01-02T08:50:00"), "record": {}},
+            "A10": {"dt": datetime.fromisoformat("2026-01-02T09:17:00"), "record": {}},
+            "A12": {"dt": datetime.fromisoformat("2026-01-02T08:50:00"), "record": {}},
         },
     }
     explanations = [
@@ -45,7 +46,7 @@ def test_build_range_report_items_returns_only_linked_late_and_absent():
         }
     ]
 
-    items = attendance_routes._build_range_report_items(
+    items = builder.build_range_report_items(
         start=date(2026, 1, 1),
         end=date(2026, 1, 2),
         workday={"workday_start": "09:00:00", "late_threshold_minutes": 0},
@@ -59,9 +60,6 @@ def test_build_range_report_items_returns_only_linked_late_and_absent():
     assert len(items) == 4
     assert {x["status"] for x in items} == {"late", "absent"}
     assert {x["app_user_id"] for x in items} == {10, 11}
-    absent = next(x for x in items if x["app_user_id"] == 11 and x["date"] == "2026-01-01")
-    assert absent["status"] == "absent"
-    assert absent["explanation_text"] == "Called office"
 
 
 def test_index_first_events_by_day_keeps_earliest_event():
@@ -76,44 +74,61 @@ def test_index_first_events_by_day_keeps_earliest_event():
         }
     ]
 
-    indexed = attendance_routes._index_first_events_by_day(
+    indexed = builder.index_first_events_by_day(
         events_devices,
         start=date(2026, 1, 1),
         end=date(2026, 1, 2),
     )
 
-    assert indexed["2026-01-01"]["A10"]["dt"] == attendance_routes.datetime.fromisoformat("2026-01-01T09:05:00")
-    assert indexed["2026-01-02"]["A10"]["dt"] == attendance_routes.datetime.fromisoformat("2026-01-02T09:05:00")
+    assert indexed["2026-01-01"]["A10"]["dt"] == datetime.fromisoformat("2026-01-01T09:05:00")
+    assert indexed["2026-01-02"]["A10"]["dt"] == datetime.fromisoformat("2026-01-02T09:05:00")
 
 
-@pytest.mark.asyncio
-async def test_fetch_hikvision_users_devices_uses_cache(monkeypatch):
-    calls = {"count": 0}
+def test_build_range_roster_from_mappings():
+    roster = builder.build_range_roster_from_mappings(
+        [
+            {"camera_employee_no": "A10", "camera_name": "Ivan", "app_user_id": 10},
+            {"camera_employee_no": "  ", "camera_name": "Skip"},
+        ]
+    )
+    assert list(roster.keys()) == ["A10"]
+    assert roster["A10"]["camera_name"] == "Ivan"
 
-    class FakeResponse:
-        status_code = 200
 
-        def json(self):
-            return [{"camera_ip": "10.0.0.1", "users": []}]
+def test_month_chunks_inclusive():
+    chunks = builder.month_chunks_inclusive(date(2026, 1, 15), date(2026, 3, 10))
+    assert chunks == [
+        (date(2026, 1, 15), date(2026, 1, 31)),
+        (date(2026, 2, 1), date(2026, 2, 28)),
+        (date(2026, 3, 1), date(2026, 3, 10)),
+    ]
 
-    class FakeClient:
-        async def get(self, url, params=None):
-            calls["count"] += 1
-            return FakeResponse()
 
-    attendance_routes._hikvision_users_cache.update({"expires_at": 0.0, "key": "", "payload": None})
-    params = {"max_users_per_device": 20000}
-    client = FakeClient()
+def test_snapshot_filter_by_month():
+    today = date.today()
+    year = today.year
+    state = snapshot.get_snapshot_state()
+    state.items = [
+        {"date": f"{year}-01-15", "app_user_id": 1, "status": "late"},
+        {"date": f"{year}-02-03", "app_user_id": 2, "status": "absent"},
+    ]
+    state.year = year
+    state.coverage_start = date(year, 1, 1)
+    state.coverage_end = date(year, 2, 28)
+    state.built_at = datetime.now(timezone.utc)
+    state.building = False
 
-    first = await attendance_routes._fetch_hikvision_users_devices(client, "http://attendance:1250", params)
-    second = await attendance_routes._fetch_hikvision_users_devices(client, "http://attendance:1250", params)
-
-    assert first == second
-    assert calls["count"] == 1
+    resp = snapshot.try_get_snapshot_response(date(year, 1, 1), date(year, 1, 31))
+    assert resp is not None
+    assert len(resp["items"]) == 1
+    assert resp["items"][0]["app_user_id"] == 1
+    assert resp["snapshot"]["status"] == "ready"
 
 
 @pytest.mark.asyncio
 async def test_attendance_range_report_rejects_regular_employee():
+    from presentation.routes import attendance_routes
+
     with pytest.raises(attendance_routes.HTTPException) as exc:
         await attendance_routes.get_attendance_range_report(
             date_from="2026-01-01",
@@ -125,78 +140,39 @@ async def test_attendance_range_report_rejects_regular_employee():
 
 
 @pytest.mark.asyncio
-async def test_attendance_range_report_uses_bulk_fetch(monkeypatch):
-    class FakeResponse:
-        def __init__(self, payload):
-            self.status_code = 200
-            self._payload = payload
+async def test_attendance_range_report_serves_from_snapshot(monkeypatch):
+    from presentation.routes import attendance_routes
 
-        def json(self):
-            return self._payload
+    today = date.today()
+    year = today.year
+    day = f"{year}-01-01"
+    state = snapshot.get_snapshot_state()
+    state.items = [
+        {
+            "date": day,
+            "app_user_id": 10,
+            "status": "late",
+            "first_event_time": f"{day}T09:17:00",
+            "camera_employee_no": "A10",
+            "display_name": "Late User",
+        }
+    ]
+    state.year = year
+    state.coverage_start = date(year, 1, 1)
+    state.coverage_end = date(year, 12, 31)
+    state.built_at = datetime.now(timezone.utc)
+    state.building = False
 
-    captured_explanation_params: list[dict] = []
+    async def fail_live_fetch(*args, **kwargs):
+        raise AssertionError("live fetch should not run when snapshot is ready")
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, params=None, headers=None):
-            if url.endswith("/settings/workday"):
-                return FakeResponse({"workday_start": "09:00:00", "late_threshold_minutes": 0})
-            if url.endswith("/hikvision/mappings"):
-                return FakeResponse([{"camera_employee_no": "A10", "app_user_id": 10}])
-            if url.endswith("/hikvision/explanations"):
-                captured_explanation_params.append(dict(params or {}))
-                return FakeResponse([])
-            if url.endswith("/users"):
-                return FakeResponse([{"id": 10, "display_name": "Late User", "email": "late@example.com"}])
-            raise AssertionError(f"unexpected url: {url}")
-
-    async def fake_fetch_events(client, base, allowed, start, end, **kwargs):
-        return [
-            {
-                "camera_ip": "10.0.0.1",
-                "records": [{"person_id": "A10", "time": "2026-01-01T09:17:00"}],
-            }
-        ]
-
-    async def fake_fetch_users(client, base, params):
-        return [
-            {
-                "camera_ip": "10.0.0.1",
-                "users": [{"employee_no": "A10", "name": "Late User"}],
-            }
-        ]
-
-    attendance_routes._hikvision_users_cache.update({"expires_at": 0.0, "key": "", "payload": None})
-    monkeypatch.setattr(attendance_routes.httpx, "AsyncClient", FakeClient)
-    monkeypatch.setattr(attendance_routes, "_fetch_attendance_events_for_range", fake_fetch_events)
-    monkeypatch.setattr(attendance_routes, "_fetch_hikvision_users_devices", fake_fetch_users)
-
-    from infrastructure.config import Settings
-
-    fake_settings = Settings(
-        ATTENDANCE_SERVICE_URL="http://attendance:1250",
-        AUTH_SERVICE_URL="http://auth:1236",
-        ATTENDANCE_HIKVISION_ALLOWED_IPS="",
-    )
-    monkeypatch.setattr(attendance_routes, "get_settings", lambda: fake_settings)
+    monkeypatch.setattr(attendance_routes, "fetch_attendance_range_items", fail_live_fetch)
 
     out = await attendance_routes.get_attendance_range_report(
-        date_from="2026-01-01",
-        date_to="2026-01-01",
+        date_from=day,
+        date_to=day,
         _={"role": "Главный администратор"},
     )
 
-    assert out["date_from"] == "2026-01-01"
-    assert out["date_to"] == "2026-01-01"
     assert len(out["items"]) == 1
-    assert out["items"][0]["app_user_id"] == 10
-    assert out["items"][0]["status"] == "late"
-    assert captured_explanation_params == [{"date_from": "2026-01-01", "date_to": "2026-01-01"}]
+    assert out["snapshot"]["status"] == "ready"

@@ -65,6 +65,17 @@ class Settings(BaseSettings):
 
     security_csp: str = ""
 
+    attendance_range_snapshot_enabled: bool = Field(
+        default=True,
+        validation_alias="ATTENDANCE_RANGE_SNAPSHOT_ENABLED",
+    )
+    attendance_range_snapshot_refresh_sec: int = Field(
+        default=600,
+        validation_alias="ATTENDANCE_RANGE_SNAPSHOT_REFRESH_SEC",
+        ge=60,
+        le=86400,
+    )
+
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
 

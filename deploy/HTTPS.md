@@ -73,6 +73,19 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 | `FRONTEND_URL` | `https://tickets.kostalegal.com` |
 | `AUTH_REDIRECT_URI` | `https://ticketsback.kostalegal.com/api/v1/auth/azure/callback` |
 | `SECURITY_HSTS_ENABLED` | `true` |
+| `ATTENDANCE_RANGE_SNAPSHOT_ENABLED` | `true` — быстрый `/api/v1/attendance/report/range` из снимка |
+| `ATTENDANCE_RANGE_SNAPSHOT_REFRESH_SEC` | `600` — обновление снимка раз в 10 мин (фон) |
+
+Внутренние URL микросервисов (`http://correspondence:1249`) менять **не нужно** — это Docker-сеть.
+
+### Снимок посещаемости для графика отпусков
+
+Gateway при старте строит **in-memory снимок** маркеров `late`/`absent` с 1 января текущего года по сегодня и обновляет его в фоне каждые `ATTENDANCE_RANGE_SNAPSHOT_REFRESH_SEC` секунд.
+
+- `GET /api/v1/attendance/report/range` отвечает **мгновенно** (фильтр по месяцу из снимка).
+- Пока снимок строится первый раз — `items: []`, `snapshot.status: "building"`.
+- Принудительное обновление: `POST /api/v1/attendance/report/range/refresh` (админ / партнёр / офис-менеджер).
+- После изменения привязок Hikvision снимок пересобирается автоматически.
 
 В Azure AD redirect URI тоже должен быть **https** (тот же callback).
 

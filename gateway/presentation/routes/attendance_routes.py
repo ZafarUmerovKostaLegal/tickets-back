@@ -12,6 +12,12 @@ from pydantic import BaseModel
 from infrastructure.auth_upstream import verify_bearer_and_get_user
 from infrastructure.config import get_settings
 from infrastructure.upstream_auth_context import merge_upstream_headers
+from infrastructure.attendance_range_snapshot import (
+    refresh_snapshot,
+    schedule_refresh,
+    try_get_snapshot_response,
+)
+from application.attendance_range_builder import fetch_attendance_range_items
 
 
 class WorkdaySettingsUpdateBody(BaseModel):
@@ -166,6 +172,22 @@ def _build_roster_by_employee_no(hikvision_users_devices: list) -> dict[str, dic
                 roster_by_employee_no[employee_no]["camera_name"] = hu.get("name")
             if not roster_by_employee_no[employee_no].get("department") and hu.get("department"):
                 roster_by_employee_no[employee_no]["department"] = hu.get("department")
+    return roster_by_employee_no
+
+
+def _build_range_roster_from_mappings(mappings: list) -> dict[str, dict]:
+    """Для compact range-отчёта достаточно привязок — без опроса камер Hikvision."""
+    roster_by_employee_no: dict[str, dict] = {}
+    for mapping in mappings:
+        employee_no = (mapping.get("camera_employee_no") or "").strip()
+        if not employee_no:
+            continue
+        roster_by_employee_no[employee_no] = {
+            "camera_employee_no": employee_no,
+            "camera_name": mapping.get("camera_name"),
+            "department": None,
+            "camera_ips": set(),
+        }
     return roster_by_employee_no
 
 
@@ -454,6 +476,7 @@ async def upsert_hikvision_mapping(
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
+    schedule_refresh()
     return r.json()
 
 
@@ -481,6 +504,7 @@ async def delete_hikvision_mapping(
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
+    schedule_refresh()
     return r.json()
 
 
@@ -851,91 +875,34 @@ async def get_attendance_range_report(
     end = _parse_required_iso_date(date_to, field_name="date_to")
     _iter_dates(start, end)
 
-    settings = get_settings()
-    base = (settings.attendance_service_url or "").rstrip("/")
-    if not base:
-        raise HTTPException(status_code=503, detail="Attendance service not configured")
+    cached = try_get_snapshot_response(start, end)
+    if cached is not None:
+        return cached
 
-    allowed = _allowed_camera_ips()
-    hikvision_users_params = {"max_users_per_device": 20000}
-    if allowed:
-        hikvision_users_params["camera_ip"] = ",".join(allowed)
-
-    try:
-        async with httpx.AsyncClient(timeout=_RANGE_REPORT_HTTP_TIMEOUT_SEC) as client:
-            workday_r, mappings_r, explanations_r = await asyncio.gather(
-                client.get(f"{base}/settings/workday"),
-                client.get(f"{base}/hikvision/mappings"),
-                client.get(
-                    f"{base}/hikvision/explanations",
-                    params={
-                        "date_from": start.isoformat(),
-                        "date_to": end.isoformat(),
-                    },
-                ),
-            )
-            hikvision_users_devices = await _fetch_hikvision_users_devices(
-                client,
-                base,
-                hikvision_users_params,
-            )
-            events_devices = await _fetch_attendance_events_for_range(
-                client,
-                base,
-                allowed,
-                start,
-                end,
-            )
-    except httpx.RequestError:
-        raise HTTPException(status_code=503, detail="Attendance service unavailable")
-
+    schedule_refresh()
     auth_headers = merge_upstream_headers({}) or {}
-    try:
-        async with httpx.AsyncClient(timeout=_RANGE_REPORT_HTTP_TIMEOUT_SEC) as client:
-            users_r = await client.get(
-                f"{settings.auth_service_url}/users",
-                params={"include_archived": False},
-                headers=auth_headers,
-            )
-    except httpx.RequestError:
-        raise HTTPException(status_code=503, detail="Auth service unavailable")
-
-    if workday_r.status_code >= 400:
-        raise HTTPException(status_code=workday_r.status_code, detail=workday_r.text or "Attendance service error")
-    if mappings_r.status_code >= 400:
-        raise HTTPException(status_code=mappings_r.status_code, detail=mappings_r.text or "Attendance service error")
-    if explanations_r.status_code >= 400:
-        raise HTTPException(status_code=explanations_r.status_code, detail=explanations_r.text or "Attendance service error")
-    if users_r.status_code >= 400:
-        raise HTTPException(status_code=users_r.status_code, detail=users_r.text or "Auth service error")
-
-    workday = workday_r.json() or {}
-    mappings = mappings_r.json() or []
-    explanations = explanations_r.json() or []
-    app_users = users_r.json() or []
-    app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
-    mapping_by_employee_no = {
-        (m.get("camera_employee_no") or "").strip(): m
-        for m in mappings
-        if (m.get("camera_employee_no") or "").strip()
-    }
-    roster_by_employee_no = _build_roster_by_employee_no(hikvision_users_devices)
-    first_events_by_day = _index_first_events_by_day(events_devices, start=start, end=end)
-    items = _build_range_report_items(
-        start=start,
-        end=end,
-        workday=workday,
-        roster_by_employee_no=roster_by_employee_no,
-        mapping_by_employee_no=mapping_by_employee_no,
-        app_users_by_id=app_users_by_id,
-        first_events_by_day=first_events_by_day,
-        explanations=explanations,
-    )
-
+    items = await fetch_attendance_range_items(start, end, auth_headers=auth_headers)
     return {
         "date_from": start.isoformat(),
         "date_to": end.isoformat(),
         "items": items,
+        "snapshot": {"status": "live", "stale": False},
+    }
+
+
+@router.post("/report/range/refresh")
+async def refresh_attendance_range_snapshot(
+    _: dict = Depends(get_current_user),
+):
+    user = _
+    _require_attendance_range_access(user)
+    schedule_refresh()
+    await refresh_snapshot()
+    today = date.today()
+    cached = try_get_snapshot_response(date(today.year, 1, 1), today)
+    return {
+        "ok": True,
+        "snapshot": (cached or {}).get("snapshot"),
     }
 
 
