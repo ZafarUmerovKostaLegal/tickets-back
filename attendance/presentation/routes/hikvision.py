@@ -1,4 +1,6 @@
+import asyncio
 from datetime import date
+from functools import partial
 from pathlib import Path
 import uuid
 from typing import Optional, List
@@ -92,15 +94,18 @@ async def get_attendance(
 
     df = _parse_date(date_from)
     dt = _parse_date(date_to)
-    results = get_attendance_from_devices(
-        hosts=hosts,
-        port=settings.hikvision_device_port,
-        user=settings.hikvision_device_user,
-        password=settings.hikvision_device_password,
-        date_from=df,
-        date_to=dt,
-        max_records_per_device=max_records_per_device,
-        timeout=settings.hikvision_request_timeout,
+    results = await asyncio.to_thread(
+        partial(
+            get_attendance_from_devices,
+            hosts=hosts,
+            port=settings.hikvision_device_port,
+            user=settings.hikvision_device_user,
+            password=settings.hikvision_device_password,
+            date_from=df,
+            date_to=dt,
+            max_records_per_device=max_records_per_device,
+            timeout=settings.hikvision_request_timeout,
+        )
     )
 
     rows = await session.execute(select(HikvisionUserBindingModel))
@@ -144,15 +149,18 @@ async def get_users(
     if not hosts:
         raise HTTPException(status_code=400, detail="Не настроены IP камер (HIKVISION_DEVICE_IP(S)).")
 
-    results = get_users_from_devices(
-        hosts=hosts,
-        port=settings.hikvision_device_port,
-        user=settings.hikvision_device_user,
-        password=settings.hikvision_device_password,
-        max_users_per_device=max_users_per_device,
-        timeout=settings.hikvision_request_timeout,
-        name=name,
-        employee_no=employee_no,
+    results = await asyncio.to_thread(
+        partial(
+            get_users_from_devices,
+            hosts=hosts,
+            port=settings.hikvision_device_port,
+            user=settings.hikvision_device_user,
+            password=settings.hikvision_device_password,
+            max_users_per_device=max_users_per_device,
+            timeout=settings.hikvision_request_timeout,
+            name=name,
+            employee_no=employee_no,
+        )
     )
     return results
 

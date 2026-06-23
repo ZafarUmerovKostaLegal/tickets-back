@@ -492,11 +492,11 @@ services:
     volumes:
       - media_storage:/app/media
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:1239/health || exit 1"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "curl -sf --max-time 8 http://localhost:1239/health || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 5
-      start_period: 25s
+      start_period: 40s
     depends_on:
       attendance_db:
         condition: service_healthy
