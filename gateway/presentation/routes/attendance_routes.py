@@ -17,7 +17,12 @@ from infrastructure.attendance_range_snapshot import (
     schedule_refresh,
     try_get_snapshot_response,
 )
-from application.attendance_range_builder import fetch_attendance_range_items
+from application.attendance_range_builder import (
+    build_daily_report_items,
+    build_hikvision_roster,
+    fetch_attendance_range_items,
+    index_first_events_by_day,
+)
 
 
 class WorkdaySettingsUpdateBody(BaseModel):
@@ -738,16 +743,23 @@ async def get_daily_attendance_report(
         if (m.get("camera_employee_no") or "").strip()
     }
     explanations = explanations_r.json() or []
-    explanation_by_key = {
-        f"{(x.get('camera_employee_no') or '').strip()}|{(x.get('status') or '').strip().lower()}": x
-        for x in explanations
-        if (x.get("camera_employee_no") or "").strip()
-    }
 
-    start_val = time.fromisoformat(workday.get("workday_start", "09:00:00"))
-    late_threshold = int(workday.get("late_threshold_minutes", 0) or 0)
-    late_border_dt = datetime.combine(report_day, start_val) + timedelta(minutes=late_threshold)
-
+    roster_by_employee_no = build_hikvision_roster(hikvision_users_devices)
+    first_events_by_day = index_first_events_by_day(
+        events_devices,
+        start=report_day,
+        end=report_day,
+    )
+    first_events_for_day = first_events_by_day.get(report_day.isoformat(), {})
+    items, counts, late_border_dt = build_daily_report_items(
+        report_day,
+        workday=workday,
+        roster_by_employee_no=roster_by_employee_no,
+        mapping_by_employee_no=mapping_by_employee_no,
+        app_users_by_id=app_users_by_id,
+        first_events_for_day=first_events_for_day,
+        explanations_for_day=explanations,
+    )
 
     flat_events: list[dict] = []
     for dev in events_devices:
@@ -755,90 +767,6 @@ async def get_daily_attendance_report(
             item = dict(rec)
             item["camera_ip"] = dev.get("camera_ip")
             flat_events.append(item)
-
-
-    first_event_by_employee_no: dict[str, dict] = {}
-    for rec in flat_events:
-        employee_no = (rec.get("person_id") or "").strip()
-        if not employee_no:
-            continue
-        dt = _parse_event_dt(rec.get("time"))
-        if not dt:
-            continue
-        prev = first_event_by_employee_no.get(employee_no)
-        if not prev or dt < prev["dt"]:
-            first_event_by_employee_no[employee_no] = {"dt": dt, "record": rec}
-
-
-    roster_by_employee_no: dict[str, dict] = {}
-    for dev in hikvision_users_devices:
-        camera_ip = dev.get("camera_ip")
-        for hu in (dev.get("users") or []):
-            employee_no = (hu.get("employee_no") or "").strip()
-            if not employee_no:
-                continue
-            if employee_no not in roster_by_employee_no:
-                roster_by_employee_no[employee_no] = {
-                    "camera_employee_no": employee_no,
-                    "camera_name": hu.get("name"),
-                    "department": hu.get("department"),
-                    "camera_ips": set(),
-                }
-            roster_by_employee_no[employee_no]["camera_ips"].add(camera_ip)
-            if not roster_by_employee_no[employee_no].get("camera_name") and hu.get("name"):
-                roster_by_employee_no[employee_no]["camera_name"] = hu.get("name")
-            if not roster_by_employee_no[employee_no].get("department") and hu.get("department"):
-                roster_by_employee_no[employee_no]["department"] = hu.get("department")
-
-    items: list[dict] = []
-    counts = {"present_on_time": 0, "late": 0, "absent": 0}
-    for employee_no, user in roster_by_employee_no.items():
-        mapping = mapping_by_employee_no.get(employee_no)
-        uid = mapping.get("app_user_id") if mapping else None
-        app_user = app_users_by_id.get(uid) if uid is not None else None
-
-
-        display_name = (
-            (app_user or {}).get("display_name")
-            or (app_user or {}).get("email")
-            or user.get("camera_name")
-            or f"Hikvision #{employee_no}"
-        )
-
-        first = first_event_by_employee_no.get(employee_no)
-        if not first:
-            status = "absent"
-            first_time = None
-        else:
-            first_dt = first["dt"]
-            first_time = first_dt.isoformat()
-            status = "late" if first_dt.replace(tzinfo=None) > late_border_dt else "present_on_time"
-        counts[status] += 1
-        explanation = explanation_by_key.get(f"{employee_no}|{status}")
-        explanation_file_path = (explanation or {}).get("explanation_file_path")
-        explanation_file_url = (
-            f"/api/v1/media/{explanation_file_path}" if explanation_file_path else None
-        )
-        items.append(
-            {
-                "app_user_id": uid,
-                "display_name": display_name,
-                "email": (app_user or {}).get("email"),
-                "role": (app_user or {}).get("role"),
-                "is_mapped": uid is not None,
-                "camera_employee_no": employee_no,
-                "camera_name": user.get("camera_name"),
-                "camera_ips": sorted([ip for ip in user.get("camera_ips", set()) if ip]),
-                "department": user.get("department"),
-                "status": status,
-                "first_event_time": first_time,
-                "explanation_text": (explanation or {}).get("explanation_text"),
-                "explanation_file_path": explanation_file_path,
-                "explanation_file_url": explanation_file_url,
-                "explanation_updated_at": (explanation or {}).get("updated_at"),
-            }
-        )
-
 
     unmapped_events = [e for e in flat_events if not e.get("mapped_app_user_id")]
 

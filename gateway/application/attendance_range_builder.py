@@ -82,6 +82,110 @@ def build_range_roster_from_mappings(mappings: list) -> dict[str, dict]:
     return roster_by_employee_no
 
 
+def build_hikvision_roster(hikvision_users_devices: list) -> dict[str, dict]:
+    """Тот же состав сотрудников, что в GET /report/daily."""
+    roster_by_employee_no: dict[str, dict] = {}
+    for dev in hikvision_users_devices:
+        camera_ip = dev.get("camera_ip")
+        for hu in (dev.get("users") or []):
+            employee_no = (hu.get("employee_no") or "").strip()
+            if not employee_no:
+                continue
+            if employee_no not in roster_by_employee_no:
+                roster_by_employee_no[employee_no] = {
+                    "camera_employee_no": employee_no,
+                    "camera_name": hu.get("name"),
+                    "department": hu.get("department"),
+                    "camera_ips": set(),
+                }
+            roster_by_employee_no[employee_no]["camera_ips"].add(camera_ip)
+            if not roster_by_employee_no[employee_no].get("camera_name") and hu.get("name"):
+                roster_by_employee_no[employee_no]["camera_name"] = hu.get("name")
+            if not roster_by_employee_no[employee_no].get("department") and hu.get("department"):
+                roster_by_employee_no[employee_no]["department"] = hu.get("department")
+    return roster_by_employee_no
+
+
+def compute_employee_day_status(
+    report_day: date,
+    employee_no: str,
+    *,
+    workday: dict,
+    first_events_for_day: dict[str, dict],
+) -> tuple[str, Optional[str]]:
+    late_border = _late_border_dt(report_day, workday)
+    first = first_events_for_day.get(employee_no)
+    if not first:
+        return "absent", None
+    first_dt = first["dt"]
+    first_time = first_dt.isoformat()
+    status = "late" if first_dt.replace(tzinfo=None) > late_border else "present_on_time"
+    return status, first_time
+
+
+def build_daily_report_items(
+    report_day: date,
+    *,
+    workday: dict,
+    roster_by_employee_no: dict[str, dict],
+    mapping_by_employee_no: dict[str, dict],
+    app_users_by_id: dict,
+    first_events_for_day: dict[str, dict],
+    explanations_for_day: list,
+) -> tuple[list[dict], dict[str, int], datetime]:
+    """Полный дневной отчёт — та же логика, что GET /report/daily."""
+    late_border_dt = _late_border_dt(report_day, workday)
+    explanation_by_key = {
+        f"{(x.get('camera_employee_no') or '').strip()}|{(x.get('status') or '').strip().lower()}": x
+        for x in explanations_for_day
+        if (x.get("camera_employee_no") or "").strip()
+    }
+    items: list[dict] = []
+    counts = {"present_on_time": 0, "late": 0, "absent": 0}
+    for employee_no, user in roster_by_employee_no.items():
+        mapping = mapping_by_employee_no.get(employee_no)
+        uid = mapping.get("app_user_id") if mapping else None
+        app_user = app_users_by_id.get(uid) if uid is not None else None
+        display_name = (
+            (app_user or {}).get("display_name")
+            or (app_user or {}).get("email")
+            or user.get("camera_name")
+            or f"Hikvision #{employee_no}"
+        )
+        status, first_time = compute_employee_day_status(
+            report_day,
+            employee_no,
+            workday=workday,
+            first_events_for_day=first_events_for_day,
+        )
+        counts[status] += 1
+        explanation = explanation_by_key.get(f"{employee_no}|{status}")
+        explanation_file_path = (explanation or {}).get("explanation_file_path")
+        explanation_file_url = (
+            f"/api/v1/media/{explanation_file_path}" if explanation_file_path else None
+        )
+        items.append(
+            {
+                "app_user_id": uid,
+                "display_name": display_name,
+                "email": (app_user or {}).get("email"),
+                "role": (app_user or {}).get("role"),
+                "is_mapped": uid is not None,
+                "camera_employee_no": employee_no,
+                "camera_name": user.get("camera_name"),
+                "camera_ips": sorted([ip for ip in user.get("camera_ips", set()) if ip]),
+                "department": user.get("department"),
+                "status": status,
+                "first_event_time": first_time,
+                "explanation_text": (explanation or {}).get("explanation_text"),
+                "explanation_file_path": explanation_file_path,
+                "explanation_file_url": explanation_file_url,
+                "explanation_updated_at": (explanation or {}).get("updated_at"),
+            }
+        )
+    return items, counts, late_border_dt
+
+
 def _merge_attendance_device_batches(by_ip: dict, batch: list) -> dict:
     for dev in batch:
         ip = dev.get("camera_ip")
@@ -176,7 +280,6 @@ def build_range_report_items(
     items: list[dict] = []
     for day in iter_dates_inclusive(start, end):
         day_str = day.isoformat()
-        late_border = _late_border_dt(day, workday)
         first_by_emp = first_events_by_day.get(day_str, {})
 
         for employee_no, user in roster_by_employee_no.items():
@@ -193,15 +296,12 @@ def build_range_report_items(
                 or f"Hikvision #{employee_no}"
             )
 
-            first = first_by_emp.get(employee_no)
-            if not first:
-                status = "absent"
-                first_time = None
-            else:
-                first_dt = first["dt"]
-                first_time = first_dt.isoformat()
-                status = "late" if first_dt.replace(tzinfo=None) > late_border else "present_on_time"
-
+            status, first_time = compute_employee_day_status(
+                day,
+                employee_no,
+                workday=workday,
+                first_events_for_day=first_by_emp,
+            )
             if status not in {"late", "absent"}:
                 continue
 
@@ -241,14 +341,18 @@ async def fetch_attendance_range_items(
         "date_from": start.isoformat(),
         "date_to": end.isoformat(),
     }
+    hikvision_users_params = {"max_users_per_device": 20000}
+    if allowed:
+        hikvision_users_params["camera_ip"] = ",".join(allowed)
 
     try:
         async with httpx.AsyncClient(timeout=RANGE_REPORT_HTTP_TIMEOUT_SEC) as client:
-            workday_r, mappings_r, explanations_r, events_devices, users_r = await asyncio.gather(
+            workday_r, mappings_r, explanations_r, events_devices, hikvision_users_r, users_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
                 client.get(f"{base}/hikvision/mappings"),
                 client.get(f"{base}/hikvision/explanations", params=explanation_params),
                 fetch_attendance_events_for_range(client, base, allowed, start, end),
+                client.get(f"{base}/hikvision/users", params=hikvision_users_params),
                 client.get(
                     f"{settings.auth_service_url}/users",
                     params={"include_archived": False},
@@ -264,6 +368,11 @@ async def fetch_attendance_range_items(
         raise HTTPException(status_code=mappings_r.status_code, detail=mappings_r.text or "Attendance service error")
     if explanations_r.status_code >= 400:
         raise HTTPException(status_code=explanations_r.status_code, detail=explanations_r.text or "Attendance service error")
+    if hikvision_users_r.status_code >= 400:
+        raise HTTPException(
+            status_code=hikvision_users_r.status_code,
+            detail=hikvision_users_r.text or "Attendance service error",
+        )
 
     workday = workday_r.json() or {}
     mappings = mappings_r.json() or []
@@ -275,7 +384,7 @@ async def fetch_attendance_range_items(
         for m in mappings
         if (m.get("camera_employee_no") or "").strip()
     }
-    roster_by_employee_no = build_range_roster_from_mappings(mappings)
+    roster_by_employee_no = build_hikvision_roster(hikvision_users_r.json() or [])
     first_events_by_day = index_first_events_by_day(events_devices, start=start, end=end)
     return build_range_report_items(
         start=start,

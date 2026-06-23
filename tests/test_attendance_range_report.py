@@ -95,6 +95,86 @@ def test_build_range_roster_from_mappings():
     assert roster["A10"]["camera_name"] == "Ivan"
 
 
+def test_build_hikvision_roster_matches_daily_shape():
+    roster = builder.build_hikvision_roster(
+        [
+            {
+                "camera_ip": "10.0.0.1",
+                "users": [
+                    {"employee_no": "A10", "name": "Ivan", "department": "Legal"},
+                    {"employee_no": "A10", "name": "Ivan", "department": "Legal"},
+                ],
+            },
+            {
+                "camera_ip": "10.0.0.2",
+                "users": [{"employee_no": "A11", "name": "Petr"}],
+            },
+        ]
+    )
+    assert set(roster.keys()) == {"A10", "A11"}
+    assert roster["A10"]["camera_name"] == "Ivan"
+    assert roster["A10"]["department"] == "Legal"
+    assert roster["A10"]["camera_ips"] == {"10.0.0.1"}
+
+
+def test_daily_and_range_markers_match_for_same_day():
+    """Маркеры range (late/absent) должны совпадать с report/daily для привязанных сотрудников."""
+    report_day = date(2026, 1, 1)
+    roster = {
+        "A10": {"camera_employee_no": "A10", "camera_name": "Late User", "department": None, "camera_ips": {"10.0.0.1"}},
+        "A11": {"camera_employee_no": "A11", "camera_name": "Absent User", "department": None, "camera_ips": set()},
+        "A12": {"camera_employee_no": "A12", "camera_name": "On Time", "department": None, "camera_ips": set()},
+    }
+    mappings = {
+        "A10": {"app_user_id": 10},
+        "A11": {"app_user_id": 11},
+        "A12": {"app_user_id": 12},
+    }
+    app_users = {
+        10: {"display_name": "Late User", "email": "late@example.com"},
+        11: {"display_name": "Absent User", "email": "absent@example.com"},
+        12: {"display_name": "On Time", "email": "ontime@example.com"},
+    }
+    first_events_for_day = {
+        "A10": {"dt": datetime.fromisoformat("2026-01-01T09:17:00"), "record": {}},
+        "A12": {"dt": datetime.fromisoformat("2026-01-01T08:50:00"), "record": {}},
+    }
+    first_events_by_day = {"2026-01-01": first_events_for_day}
+    workday = {"workday_start": "09:00:00", "late_threshold_minutes": 0}
+
+    daily_items, _, _ = builder.build_daily_report_items(
+        report_day,
+        workday=workday,
+        roster_by_employee_no=roster,
+        mapping_by_employee_no=mappings,
+        app_users_by_id=app_users,
+        first_events_for_day=first_events_for_day,
+        explanations_for_day=[],
+    )
+    daily_markers = {
+        (x["app_user_id"], x["status"], x["first_event_time"])
+        for x in daily_items
+        if x.get("app_user_id") is not None and x["status"] in {"late", "absent"}
+    }
+
+    range_items = builder.build_range_report_items(
+        start=report_day,
+        end=report_day,
+        workday=workday,
+        roster_by_employee_no=roster,
+        mapping_by_employee_no=mappings,
+        app_users_by_id=app_users,
+        first_events_by_day=first_events_by_day,
+        explanations=[],
+    )
+    range_markers = {
+        (x["app_user_id"], x["status"], x["first_event_time"]) for x in range_items
+    }
+
+    assert daily_markers == range_markers
+    assert daily_markers == {(10, "late", "2026-01-01T09:17:00"), (11, "absent", None)}
+
+
 def test_month_chunks_inclusive():
     chunks = builder.month_chunks_inclusive(date(2026, 1, 15), date(2026, 3, 10))
     assert chunks == [
