@@ -245,6 +245,8 @@ async def delete_mapping(
 @router.get("/explanations")
 async def list_explanations(
     day: Optional[str] = Query(None, description="Дата YYYY-MM-DD"),
+    date_from: Optional[str] = Query(None, description="Начало периода YYYY-MM-DD (включительно)"),
+    date_to: Optional[str] = Query(None, description="Конец периода YYYY-MM-DD (включительно)"),
     app_user_id: Optional[int] = Query(None),
     camera_employee_no: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="late | absent"),
@@ -257,6 +259,18 @@ async def list_explanations(
             stmt = stmt.where(AttendanceExplanationModel.day == day_val)
         except ValueError:
             raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD")
+    if date_from:
+        try:
+            from_val = date.fromisoformat(date_from.strip())
+            stmt = stmt.where(AttendanceExplanationModel.day >= from_val)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date_from must be YYYY-MM-DD")
+    if date_to:
+        try:
+            to_val = date.fromisoformat(date_to.strip())
+            stmt = stmt.where(AttendanceExplanationModel.day <= to_val)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD")
     if app_user_id is not None:
         stmt = stmt.where(AttendanceExplanationModel.app_user_id == app_user_id)
     if camera_employee_no:

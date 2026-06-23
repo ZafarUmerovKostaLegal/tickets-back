@@ -32,8 +32,22 @@ VITE_API_BASE_URL=https://ticketsback.kostalegal.com
 Gateway слушает `1234` внутри Docker. Снаружи нужен nginx с TLS:
 
 - Пример конфига: [`deploy/nginx/ticketsback.kostalegal.com.conf`](nginx/ticketsback.kostalegal.com.conf)
+- CORS map: [`deploy/nginx/00-cors-map.conf`](nginx/00-cors-map.conf) → `/etc/nginx/conf.d/`
+- Snippets: `deploy/nginx/snippets/` → `/etc/nginx/snippets/`
 - Сертификат Let's Encrypt для `ticketsback.kostalegal.com`
 - HTTP → редирект на HTTPS (301)
+
+CORS на edge nginx добавляет `Access-Control-Allow-Origin` **на все ответы, включая 502/504** (`always`), чтобы в браузере была видна реальная ошибка, а не «CORS blocked». Для `/api/v1/attendance/report/range` таймаут прокси увеличен до 600s.
+
+После обновления конфигов:
+
+```bash
+sudo cp deploy/nginx/00-cors-map.conf /etc/nginx/conf.d/
+sudo cp -r deploy/nginx/snippets /etc/nginx/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Для Docker edge (`--profile edge`) snippets и map монтируются из `docker-compose.prod.yml` автоматически.
 
 Проверка:
 

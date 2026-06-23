@@ -1,6 +1,7 @@
 
 
 import asyncio
+import time
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
@@ -67,6 +68,10 @@ ROLES_CAN_MANAGE_HIKVISION_MAPPINGS = {
 
 
 ROLES_CAN_VIEW_ATTENDANCE_RANGE = ROLES_CAN_MANAGE_HIKVISION_MAPPINGS
+
+_RANGE_REPORT_HTTP_TIMEOUT_SEC = 300.0
+_HIKVISION_USERS_CACHE_TTL_SEC = 300.0
+_hikvision_users_cache: dict = {"expires_at": 0.0, "key": "", "payload": None}
 
 
 async def get_current_user(
@@ -305,6 +310,35 @@ async def _fetch_attendance_events_for_range(
         _merge_attendance_device_batches(by_ip, r.json() or [])
         chunk_start = chunk_end + timedelta(days=1)
     return list(by_ip.values())
+
+
+async def _fetch_hikvision_users_devices(
+    client: httpx.AsyncClient,
+    base: str,
+    params: dict,
+) -> list:
+    cache_key = str(sorted((params or {}).items()))
+    now = time.monotonic()
+    cached = _hikvision_users_cache
+    if (
+        cached["payload"] is not None
+        and cached["key"] == cache_key
+        and now < cached["expires_at"]
+    ):
+        return cached["payload"]
+
+    r = await client.get(f"{base}/hikvision/users", params=params)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
+    payload = r.json() or []
+    _hikvision_users_cache.update(
+        {
+            "key": cache_key,
+            "payload": payload,
+            "expires_at": now + _HIKVISION_USERS_CACHE_TTL_SEC,
+        }
+    )
+    return payload
 
 
 @router.get("/hikvision/attendance")
@@ -828,12 +862,22 @@ async def get_attendance_range_report(
         hikvision_users_params["camera_ip"] = ",".join(allowed)
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            workday_r, hikvision_users_r, mappings_r, explanations_r = await asyncio.gather(
+        async with httpx.AsyncClient(timeout=_RANGE_REPORT_HTTP_TIMEOUT_SEC) as client:
+            workday_r, mappings_r, explanations_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
-                client.get(f"{base}/hikvision/users", params=hikvision_users_params),
                 client.get(f"{base}/hikvision/mappings"),
-                client.get(f"{base}/hikvision/explanations"),
+                client.get(
+                    f"{base}/hikvision/explanations",
+                    params={
+                        "date_from": start.isoformat(),
+                        "date_to": end.isoformat(),
+                    },
+                ),
+            )
+            hikvision_users_devices = await _fetch_hikvision_users_devices(
+                client,
+                base,
+                hikvision_users_params,
             )
             events_devices = await _fetch_attendance_events_for_range(
                 client,
@@ -847,7 +891,7 @@ async def get_attendance_range_report(
 
     auth_headers = merge_upstream_headers({}) or {}
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_RANGE_REPORT_HTTP_TIMEOUT_SEC) as client:
             users_r = await client.get(
                 f"{settings.auth_service_url}/users",
                 params={"include_archived": False},
@@ -858,8 +902,6 @@ async def get_attendance_range_report(
 
     if workday_r.status_code >= 400:
         raise HTTPException(status_code=workday_r.status_code, detail=workday_r.text or "Attendance service error")
-    if hikvision_users_r.status_code >= 400:
-        raise HTTPException(status_code=hikvision_users_r.status_code, detail=hikvision_users_r.text or "Attendance service error")
     if mappings_r.status_code >= 400:
         raise HTTPException(status_code=mappings_r.status_code, detail=mappings_r.text or "Attendance service error")
     if explanations_r.status_code >= 400:
@@ -869,7 +911,6 @@ async def get_attendance_range_report(
 
     workday = workday_r.json() or {}
     mappings = mappings_r.json() or []
-    hikvision_users_devices = hikvision_users_r.json() or []
     explanations = explanations_r.json() or []
     app_users = users_r.json() or []
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}

@@ -108,6 +108,8 @@ async def test_attendance_range_report_uses_bulk_fetch(monkeypatch):
         def json(self):
             return self._payload
 
+    captured_explanation_params: list[dict] = []
+
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -121,18 +123,10 @@ async def test_attendance_range_report_uses_bulk_fetch(monkeypatch):
         async def get(self, url, params=None, headers=None):
             if url.endswith("/settings/workday"):
                 return FakeResponse({"workday_start": "09:00:00", "late_threshold_minutes": 0})
-            if url.endswith("/hikvision/users"):
-                return FakeResponse(
-                    [
-                        {
-                            "camera_ip": "10.0.0.1",
-                            "users": [{"employee_no": "A10", "name": "Late User"}],
-                        }
-                    ]
-                )
             if url.endswith("/hikvision/mappings"):
                 return FakeResponse([{"camera_employee_no": "A10", "app_user_id": 10}])
             if url.endswith("/hikvision/explanations"):
+                captured_explanation_params.append(dict(params or {}))
                 return FakeResponse([])
             if url.endswith("/users"):
                 return FakeResponse([{"id": 10, "display_name": "Late User", "email": "late@example.com"}])
@@ -146,8 +140,18 @@ async def test_attendance_range_report_uses_bulk_fetch(monkeypatch):
             }
         ]
 
+    async def fake_fetch_users(client, base, params):
+        return [
+            {
+                "camera_ip": "10.0.0.1",
+                "users": [{"employee_no": "A10", "name": "Late User"}],
+            }
+        ]
+
+    attendance_routes._hikvision_users_cache.update({"expires_at": 0.0, "key": "", "payload": None})
     monkeypatch.setattr(attendance_routes.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(attendance_routes, "_fetch_attendance_events_for_range", fake_fetch_events)
+    monkeypatch.setattr(attendance_routes, "_fetch_hikvision_users_devices", fake_fetch_users)
 
     from infrastructure.config import Settings
 
@@ -169,3 +173,4 @@ async def test_attendance_range_report_uses_bulk_fetch(monkeypatch):
     assert len(out["items"]) == 1
     assert out["items"][0]["app_user_id"] == 10
     assert out["items"][0]["status"] == "late"
+    assert captured_explanation_params == [{"date_from": "2026-01-01", "date_to": "2026-01-01"}]
