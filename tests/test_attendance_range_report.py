@@ -87,6 +87,32 @@ def test_index_first_events_by_day_keeps_earliest_event():
 
 
 @pytest.mark.asyncio
+async def test_fetch_hikvision_users_devices_uses_cache(monkeypatch):
+    calls = {"count": 0}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return [{"camera_ip": "10.0.0.1", "users": []}]
+
+    class FakeClient:
+        async def get(self, url, params=None):
+            calls["count"] += 1
+            return FakeResponse()
+
+    attendance_routes._hikvision_users_cache.update({"expires_at": 0.0, "key": "", "payload": None})
+    params = {"max_users_per_device": 20000}
+    client = FakeClient()
+
+    first = await attendance_routes._fetch_hikvision_users_devices(client, "http://attendance:1250", params)
+    second = await attendance_routes._fetch_hikvision_users_devices(client, "http://attendance:1250", params)
+
+    assert first == second
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_attendance_range_report_rejects_regular_employee():
     with pytest.raises(attendance_routes.HTTPException) as exc:
         await attendance_routes.get_attendance_range_report(

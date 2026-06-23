@@ -1,7 +1,7 @@
 
 
 import asyncio
-import time
+import time as time_module
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
@@ -318,7 +318,7 @@ async def _fetch_hikvision_users_devices(
     params: dict,
 ) -> list:
     cache_key = str(sorted((params or {}).items()))
-    now = time.monotonic()
+    now = time_module.monotonic()
     cached = _hikvision_users_cache
     if (
         cached["payload"] is not None
