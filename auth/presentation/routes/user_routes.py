@@ -10,6 +10,7 @@ from application.use_cases import (
     SetTimeTrackingRoleUseCase,
     SetPositionUseCase,
     SetDesktopBackgroundUseCase,
+    SetInitialsUseCase,
 )
 from application.ports import UserRepositoryPort, TokenServicePort, RoleRepositoryPort
 from backend_common.rbac_ui_permissions import build_ui_permissions
@@ -30,9 +31,24 @@ from presentation.schemas import (
     TimeTrackingRoleRequest,
     SetPositionRequest,
     SetDesktopBackgroundRequest,
+    SetInitialsRequest,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _normalize_initials(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    s = (value or "").strip().upper().replace("Ё", "Е")
+    if not s:
+        return None
+    if len(s) != 3 or not all(ch.isalpha() for ch in s):
+        raise HTTPException(
+            status_code=400,
+            detail="Инициалы должны состоять ровно из 3 букв (латиница или кириллица)",
+        )
+    return s
 
 
 def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepositoryPort:
@@ -79,6 +95,7 @@ def _user_to_response(user: User, *, omit_permissions: bool = False) -> UserResp
         permissions=perms,
         time_tracking_role=user.time_tracking_role,
         desktop_background=user.desktop_background,
+        initials=user.initials,
     )
 
 
@@ -107,6 +124,7 @@ def _user_to_detail(user: User) -> UserDetailResponse:
         is_archived=user.is_archived,
         time_tracking_role=user.time_tracking_role,
         desktop_background=user.desktop_background,
+        initials=user.initials,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
@@ -446,6 +464,39 @@ async def set_position(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return _user_to_detail(user)
+
+
+@router.patch("/{user_id}/initials", response_model=UserDetailResponse)
+async def set_user_initials(
+    user_id: int,
+    body: SetInitialsRequest,
+    current_user: User = Depends(require_main_admin_or_admin),
+    session: AsyncSession = Depends(get_session),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    value = _normalize_initials(body.initials)
+    uc = SetInitialsUseCase(user_repo)
+    user = await uc.execute(user_id, value)
+    await session.commit()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_to_detail(user)
+
+
+@router.patch("/me/initials", response_model=UserResponse)
+async def set_my_initials(
+    body: SetInitialsRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    value = _normalize_initials(body.initials)
+    uc = SetInitialsUseCase(user_repo)
+    user = await uc.execute(current_user.id, value)
+    await session.commit()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_to_response(user)
 
 
 @router.patch("/me/desktop-background", response_model=UserResponse)

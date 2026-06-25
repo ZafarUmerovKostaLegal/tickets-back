@@ -17,6 +17,7 @@ class UserResponse(BaseModel):
     updated_at: Optional[datetime] = None
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
+    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
     weekly_capacity_hours: Optional[float] = Field(
         None,
         description="Норма часов в неделю (учёт времени); null если пользователь не в БД time_tracking",
@@ -39,6 +40,7 @@ class UserDetailResponse(BaseModel):
     is_archived: bool
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
+    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
     created_at: datetime
     updated_at: datetime
     weekly_capacity_hours: Optional[float] = Field(
@@ -73,6 +75,14 @@ class SetPositionRequest(BaseModel):
 
 
     position: Optional[str] = None
+
+
+class SetInitialsRequest(BaseModel):
+    initials: Optional[str] = Field(
+        None,
+        max_length=3,
+        description="Ровно 3 буквы (латиница или кириллица) или null для очистки",
+    )
 
 
 class WeeklyCapacityPatchBody(BaseModel):

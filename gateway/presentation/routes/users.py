@@ -20,6 +20,7 @@ from presentation.schemas.user_schemas import (
     ArchiveUserRequest,
     TimeTrackingRoleRequest,
     SetPositionRequest,
+    SetInitialsRequest,
     WeeklyCapacityPatchBody,
 )
 from presentation.time_tracking_capacity import fetch_weekly_capacity_hours, merge_weekly_capacity_into_user
@@ -609,6 +610,53 @@ async def set_time_tracking_role(
     user_payload = r.json()
     await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
     return _normalize_desktop_background_url(user_payload)
+
+
+@router.patch("/{user_id}/initials", response_model=UserDetailResponse)
+async def set_user_initials(
+    request: Request,
+    user_id: int,
+    body: SetInitialsRequest,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_admin),
+):
+    r = await auth_service_request(
+        "PATCH",
+        f"/users/{user_id}/initials",
+        bearer_for_upstream(request, authorization),
+        json=body.model_dump(),
+    )
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="User not found")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Auth service error")
+    user_payload = r.json()
+    cap = await fetch_weekly_capacity_hours(user_id, bearer_for_upstream(request, authorization))
+    user_payload["weekly_capacity_hours"] = cap
+    return _normalize_desktop_background_url(user_payload)
+
+
+@router.patch("/me/initials", response_model=UserResponse)
+async def set_my_initials(
+    request: Request,
+    body: SetInitialsRequest,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(require_auth),
+):
+    r = await auth_service_request(
+        "PATCH",
+        "/users/me/initials",
+        bearer_for_upstream(request, authorization),
+        json=body.model_dump(),
+    )
+    if r.status_code == 401:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Auth service error")
+    merged = await merge_weekly_capacity_into_user(r.json(), bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(merged)
 
 
 @router.patch("/{user_id}/position", response_model=UserDetailResponse)

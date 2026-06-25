@@ -16,6 +16,7 @@ class User:
     is_archived: bool
     time_tracking_role: Optional[str]
     desktop_background: Optional[str]
+    initials: Optional[str]
 
     active_session_jti: Optional[str]
     created_at: datetime

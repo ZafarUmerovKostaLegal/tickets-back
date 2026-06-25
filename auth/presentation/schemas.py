@@ -18,6 +18,7 @@ class UserResponse(BaseModel):
     permissions: Optional[dict] = None
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
+    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
 
 
 class UserPublicResponse(BaseModel):
@@ -47,6 +48,7 @@ class UserDetailResponse(BaseModel):
     is_archived: bool
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
+    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
     created_at: datetime
     updated_at: datetime
 
@@ -83,6 +85,14 @@ class SetDesktopBackgroundRequest(BaseModel):
 
 
     path: str
+
+
+class SetInitialsRequest(BaseModel):
+    initials: Optional[str] = Field(
+        None,
+        max_length=3,
+        description="Ровно 3 буквы (латиница или кириллица) или null для очистки",
+    )
 
 
 class ProfileUpdateRequest(BaseModel):

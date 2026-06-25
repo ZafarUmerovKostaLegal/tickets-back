@@ -110,6 +110,10 @@ class UserRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    async def set_initials(self, user_id: int, initials: Optional[str]) -> Optional[User]:
+        pass
+
+    @abstractmethod
     async def set_active_session_jti(self, user_id: int, jti: Optional[str]) -> Optional[User]:
         pass
 

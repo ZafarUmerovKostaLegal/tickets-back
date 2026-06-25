@@ -15,6 +15,7 @@ from infrastructure.microsoft_graph import (
     create_calendar_event as graph_create_event,
     exchange_code_for_tokens,
     get_authorize_url,
+    list_calendars as graph_list_calendars,
     list_calendar_events as graph_list_events,
     refresh_tokens,
 )
@@ -172,12 +173,45 @@ class CreateCalendarEventBody(BaseModel):
     body: str | None = None
 
 
+@router.get("/calendars", summary="Список календарей пользователя")
+async def list_user_calendars(
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        repo = OutlookCalendarTokenRepository(session)
+        row = await _get_valid_token(repo, user_id, session)
+        if not row:
+            raise HTTPException(status_code=403, detail="Calendar not connected")
+        if not (row.access_token or "").strip():
+            raise HTTPException(status_code=403, detail="Calendar token missing")
+        try:
+            calendars = await graph_list_calendars(row.access_token)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Calendar API error: {e!s}")
+        return {
+            "value": [
+                {
+                    "id": str(item.get("id") or ""),
+                    "name": str(item.get("name") or "").strip() or str(item.get("id") or ""),
+                }
+                for item in calendars
+                if item.get("id")
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error loading calendars") from e
+
+
 @router.get("/events", summary="Список событий календаря")
 async def list_events(
     user_id: Annotated[int, Depends(get_current_user_id)],
     session: AsyncSession = Depends(get_session),
     start: datetime | None = Query(None, description="Начало периода"),
     end: datetime | None = Query(None, description="Конец периода"),
+    calendar_id: str | None = Query(None, description="ID календаря (default — основной)"),
 ):
 
     try:
@@ -188,7 +222,12 @@ async def list_events(
         if not (row.access_token or "").strip():
             raise HTTPException(status_code=403, detail="Calendar token missing")
         try:
-            events = await graph_list_events(row.access_token, start=start, end=end)
+            events = await graph_list_events(
+                row.access_token,
+                start=start,
+                end=end,
+                calendar_id=calendar_id,
+            )
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Calendar API error: {e!s}")
         return {"value": events}

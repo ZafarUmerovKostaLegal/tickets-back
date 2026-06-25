@@ -101,21 +101,42 @@ async def refresh_tokens(refresh_token: str) -> dict[str, Any]:
     }
 
 
+def _calendar_events_base_path(calendar_id: str | None) -> str:
+    cid = (calendar_id or "").strip()
+    if cid and cid != "default":
+        return f"{GRAPH_BASE}/me/calendars/{cid}"
+    return f"{GRAPH_BASE}/me/calendar"
+
+
+async def list_calendars(access_token: str) -> list[dict[str, Any]]:
+    url = f"{GRAPH_BASE}/me/calendars"
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    r.raise_for_status()
+    data = r.json()
+    return data.get("value", [])
+
+
 async def list_calendar_events(
     access_token: str,
     start: datetime | None = None,
     end: datetime | None = None,
+    calendar_id: str | None = None,
 ) -> list[dict[str, Any]]:
 
+    base = _calendar_events_base_path(calendar_id)
     if start and end:
         params = {
             "startDateTime": start.isoformat(),
             "endDateTime": end.isoformat(),
         }
         query = urlencode(params)
-        url = f"{GRAPH_BASE}/me/calendar/calendarView?{query}"
+        url = f"{base}/calendarView?{query}"
     else:
-        url = f"{GRAPH_BASE}/me/events"
+        url = f"{GRAPH_BASE}/me/events" if not calendar_id or calendar_id == "default" else f"{base}/events"
     async with httpx.AsyncClient() as client:
         r = await client.get(
             url,

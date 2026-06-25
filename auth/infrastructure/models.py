@@ -59,6 +59,7 @@ class UserModel(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     time_tracking_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
     desktop_background: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    initials: Mapped[str | None] = mapped_column(String(3), nullable=True)
     active_session_jti: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
