@@ -7,6 +7,7 @@ from application.ports import (
     CategoryRepositoryPort,
     InventoryRepositoryPort,
     ItemFilters,
+    UNSET,
 )
 
 
@@ -101,6 +102,7 @@ class CreateItemUseCase:
         description: Optional[str] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class: Optional[str] = None,
         status: str = "in_stock",
         purchase_date: Optional[datetime] = None,
         warranty_until: Optional[datetime] = None,
@@ -114,6 +116,7 @@ class CreateItemUseCase:
             description=description,
             photo_path=photo_path,
             serial_number=serial_number,
+            equipment_class=equipment_class,
             status=status,
             purchase_date=purchase_date,
             warranty_until=warranty_until,
@@ -148,6 +151,7 @@ class UpdateItemUseCase:
         category_id: Optional[int] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class=UNSET,
         status: Optional[str] = None,
         purchase_date: Optional[datetime] = None,
         warranty_until: Optional[datetime] = None,
@@ -159,6 +163,7 @@ class UpdateItemUseCase:
             category_id=category_id,
             photo_path=photo_path,
             serial_number=serial_number,
+            equipment_class=equipment_class,
             status=status,
             purchase_date=purchase_date,
             warranty_until=warranty_until,

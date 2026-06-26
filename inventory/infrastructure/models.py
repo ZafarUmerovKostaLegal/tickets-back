@@ -32,6 +32,7 @@ class InventoryItemModel(Base):
     photo_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     serial_number: Mapped[str | None] = mapped_column(String(256), nullable=True)
     inventory_number: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    equipment_class: Mapped[str | None] = mapped_column(String(1), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     assigned_to_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

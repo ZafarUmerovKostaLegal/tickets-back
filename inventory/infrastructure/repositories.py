@@ -8,6 +8,7 @@ from application.ports import (
     CategoryRepositoryPort,
     InventoryRepositoryPort,
     ItemFilters,
+    UNSET,
 )
 from infrastructure.models import CategoryModel, InventoryItemModel
 
@@ -118,6 +119,7 @@ def _item_to_entity(m: InventoryItemModel) -> InventoryItem:
         photo_path=m.photo_path,
         serial_number=m.serial_number,
         inventory_number=m.inventory_number,
+        equipment_class=m.equipment_class,
         status=m.status,
         assigned_to_user_id=m.assigned_to_user_id,
         assigned_at=m.assigned_at,
@@ -142,6 +144,7 @@ class InventoryRepository(InventoryRepositoryPort):
         description: Optional[str] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class: Optional[str] = None,
         status: str = "in_stock",
         assigned_to_user_id: Optional[int] = None,
         assigned_at: Optional[datetime] = None,
@@ -156,6 +159,7 @@ class InventoryRepository(InventoryRepositoryPort):
             description=description,
             photo_path=photo_path,
             serial_number=serial_number,
+            equipment_class=equipment_class,
             status=status,
             assigned_to_user_id=assigned_to_user_id,
             assigned_at=assigned_at,
@@ -190,6 +194,8 @@ class InventoryRepository(InventoryRepositoryPort):
             conditions.append(InventoryItemModel.category_id == filters.category_id)
         if filters.status is not None:
             conditions.append(InventoryItemModel.status == filters.status)
+        if filters.equipment_class is not None:
+            conditions.append(InventoryItemModel.equipment_class == filters.equipment_class)
         if filters.assigned_to_user_id is not None:
             conditions.append(InventoryItemModel.assigned_to_user_id == filters.assigned_to_user_id)
         if conditions:
@@ -207,6 +213,7 @@ class InventoryRepository(InventoryRepositoryPort):
         category_id: Optional[int] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class=UNSET,
         status: Optional[str] = None,
         purchase_date: Optional[datetime] = None,
         warranty_until: Optional[datetime] = None,
@@ -227,6 +234,8 @@ class InventoryRepository(InventoryRepositoryPort):
             model.photo_path = photo_path
         if serial_number is not None:
             model.serial_number = serial_number
+        if equipment_class is not UNSET:
+            model.equipment_class = equipment_class
         if status is not None:
             model.status = status
         if purchase_date is not None:

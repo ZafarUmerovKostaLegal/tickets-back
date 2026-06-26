@@ -4,6 +4,13 @@ from typing import Optional, Sequence
 from domain.entities import Category, InventoryItem
 
 
+class _Unset:
+    __slots__ = ()
+
+
+UNSET = _Unset()
+
+
 class HealthRepositoryPort(ABC):
     @abstractmethod
     async def check(self) -> bool:
@@ -52,6 +59,7 @@ class ItemFilters:
         limit: int = 50,
         category_id: Optional[int] = None,
         status: Optional[str] = None,
+        equipment_class: Optional[str] = None,
         assigned_to_user_id: Optional[int] = None,
         include_archived: bool = False,
     ):
@@ -59,6 +67,7 @@ class ItemFilters:
         self.limit = limit
         self.category_id = category_id
         self.status = status
+        self.equipment_class = equipment_class
         self.assigned_to_user_id = assigned_to_user_id
         self.include_archived = include_archived
 
@@ -74,6 +83,7 @@ class InventoryRepositoryPort(ABC):
         description: Optional[str] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class: Optional[str] = None,
         status: str = "in_stock",
         assigned_to_user_id: Optional[int] = None,
         assigned_at: Optional[datetime] = None,
@@ -103,6 +113,7 @@ class InventoryRepositoryPort(ABC):
         category_id: Optional[int] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        equipment_class=UNSET,
         status: Optional[str] = None,
         purchase_date: Optional[datetime] = None,
         warranty_until: Optional[datetime] = None,

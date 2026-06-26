@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, Literal
 
+from pydantic import BaseModel, Field
+
+EquipmentClass = Literal["A", "B", "C", "D", "E"]
 
 class HealthResponse(BaseModel):
     status: str
@@ -42,6 +44,7 @@ class InventoryItemResponse(BaseModel):
     photo_path: Optional[str] = None
     serial_number: Optional[str] = None
     inventory_number: str
+    equipment_class: Optional[EquipmentClass] = None
     status: str
     assigned_to_user_id: Optional[int] = None
     assigned_at: Optional[datetime] = None
@@ -58,6 +61,7 @@ class InventoryItemCreate(BaseModel):
     inventory_number: str
     description: Optional[str] = None
     serial_number: Optional[str] = None
+    equipment_class: Optional[EquipmentClass] = None
     status: str = "in_stock"
     purchase_date: Optional[datetime] = None
     warranty_until: Optional[datetime] = None
@@ -68,6 +72,7 @@ class InventoryItemUpdate(BaseModel):
     description: Optional[str] = None
     category_id: Optional[int] = None
     serial_number: Optional[str] = None
+    equipment_class: Optional[EquipmentClass] = None
     status: Optional[str] = None
     purchase_date: Optional[datetime] = None
     warranty_until: Optional[datetime] = None

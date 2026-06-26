@@ -120,6 +120,7 @@ async def list_items(
     limit: int = Query(50, ge=1, le=200),
     category_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
+    equipment_class: Optional[str] = Query(None),
     assigned_to_user_id: Optional[int] = Query(None),
     include_archived: bool = Query(False),
     user: dict = Depends(get_current_user),
@@ -129,6 +130,8 @@ async def list_items(
         params["category_id"] = category_id
     if status is not None:
         params["status"] = status
+    if equipment_class is not None:
+        params["equipment_class"] = equipment_class
     if assigned_to_user_id is not None:
         params["assigned_to_user_id"] = assigned_to_user_id
     return await _proxy_get("/items", params=params)
@@ -146,6 +149,7 @@ async def create_item(
     inventory_number: str = Form(...),
     description: Optional[str] = Form(None),
     serial_number: Optional[str] = Form(None),
+    equipment_class: Optional[str] = Form(None),
     status: str = Form("in_stock"),
     purchase_date: Optional[str] = Form(None),
     warranty_until: Optional[str] = Form(None),
@@ -163,6 +167,8 @@ async def create_item(
         "purchase_date": purchase_date or "",
         "warranty_until": warranty_until or "",
     }
+    if equipment_class is not None:
+        form_data["equipment_class"] = equipment_class
     files = []
     if photo and photo.filename:
         content = await photo.read()

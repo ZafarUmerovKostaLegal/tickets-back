@@ -20,6 +20,19 @@ async def lifespan(app: FastAPI):
         )
         await conn.execute(
             text(
+                "ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS equipment_class VARCHAR(1) NULL"
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_inventory_items_equipment_class
+                ON inventory_items(equipment_class)
+                """
+            )
+        )
+        await conn.execute(
+            text(
                 """
                 ALTER TABLE inventory_categories
                 ADD COLUMN IF NOT EXISTS parent_id INTEGER NULL

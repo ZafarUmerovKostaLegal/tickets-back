@@ -15,6 +15,7 @@ from application.ports import InventoryRepositoryPort, ItemFilters
 from infrastructure.database import get_session
 from infrastructure.repositories import InventoryRepository
 from infrastructure.file_storage import save_photo
+from presentation.equipment_class import normalize_equipment_class
 from presentation.schemas import (
     InventoryItemResponse,
     InventoryItemCreate,
@@ -47,6 +48,7 @@ def _to_response(i):
         photo_path=i.photo_path,
         serial_number=i.serial_number,
         inventory_number=i.inventory_number,
+        equipment_class=i.equipment_class,
         status=i.status,
         assigned_to_user_id=i.assigned_to_user_id,
         assigned_at=i.assigned_at,
@@ -69,6 +71,7 @@ async def list_items(
     limit: int = Query(50, ge=1, le=200),
     category_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
+    equipment_class: Optional[str] = Query(None),
     assigned_to_user_id: Optional[int] = Query(None),
     include_archived: bool = Query(False),
     repo: InventoryRepositoryPort = Depends(get_repo),
@@ -78,6 +81,7 @@ async def list_items(
         limit=limit,
         category_id=category_id,
         status=status,
+        equipment_class=normalize_equipment_class(equipment_class) if equipment_class else None,
         assigned_to_user_id=assigned_to_user_id,
         include_archived=include_archived,
     )
@@ -102,6 +106,7 @@ async def create_item(
     inventory_number: str = Form(...),
     description: Optional[str] = Form(None),
     serial_number: Optional[str] = Form(None),
+    equipment_class: Optional[str] = Form(None),
     status: str = Form("in_stock"),
     purchase_date: Optional[str] = Form(None),
     warranty_until: Optional[str] = Form(None),
@@ -139,6 +144,7 @@ async def create_item(
         inventory_number=inventory_number,
         description=description or None,
         serial_number=serial_number or None,
+        equipment_class=normalize_equipment_class(equipment_class),
         status=status,
         photo_path=photo_path,
         purchase_date=purchase_dt,
@@ -159,8 +165,7 @@ async def update_item(
     if body.status is not None and body.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"status must be one of: {valid_statuses}")
     uc = UpdateItemUseCase(repo)
-    item = await uc.execute(
-        item_uuid,
+    update_kwargs = dict(
         name=body.name,
         description=body.description,
         category_id=body.category_id,
@@ -169,6 +174,9 @@ async def update_item(
         purchase_date=body.purchase_date,
         warranty_until=body.warranty_until,
     )
+    if "equipment_class" in body.model_fields_set:
+        update_kwargs["equipment_class"] = normalize_equipment_class(body.equipment_class)
+    item = await uc.execute(item_uuid, **update_kwargs)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     await session.commit()

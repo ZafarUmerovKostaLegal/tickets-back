@@ -31,6 +31,7 @@ class InventoryItem:
     photo_path: Optional[str]
     serial_number: Optional[str]
     inventory_number: str
+    equipment_class: Optional[str]
     status: str
     assigned_to_user_id: Optional[int]
     assigned_at: Optional[datetime]
