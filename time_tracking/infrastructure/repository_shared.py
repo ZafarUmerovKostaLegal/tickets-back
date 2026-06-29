@@ -18,6 +18,7 @@ def normalize_time_entry_hours(hours: Decimal) -> Decimal:
 
 _REPORT_VISIBILITY = frozenset({"managers_only", "all_assigned"})
 _PROJECT_TYPES = frozenset({"time_and_materials", "fixed_fee", "non_billable"})
+_RECORDS_LANGUAGES = frozenset({"RU", "ENG"})
 
 
 def _now_utc() -> datetime:

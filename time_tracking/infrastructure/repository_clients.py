@@ -20,6 +20,7 @@ from infrastructure.models import (
 from infrastructure.models_invoices import InvoiceModel
 from infrastructure.repository_shared import (
     _PROJECT_TYPES,
+    _RECORDS_LANGUAGES,
     _REPORT_VISIBILITY,
     _date_none,
     _decimal_none,
@@ -756,10 +757,14 @@ class ClientProjectRepository:
         budget_alert_threshold_percent: Decimal | None = None,
         fixed_fee_amount: Decimal | None = None,
         is_archived: bool = False,
+        records_language: str = "ENG",
     ) -> TimeManagerClientProjectModel:
         rv = report_visibility if report_visibility in _REPORT_VISIBILITY else "managers_only"
         pt = project_type if project_type in _PROJECT_TYPES else "time_and_materials"
         cur = (currency or "USD").strip().upper()[:10] or "USD"
+        rl = (records_language or "ENG").strip().upper()
+        if rl not in _RECORDS_LANGUAGES:
+            rl = "ENG"
         row = TimeManagerClientProjectModel(
             id=str(uuid.uuid4()),
             client_id=client_id,
@@ -783,6 +788,7 @@ class ClientProjectRepository:
             budget_alert_threshold_percent=budget_alert_threshold_percent,
             fixed_fee_amount=fixed_fee_amount,
             is_archived=bool(is_archived),
+            records_language=rl,
             created_at=_now_utc(),
             updated_at=None,
         )
@@ -841,6 +847,10 @@ class ClientProjectRepository:
             row.fixed_fee_amount = _decimal_none(patch["fixed_fee_amount"])
         if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
+        if "records_language" in patch and patch["records_language"] is not None:
+            rl = str(patch["records_language"]).strip().upper()
+            if rl in _RECORDS_LANGUAGES:
+                row.records_language = rl
         row.updated_at = _now_utc()
         self._session.add(row)
         return row

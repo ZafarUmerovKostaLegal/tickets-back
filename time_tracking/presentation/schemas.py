@@ -606,6 +606,11 @@ class ProjectCurrency(str, Enum):
     GBP = "GBP"
 
 
+class ProjectRecordsLanguage(str, Enum):
+    RU = "RU"
+    ENG = "ENG"
+
+
 class TimeManagerClientProjectOut(BaseModel):
 
 
@@ -641,6 +646,7 @@ class TimeManagerClientProjectOut(BaseModel):
     budget_alert_threshold_percent: Optional[Decimal] = None
     fixed_fee_amount: Optional[Decimal] = None
     is_archived: bool = False
+    records_language: str = Field("ENG", alias="recordsLanguage")
     created_at: datetime
     updated_at: Optional[datetime] = None
     usage_count: int = 0
@@ -736,6 +742,11 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело: сумма фикс-контракта задаётся в budgetAmount. Поле принимается для совместимости.",
+    )
+    records_language: ProjectRecordsLanguage = Field(
+        ProjectRecordsLanguage.ENG,
+        alias="recordsLanguage",
+        description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: bool = Field(False, alias="isArchived")
     initial_time_tracking_user_auth_ids: list[int] = Field(
@@ -841,6 +852,11 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело: используйте budgetAmount.",
+    )
+    records_language: Optional[ProjectRecordsLanguage] = Field(
+        None,
+        alias="recordsLanguage",
+        description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: Optional[bool] = Field(None, alias="isArchived")
 

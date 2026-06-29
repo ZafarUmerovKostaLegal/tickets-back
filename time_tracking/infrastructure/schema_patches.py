@@ -864,6 +864,14 @@ async def apply_client_projects_project_billable_amount_patch(conn: AsyncConnect
     )
 
 
+async def apply_client_projects_records_language_patch(conn: AsyncConnection) -> None:
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_client_projects",
+        ("records_language VARCHAR(3) NOT NULL DEFAULT 'ENG'",),
+    )
+
+
 async def apply_hourly_rates_applies_to_project_patch(conn: AsyncConnection) -> None:
 
     await conn.execute(

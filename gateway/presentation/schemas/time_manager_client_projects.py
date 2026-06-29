@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ReportVisibility = Literal["managers_only", "all_assigned"]
 ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable"]
 ProjectCurrency = Literal["USD", "UZS", "EUR", "RUB", "GBP"]
+RecordsLanguage = Literal["RU", "ENG"]
 
 
 class InitialProjectAccessMember(BaseModel):
@@ -73,6 +74,11 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело — задайте budgetAmount.",
+    )
+    records_language: RecordsLanguage = Field(
+        "ENG",
+        alias="recordsLanguage",
+        description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: bool = Field(False, alias="isArchived")
     initial_time_tracking_user_auth_ids: list[int] = Field(
@@ -168,5 +174,10 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело — используйте budgetAmount.",
+    )
+    records_language: Optional[RecordsLanguage] = Field(
+        None,
+        alias="recordsLanguage",
+        description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: Optional[bool] = Field(None, alias="isArchived")

@@ -67,6 +67,7 @@ async def _notify_user_added_to_projects(
             to_email=to_email,
             project_name=(proj.name or "").strip() or "—",
             client_name=client_name,
+            records_language=getattr(proj, "records_language", None) or "ENG",
         )
 
 

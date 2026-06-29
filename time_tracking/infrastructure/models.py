@@ -255,6 +255,9 @@ class TimeManagerClientProjectModel(Base):
     budget_alert_threshold_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     fixed_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    records_language: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="ENG", server_default=text("'ENG'")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

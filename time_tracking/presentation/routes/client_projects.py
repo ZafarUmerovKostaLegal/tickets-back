@@ -318,6 +318,7 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         budget_alert_threshold_percent=row.budget_alert_threshold_percent,
         fixed_fee_amount=_out_fixed_fee_amount_for_api(row),
         is_archived=row.is_archived,
+        records_language=getattr(row, "records_language", "ENG") or "ENG",
         created_at=row.created_at,
         updated_at=row.updated_at,
         usage_count=usage,
@@ -733,6 +734,7 @@ async def create_client_project(
             budget_alert_threshold_percent=body.budget_alert_threshold_percent,
             fixed_fee_amount=fixed_fee_stored,
             is_archived=body.is_archived,
+            records_language=body.records_language.value,
         )
         await session.flush()
         await seed_default_common_tasks_for_project(session, str(row.id))
@@ -872,6 +874,9 @@ async def patch_client_project(
     if "currency" in patch and patch["currency"] is not None:
         cur = patch["currency"]
         patch["currency"] = cur.value if hasattr(cur, "value") else str(cur)
+    if "records_language" in patch and patch["records_language"] is not None:
+        rl = patch["records_language"]
+        patch["records_language"] = rl.value if hasattr(rl, "value") else str(rl)
     if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
 
