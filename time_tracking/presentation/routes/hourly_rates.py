@@ -133,6 +133,7 @@ async def change_hourly_rate_from(
             currency=body.currency,
             applies_to_project_id=project_id,
             effective_from=body.effective_from,
+            source_rate_id=body.source_rate_id,
         )
     except LookupError as e:
         raise HTTPException(status_code=404, detail="Ставка не найдена") from e

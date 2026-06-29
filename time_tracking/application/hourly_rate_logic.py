@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
 _MIN = date(1, 1, 1)
 _MAX = date(9999, 12, 31)
@@ -153,3 +153,93 @@ def build_rate_change_plan(
             plan.create_before_valid_to = day_before
 
     return plan
+
+
+@dataclass
+class RateReconcileAction:
+    kind: Literal["close", "delete"]
+    rate_id: str
+    valid_to: date | None = None
+
+
+def plan_overlapping_reconcile(
+    project_rates: list[Any],
+    effective_from: date,
+    new_valid_to: date | None,
+    *,
+    update_existing_id: str | None = None,
+    keeper_rate_id: str | None = None,
+    valid_from_attr: str = "valid_from",
+    valid_to_attr: str = "valid_to",
+) -> list[RateReconcileAction]:
+    """План закрытия/удаления пересекающихся проектных ставок перед сменой с даты.
+
+    Оставляет одну ставку, действовавшую накануне effective_from (для отчётов «до»),
+    удаляет дубликаты и периоды, которые мешают новому интервалу.
+    """
+
+    if update_existing_id:
+        return []
+
+    day_before = effective_from - timedelta(days=1)
+
+    def _vf(r: Any) -> date | None:
+        return getattr(r, valid_from_attr, None)
+
+    def _rid(r: Any) -> str:
+        return str(getattr(r, "id", "") or "")
+
+    keeper = None
+    if keeper_rate_id:
+        keeper = next((r for r in project_rates if _rid(r) == keeper_rate_id), None)
+    if keeper is None:
+        keeper = pick_rate_for_date(
+            project_rates,
+            day_before,
+            valid_from_attr=valid_from_attr,
+            valid_to_attr=valid_to_attr,
+        )
+    keeper_id = _rid(keeper) if keeper is not None else None
+
+    actions: list[RateReconcileAction] = []
+    deleted: set[str] = set()
+
+    for rate in project_rates:
+        rid = _rid(rate)
+        if not rid:
+            continue
+
+        overlaps_new = intervals_overlap(
+            getattr(rate, valid_from_attr, None),
+            getattr(rate, valid_to_attr, None),
+            effective_from,
+            new_valid_to,
+        )
+        overlaps_hist_dup = (
+            keeper_id is not None
+            and rid != keeper_id
+            and intervals_overlap(
+                getattr(rate, valid_from_attr, None),
+                getattr(rate, valid_to_attr, None),
+                None,
+                day_before,
+            )
+        )
+        if not overlaps_new and not overlaps_hist_dup:
+            continue
+
+        if overlaps_new:
+            if effective_start(_vf(rate)) < effective_from:
+                if rid == keeper_id:
+                    actions.append(RateReconcileAction(kind="close", rate_id=rid, valid_to=day_before))
+                elif rid not in deleted:
+                    actions.append(RateReconcileAction(kind="delete", rate_id=rid))
+                    deleted.add(rid)
+            elif rid not in deleted:
+                actions.append(RateReconcileAction(kind="delete", rate_id=rid))
+                deleted.add(rid)
+        elif overlaps_hist_dup and rid not in deleted:
+            actions.append(RateReconcileAction(kind="delete", rate_id=rid))
+            deleted.add(rid)
+
+    return actions

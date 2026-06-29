@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.hourly_rate_logic import (
     build_rate_change_plan,
     intervals_overlap,
+    plan_overlapping_reconcile,
     validate_range_order,
 )
 from infrastructure.models import UserHourlyRateModel
@@ -166,6 +167,7 @@ class HourlyRateRepository:
         currency: str,
         applies_to_project_id: str,
         effective_from: date,
+        source_rate_id: str | None = None,
     ) -> dict[str, UserHourlyRateModel | None]:
         """Меняет ставку пользователя в конкретном проекте с дня effective_from.
 
@@ -199,7 +201,26 @@ class HourlyRateRepository:
             return {"new": row, "closed": None, "before": None, "updated": row}
 
         closed: UserHourlyRateModel | None = None
-        if plan.close_existing_id:
+        for action in plan_overlapping_reconcile(
+            project_rates,
+            effective_from,
+            plan.create_new_valid_to,
+            update_existing_id=plan.update_existing_id,
+            keeper_rate_id=(source_rate_id or "").strip() or None,
+        ):
+            if action.kind == "close":
+                row = await self.get_by_id(auth_user_id, action.rate_id)
+                if row is not None:
+                    row.valid_to = action.valid_to
+                    row.updated_at = _now_utc()
+                    self._session.add(row)
+                    closed = row
+            else:
+                await self.delete(auth_user_id, action.rate_id)
+
+        await self._session.flush()
+
+        if plan.close_existing_id and closed is None:
             closed = await self.get_by_id(auth_user_id, plan.close_existing_id)
             if closed is not None:
                 closed.valid_to = plan.close_valid_to

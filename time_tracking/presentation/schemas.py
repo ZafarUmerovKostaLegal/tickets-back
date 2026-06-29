@@ -156,6 +156,11 @@ class HourlyRateChangeFromBody(BaseModel):
         alias="effectiveFrom",
         description="С этого дня действует новая ставка; до него — прежняя.",
     )
+    source_rate_id: Optional[str] = Field(
+        None,
+        alias="sourceRateId",
+        description="Ставка, с которой выполняется смена; при дубликатах сохраняется как «старая» до даты.",
+    )
 
 
 class HourlyRateChangeFromResult(BaseModel):
