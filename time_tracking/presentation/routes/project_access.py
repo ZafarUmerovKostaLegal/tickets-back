@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access_control import ensure_time_entry_subject_allowed
 from application.auth_user_directory import ensure_time_tracking_user_from_auth
 from application.manual_tt_users import is_manual_tt_auth_user_id
+from application.project_access_notifications import run_project_access_added_notifications_safe
 from application.project_billable_rate_sync import (
     project_uses_shared_billable,
     sync_project_billable_rates_to_assigned_users,
@@ -115,5 +116,11 @@ async def put_project_access(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     await session.commit()
+    if newly_added:
+        await run_project_access_added_notifications_safe(
+            session,
+            auth_user_id=auth_user_id,
+            project_ids=newly_added,
+        )
     ids = await repo.list_project_ids(auth_user_id)
     return ProjectAccessOut(project_ids=ids)

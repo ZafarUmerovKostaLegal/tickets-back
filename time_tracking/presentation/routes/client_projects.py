@@ -16,6 +16,7 @@ from application.budget_mode import (
 )
 from application.client_task_defaults import seed_default_common_tasks_for_project
 from application.entry_pricing import _billable_amount_for_entry
+from application.project_access_notifications import run_project_access_added_notifications_safe
 from application.project_access_rates import validate_hourly_rates_for_project_access
 from application.project_billable_rate_sync import (
     project_uses_shared_billable,
@@ -736,6 +737,8 @@ async def create_client_project(
         await session.flush()
         await seed_default_common_tasks_for_project(session, str(row.id))
         members = body.initial_project_access_members or []
+        granted_on_create: list[int] = []
+        initial: list[int] = []
         if members:
             initial = list(dict.fromkeys(int(m.auth_user_id) for m in members))
             amount_by_uid = {int(m.auth_user_id): m.billable_hourly_amount for m in members}
@@ -792,6 +795,7 @@ async def create_client_project(
                     granted_by_auth_user_id=body.access_granted_by_auth_user_id,
                     projects=repo,
                 )
+                granted_on_create.append(uid)
             await session.flush()
             await ensure_projects_have_partner_assignee(
                 session,
@@ -802,6 +806,14 @@ async def create_client_project(
             )
         await sync_project_billable_rates_to_assigned_users(session, str(row.id))
         await session.commit()
+        if granted_on_create:
+            pid_str = str(row.id)
+            for uid in granted_on_create:
+                await run_project_access_added_notifications_safe(
+                    session,
+                    auth_user_id=uid,
+                    project_ids=[pid_str],
+                )
     except ValueError as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=str(e)) from e

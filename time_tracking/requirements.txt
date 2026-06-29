@@ -10,3 +10,4 @@ openpyxl==3.1.5
 celery[redis]==5.4.0
 redis==5.2.0
 tzdata>=2024.1
+aiosmtplib==3.0.2
