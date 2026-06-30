@@ -146,10 +146,10 @@ class HourlyRateChangeFromBody(BaseModel):
     rate_kind: RateKind = Field(..., alias="rateKind")
     amount: Decimal = Field(..., description="Новая ставка, действует с effectiveFrom")
     currency: str = "USD"
-    applies_to_project_id: str = Field(
-        ...,
+    applies_to_project_id: Optional[str] = Field(
+        None,
         alias="appliesToProjectId",
-        description="Проект, для которого меняется ставка пользователя.",
+        description="Проект для проектной ставки; пусто — общая ставка пользователя.",
     )
     effective_from: date = Field(
         ...,

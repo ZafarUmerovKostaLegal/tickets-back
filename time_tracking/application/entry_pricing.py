@@ -46,6 +46,28 @@ def billable_scoped_user_rates(
     return [r for r in base if not getattr(r, "applies_to_project_id", None)]
 
 
+def pick_billable_rate_for_entry(
+    work_date: date,
+    user_rates: list[Any] | None,
+    *,
+    project_currency: str | None = None,
+    time_entry_project_id: str | None = None,
+) -> Any | None:
+    """Ставка billable на дату записи: проектная (если есть на эту дату), иначе общая."""
+    base = _scoped_rates(user_rates, project_currency)
+    if not base:
+        return None
+    pid = (time_entry_project_id or "").strip()
+    global_rates = [r for r in base if not getattr(r, "applies_to_project_id", None)]
+    if pid:
+        proj_specific = [r for r in base if getattr(r, "applies_to_project_id", None) == pid]
+        if proj_specific:
+            rate = pick_rate_for_date(proj_specific, work_date)
+            if rate is not None:
+                return rate
+    return pick_rate_for_date(global_rates, work_date) if global_rates else None
+
+
 def _billable_rate_for_entry(
     work_date: date,
     user_rates: list[Any] | None,
@@ -55,10 +77,12 @@ def _billable_rate_for_entry(
 ) -> tuple[Decimal | None, str]:
 
     base_cur = (project_currency or "USD").strip()[:10] or "USD"
-    scoped = billable_scoped_user_rates(user_rates, project_currency, time_entry_project_id)
-    if not scoped:
-        return None, base_cur
-    rate = pick_rate_for_date(scoped, work_date)
+    rate = pick_billable_rate_for_entry(
+        work_date,
+        user_rates,
+        project_currency=project_currency,
+        time_entry_project_id=time_entry_project_id,
+    )
     if not rate:
         return None, base_cur
     return _d(rate.amount), (rate.currency or base_cur).strip()[:10] or base_cur
@@ -77,10 +101,12 @@ def _billable_amount_for_entry(
     out_cur = (project_currency or "USD").strip()[:10] or "USD"
     if not is_billable or not user_rates:
         return Decimal(0), out_cur
-    scoped = billable_scoped_user_rates(user_rates, project_currency, time_entry_project_id)
-    if not scoped:
-        return Decimal(0), out_cur
-    rate = pick_rate_for_date(scoped, work_date)
+    rate = pick_billable_rate_for_entry(
+        work_date,
+        user_rates,
+        project_currency=project_currency,
+        time_entry_project_id=time_entry_project_id,
+    )
     if not rate:
         return Decimal(0), out_cur
     return money_product_hours_rate(hours, _d(rate.amount)), (rate.currency or out_cur).strip()[:10] or out_cur

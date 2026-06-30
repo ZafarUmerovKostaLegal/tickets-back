@@ -114,7 +114,7 @@ class HourlyRateChangeFromBody(BaseModel):
     rate_kind: str = Field(..., alias="rateKind")
     amount: Decimal
     currency: str = "USD"
-    applies_to_project_id: str = Field(..., alias="appliesToProjectId")
+    applies_to_project_id: Optional[str] = Field(None, alias="appliesToProjectId")
     effective_from: date = Field(..., alias="effectiveFrom")
 
 

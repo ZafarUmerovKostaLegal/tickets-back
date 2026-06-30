@@ -118,15 +118,14 @@ async def change_hourly_rate_from(
 ) -> HourlyRateChangeFromResult:
     await ensure_time_entry_subject_allowed(session, viewer, auth_user_id, write=True)
     await _ensure_user(session, auth_user_id)
-    project_id = (body.applies_to_project_id or "").strip()
-    if not project_id:
-        raise HTTPException(status_code=400, detail="Не указан проект для смены ставки")
-    projects = ClientProjectRepository(session)
-    if await projects.get_by_id_global(project_id) is None:
-        raise HTTPException(status_code=404, detail="Проект не найден")
+    project_id = (body.applies_to_project_id or "").strip() or None
+    if project_id is not None:
+        projects = ClientProjectRepository(session)
+        if await projects.get_by_id_global(project_id) is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
     repo = HourlyRateRepository(session)
     try:
-        result = await repo.change_project_rate_from(
+        result = await repo.change_rate_from(
             auth_user_id=auth_user_id,
             rate_kind=body.rate_kind.value,
             amount=body.amount,

@@ -161,38 +161,41 @@ class HourlyRateRepository:
         invalidate_all_reports()
         return row
 
-    async def change_project_rate_from(
+    async def change_rate_from(
         self,
         *,
         auth_user_id: int,
         rate_kind: str,
         amount: Decimal,
         currency: str,
-        applies_to_project_id: str,
         effective_from: date,
+        applies_to_project_id: str | None = None,
         source_rate_id: str | None = None,
     ) -> dict[str, UserHourlyRateModel | None]:
-        """Меняет ставку пользователя в конкретном проекте с дня effective_from.
+        """Меняет ставку пользователя (общую или проектную) с дня effective_from.
 
-        До effective_from действует прежняя ставка, начиная с effective_from —
-        новая. Возвращает словарь с затронутыми записями: new / closed / before /
-        updated.
+        До effective_from действует прежняя ставка в том же scope, начиная с
+        effective_from — новая.
         """
         if rate_kind not in _RATE_KINDS:
             raise ValueError("Недопустимый тип ставки")
         if amount <= 0:
             raise ValueError("Сумма должна быть больше нуля")
         scope = (applies_to_project_id or "").strip() or None
-        if scope is None:
-            raise ValueError("Не указан проект для смены ставки")
         cur_norm = (currency or "USD").strip().upper()[:10] or "USD"
 
         existing = await self.list_by_user_and_kind(auth_user_id, rate_kind)
         same_cur = [r for r in existing if _rate_currency_key(r) == cur_norm]
-        project_rates = [r for r in same_cur if _applies_scope_match(r, scope)]
-        global_rates = [r for r in same_cur if _applies_scope_match(r, None)]
+        scope_rates = [r for r in same_cur if _applies_scope_match(r, scope)]
+        # Для проектной смены — глобальные ставки нужны только для снимка «до даты»
+        # при первом проектном переопределении.
+        global_rates = (
+            [r for r in same_cur if _applies_scope_match(r, None)]
+            if scope is not None
+            else []
+        )
 
-        plan = build_rate_change_plan(project_rates, global_rates, effective_from)
+        plan = build_rate_change_plan(scope_rates, global_rates, effective_from)
 
         if plan.update_existing_id:
             row = await self.get_by_id(auth_user_id, plan.update_existing_id)
@@ -206,7 +209,7 @@ class HourlyRateRepository:
 
         closed: UserHourlyRateModel | None = None
         for action in plan_overlapping_reconcile(
-            project_rates,
+            scope_rates,
             effective_from,
             plan.create_new_valid_to,
             update_existing_id=plan.update_existing_id,
@@ -256,6 +259,30 @@ class HourlyRateRepository:
         )
         invalidate_all_reports()
         return {"new": new_row, "closed": closed, "before": before, "updated": None}
+
+    async def change_project_rate_from(
+        self,
+        *,
+        auth_user_id: int,
+        rate_kind: str,
+        amount: Decimal,
+        currency: str,
+        applies_to_project_id: str,
+        effective_from: date,
+        source_rate_id: str | None = None,
+    ) -> dict[str, UserHourlyRateModel | None]:
+        scope = (applies_to_project_id or "").strip() or None
+        if scope is None:
+            raise ValueError("Не указан проект для смены ставки")
+        return await self.change_rate_from(
+            auth_user_id=auth_user_id,
+            rate_kind=rate_kind,
+            amount=amount,
+            currency=currency,
+            effective_from=effective_from,
+            applies_to_project_id=scope,
+            source_rate_id=source_rate_id,
+        )
 
     async def delete(self, auth_user_id: int, rate_id: str) -> bool:
         row = await self.get_by_id(auth_user_id, rate_id)
