@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.hourly_rate_logic import normalize_currency
 from infrastructure.models import UserHourlyRateModel
+from infrastructure.report_cache import invalidate_all_reports
 from infrastructure.repositories import (
     ClientProjectRepository,
     HourlyRateRepository,
@@ -57,6 +58,7 @@ async def delete_billable_rates_scoped_to_project(session: AsyncSession, project
     await session.execute(
         delete(UserHourlyRateModel).where(UserHourlyRateModel.applies_to_project_id == pid)
     )
+    invalidate_all_reports()
 
 
 def _shared_billable_config_changed(before: Any, after: Any) -> bool:

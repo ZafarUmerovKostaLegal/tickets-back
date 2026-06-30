@@ -114,7 +114,7 @@ def set_report(params: dict[str, Any], value: Any) -> None:
 
 
 def invalidate_all_reports() -> None:
-    """Call when time entries are mutated (create/update/void/delete)."""
+    """Call when time entries or hourly rates change (reports recompute amounts from rates)."""
     REPORT_CACHE.clear()
 
 

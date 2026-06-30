@@ -15,6 +15,7 @@ from application.hourly_rate_logic import (
     validate_range_order,
 )
 from infrastructure.models import UserHourlyRateModel
+from infrastructure.report_cache import invalidate_all_reports
 from infrastructure.repository_shared import _now_utc, _to_decimal
 
 _RATE_KINDS = frozenset({"billable", "cost"})
@@ -110,6 +111,7 @@ class HourlyRateRepository:
             updated_at=None,
         )
         self._session.add(row)
+        invalidate_all_reports()
         return row
 
     async def update(
@@ -156,6 +158,7 @@ class HourlyRateRepository:
         row.valid_to = new_to
         row.updated_at = _now_utc()
         self._session.add(row)
+        invalidate_all_reports()
         return row
 
     async def change_project_rate_from(
@@ -198,6 +201,7 @@ class HourlyRateRepository:
             row.amount = amount
             row.updated_at = _now_utc()
             self._session.add(row)
+            invalidate_all_reports()
             return {"new": row, "closed": None, "before": None, "updated": row}
 
         closed: UserHourlyRateModel | None = None
@@ -250,6 +254,7 @@ class HourlyRateRepository:
             valid_to=plan.create_new_valid_to,
             applies_to_project_id=scope,
         )
+        invalidate_all_reports()
         return {"new": new_row, "closed": closed, "before": before, "updated": None}
 
     async def delete(self, auth_user_id: int, rate_id: str) -> bool:
@@ -262,4 +267,5 @@ class HourlyRateRepository:
                 UserHourlyRateModel.id == rate_id,
             )
         )
+        invalidate_all_reports()
         return True
