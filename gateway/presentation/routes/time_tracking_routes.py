@@ -37,6 +37,10 @@ from presentation.schemas.time_manager_client_tasks import (
     TimeManagerClientTaskCreateBody,
     TimeManagerClientTaskPatchBody,
 )
+from presentation.schemas.time_tracking_teams import (
+    TimeTrackingTeamCreateBody,
+    TimeTrackingTeamPatchBody,
+)
 
 from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from presentation.routes.time_tracking_hourly_proxy import (
@@ -519,6 +523,43 @@ async def delete_hourly_rate(
 @router.get("/team-workload")
 async def proxy_team_workload(request: Request, _: dict = Depends(require_view_role)):
     return await _tt_json("GET", "/team-workload", timeout=20.0, params=request.query_params)
+
+
+@router.get("/teams")
+async def proxy_list_teams(
+    include_archived: bool = Query(False, alias="includeArchived"),
+    _: dict = Depends(require_view_role),
+):
+    qs = "?include_archived=true" if include_archived else ""
+    return await _tt_json("GET", f"/teams{qs}")
+
+
+@router.post("/teams", status_code=201)
+async def proxy_create_team(
+    body: TimeTrackingTeamCreateBody,
+    _: dict = Depends(require_manage_role),
+):
+    payload = _alias_free_payload(body, "team create")
+    return await _tt_json("POST", "/teams", json=payload)
+
+
+@router.patch("/teams/{team_id}")
+async def proxy_patch_team(
+    team_id: str,
+    body: TimeTrackingTeamPatchBody,
+    _: dict = Depends(require_manage_role),
+):
+    payload = _alias_free_payload(body, "team patch", exclude_unset=True)
+    return await _tt_json("PATCH", f"/teams/{team_id}", json=payload)
+
+
+@router.delete("/teams/{team_id}", status_code=204)
+async def proxy_delete_team(
+    team_id: str,
+    _: dict = Depends(require_manage_role),
+):
+    await _tt_json("DELETE", f"/teams/{team_id}")
+    return None
 
 
 @router.get("/users/{auth_user_id}/time-entries")

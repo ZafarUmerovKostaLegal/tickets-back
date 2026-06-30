@@ -866,3 +866,38 @@ class TimeManagerClientProjectCodeHintOut(BaseModel):
 
     last_code: Optional[str] = None
     suggested_next: Optional[str] = None
+
+
+class TimeTrackingTeamMemberPreviewOut(BaseModel):
+    auth_user_id: int
+    display_name: Optional[str] = None
+    email: str
+
+
+class TimeTrackingTeamOut(BaseModel):
+    id: str
+    name: str
+    partner_auth_user_id: int
+    partner_display_name: Optional[str] = None
+    member_auth_user_ids: list[int] = Field(default_factory=list)
+    members: list[TimeTrackingTeamMemberPreviewOut] = Field(default_factory=list)
+    is_archived: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class TimeTrackingTeamCreateBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., min_length=1, max_length=255)
+    partner_auth_user_id: int = Field(..., alias="partnerAuthUserId")
+    member_auth_user_ids: list[int] = Field(default_factory=list, alias="memberAuthUserIds")
+
+
+class TimeTrackingTeamPatchBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    partner_auth_user_id: Optional[int] = Field(None, alias="partnerAuthUserId")
+    member_auth_user_ids: Optional[list[int]] = Field(None, alias="memberAuthUserIds")
+    is_archived: Optional[bool] = Field(None, alias="isArchived")

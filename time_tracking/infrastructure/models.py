@@ -331,3 +331,42 @@ class TimeEntryEditUnlockModel(Base):
     granted_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TimeTrackingTeamModel(Base):
+
+
+    __tablename__ = "time_tracking_teams"
+    __table_args__ = (Index("ix_tt_teams_partner", "partner_auth_user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    partner_auth_user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("time_tracking_users.auth_user_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TimeTrackingTeamMemberModel(Base):
+
+
+    __tablename__ = "time_tracking_team_members"
+    __table_args__ = (
+        Index("ix_tt_team_members_team", "team_id"),
+        Index("ix_tt_team_members_user", "auth_user_id"),
+    )
+
+    team_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("time_tracking_teams.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    auth_user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("time_tracking_users.auth_user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )

@@ -231,6 +231,18 @@ def ensure_create_manual_tt_user_allowed(viewer: dict) -> None:
     )
 
 
+def ensure_can_list_teams(viewer: dict) -> None:
+    if _can_view_tt(viewer):
+        return
+    raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+
+def ensure_can_manage_teams(viewer: dict) -> None:
+    if _can_manage_tt(viewer):
+        return
+    raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+
 async def ensure_can_list_project_assignees(
     session: AsyncSession,
     viewer: dict,

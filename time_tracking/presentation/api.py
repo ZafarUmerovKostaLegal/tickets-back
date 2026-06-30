@@ -34,6 +34,7 @@ from infrastructure.schema_patches import (
     apply_client_projects_records_language_patch,
     apply_hourly_rates_applies_to_project_patch,
     apply_project_scoped_billable_rates_open_interval_patch,
+    apply_time_tracking_teams_schema_patch,
     apply_report_performance_indexes_patch,
 )
 from application.settings_sync import renormalize_time_entries_to_minute
@@ -53,6 +54,7 @@ from presentation.routes import (
     report_snapshots,
     reports,
     team_workload,
+    teams,
     time_entries,
     users,
     weekly_submissions,
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI):
         await apply_client_projects_records_language_patch(conn)
         await apply_hourly_rates_applies_to_project_patch(conn)
         await apply_project_scoped_billable_rates_open_interval_patch(conn)
+        await apply_time_tracking_teams_schema_patch(conn)
         await apply_report_performance_indexes_patch(conn)
     async with async_session_factory() as session:
         await seed_default_tasks_for_all_projects_missing_tasks(session)
@@ -122,6 +125,7 @@ app.include_router(client_projects.router, dependencies=_tt_auth)
 app.include_router(client_contacts.router, dependencies=_tt_auth)
 app.include_router(clients.router, dependencies=_tt_auth)
 app.include_router(team_workload.router, dependencies=_tt_auth)
+app.include_router(teams.router, dependencies=_tt_auth)
 app.include_router(hourly_rates.router, dependencies=_tt_auth)
 app.include_router(time_entries.router, dependencies=_tt_auth)
 app.include_router(weekly_submissions.router, dependencies=_tt_auth)

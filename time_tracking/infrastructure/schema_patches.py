@@ -909,6 +909,70 @@ async def apply_project_scoped_billable_rates_open_interval_patch(conn: AsyncCon
     )
 
 
+async def apply_time_tracking_teams_schema_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_teams (
+                id VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                partner_auth_user_id INTEGER NOT NULL
+                    REFERENCES time_tracking_users (auth_user_id) ON DELETE RESTRICT,
+                is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_teams_partner
+                ON time_tracking_teams (partner_auth_user_id)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_tt_teams_active_name
+                ON time_tracking_teams (lower(trim(name)))
+                WHERE NOT is_archived
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_team_members (
+                team_id VARCHAR(36) NOT NULL
+                    REFERENCES time_tracking_teams (id) ON DELETE CASCADE,
+                auth_user_id INTEGER NOT NULL
+                    REFERENCES time_tracking_users (auth_user_id) ON DELETE CASCADE,
+                PRIMARY KEY (team_id, auth_user_id)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_team_members_team
+                ON time_tracking_team_members (team_id)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_team_members_user
+                ON time_tracking_team_members (auth_user_id)
+            """
+        )
+    )
+
+
 async def apply_report_performance_indexes_patch(conn: AsyncConnection) -> None:
     """Add composite indexes that speed up the time-report queries."""
     await conn.execute(
