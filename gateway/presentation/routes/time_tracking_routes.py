@@ -562,6 +562,41 @@ async def proxy_delete_team(
     return None
 
 
+@router.get("/statistics/labor/meta")
+async def proxy_labor_statistics_meta(
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json("GET", "/statistics/labor/meta")
+
+
+@router.get("/statistics/labor")
+async def proxy_labor_statistics(
+    request: Request,
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json("GET", "/statistics/labor", params=request.query_params, timeout=60.0)
+
+
+@router.get("/statistics/labor/export")
+async def proxy_labor_statistics_export(
+    request: Request,
+    _: dict = Depends(require_reports_view_role),
+):
+    r = await _tt_request(
+        "GET",
+        "/statistics/labor/export",
+        params=request.query_params,
+        timeout=120.0,
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    out_headers: dict[str, str] = {}
+    if ct := r.headers.get("content-type"):
+        out_headers["Content-Type"] = ct
+    if cd := r.headers.get("content-disposition"):
+        out_headers["Content-Disposition"] = cd
+    return Response(content=r.content, status_code=r.status_code, headers=out_headers)
+
+
 @router.get("/users/{auth_user_id}/time-entries")
 async def proxy_list_time_entries(
     auth_user_id: int,

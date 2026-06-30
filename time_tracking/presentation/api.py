@@ -41,6 +41,7 @@ from application.settings_sync import renormalize_time_entries_to_minute
 from presentation.deps import require_bearer_user, require_tt_reports_viewer
 from presentation.exception_handlers import register_exception_handlers
 from presentation.routes import (
+    labor_statistics,
     invoices,
     client_contacts,
     client_expense_categories,
@@ -132,6 +133,7 @@ app.include_router(weekly_submissions.router, dependencies=_tt_auth)
 app.include_router(project_access.router, dependencies=_tt_auth)
 app.include_router(users.router, dependencies=_tt_auth)
 app.include_router(reports.router, dependencies=_tt_reports_auth)
+app.include_router(labor_statistics.router, dependencies=_tt_reports_auth)
 app.include_router(report_partner_confirmations.router, dependencies=_tt_reports_auth)
 app.include_router(report_snapshots.router, dependencies=_tt_reports_auth)
 app.include_router(invoices.router, dependencies=_tt_auth)
