@@ -5,6 +5,10 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.project_partner_requirement import (
+    job_title_indicates_partner,
+    org_role_indicates_partner,
+)
 from backend_common.tt_position_access import user_has_tt_full_ops_no_reports
 from infrastructure.repositories import (
     ClientProjectRepository,
@@ -32,8 +36,12 @@ async def viewer_can_bypass_work_week_submission_lock(
 
     if _can_manage_tt(viewer):
         return True
+    if org_role_indicates_partner(_org_role(viewer)):
+        return True
     ur = TimeTrackingUserRepository(session)
     row = await ur.get_by_auth_user_id(_viewer_id(viewer))
+    if row and job_title_indicates_partner(row.position):
+        return True
     return bool(row and (row.role or "").strip() == "manager")
 
 
