@@ -39,5 +39,13 @@ def test_normalize_doc_type_default_letter():
     assert normalize_doc_type(None) == "letter"
 
 
+def test_is_partner_org_role_variants():
+    from application.correspondence_service import is_partner_org_role
+
+    assert is_partner_org_role("Партнер") is True
+    assert is_partner_org_role("Партнёр") is True
+    assert is_partner_org_role("Сотрудник") is False
+
+
 def test_sniff_jpeg():
     assert sniff_mime(b"\xff\xd8\xff\xe0", None) == "image/jpeg"

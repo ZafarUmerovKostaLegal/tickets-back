@@ -22,8 +22,15 @@ WORK_STATUS_GROUP = frozenset({"progress", "approval"})
 REGISTRY_PREFIX = {"incoming": "ВХ", "outgoing": "ИСХ"}
 
 
+def _normalize_role_key(role: str | None) -> str:
+    return (role or "").strip().casefold().replace("ё", "е")
+
+
+_PARTNER_ROLE_KEYS = frozenset({"партнер"})
+
+
 def is_partner_org_role(role: str | None) -> bool:
-    return (role or "").strip() in ("Партнер", "Партнёр")
+    return _normalize_role_key(role) in _PARTNER_ROLE_KEYS
 
 
 def normalize_doc_type(value: str | None) -> str:
