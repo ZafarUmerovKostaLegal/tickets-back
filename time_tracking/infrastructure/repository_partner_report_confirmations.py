@@ -315,3 +315,43 @@ class PartnerReportConfirmationRepository:
                 out.append(m)
                 continue
         return out
+
+    async def list_visible_for(
+        self,
+        viewer_id: int,
+        *,
+        partner_project_ids: set[str],
+        statuses: set[str],
+        date_from: date | None = None,
+        date_to: date | None = None,
+        before: date | None = None,
+    ) -> list[ReportPartnerConfirmationRequestModel]:
+        """Список подтверждений для вкладки «Подтверждённые партнёром».
+
+        В отличие от list_confirmed_visible_for, может включать pending_partners,
+        чтобы отчёт был виден сразу после первой подписи, но с подсказкой, кто
+        ещё не подтвердил.
+        """
+        st = {str(x) for x in (statuses or set()) if str(x).strip()}
+        if not st:
+            return []
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(ReportPartnerConfirmationRequestModel.status.in_(st))
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.updated_at.desc())
+        )
+        q = self._confirmed_period_filters(
+            q, date_from=date_from, date_to=date_to, before=before
+        )
+        rows = list((await self._s.execute(q)).scalars().all())
+        vid = int(viewer_id)
+        out: list[ReportPartnerConfirmationRequestModel] = []
+        for m in rows:
+            if m.submitted_by_auth_user_id == vid:
+                out.append(m)
+                continue
+            if m.project_id in partner_project_ids:
+                out.append(m)
+                continue
+        return out
