@@ -6,7 +6,7 @@ from service_path import ensure_service_in_path
 
 ensure_service_in_path("time_tracking")
 
-from application.project_billable_rate_sync import (  # noqa: E402
+from application.project_billable_rate_sync import (              
     _shared_billable_config_changed,
     patch_only_budget_fields,
     project_uses_shared_billable,

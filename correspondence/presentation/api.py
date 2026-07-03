@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import Base, engine
-from infrastructure import models  # noqa: F401
+from infrastructure import models              
 from presentation.routes import correspondence, health
 
 _log = logging.getLogger("correspondence.startup")

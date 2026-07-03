@@ -310,8 +310,8 @@ async def list_confirmed_partner_confirmations(
                 session, viewer, authorization=authorization
             )
         )
-        # Показываем также pending_partners, чтобы отчёт появился в списке
-        # сразу после первой подписи (UI должен подсветить, кто ещё не подписал).
+                                                                          
+                                                                                 
         rows = await conf_repo.list_visible_for(
             vid,
             partner_project_ids=partner_projects,

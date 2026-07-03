@@ -4,8 +4,8 @@ from typing import Any
 
 from backend_common.positions import normalize_position
 
-# Должности с полным доступом к операциям TT (проекты, пользователи, ставки и т.д.),
-# но без просмотра отчётности (/reports/*).
+                                                                                    
+                                           
 TT_FULL_OPS_NO_REPORTS_POSITIONS: frozenset[str] = frozenset(
     {
         "business development manager",

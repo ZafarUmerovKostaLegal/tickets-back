@@ -153,7 +153,7 @@ async def get_ticket_attachment(filename: str):
 
     settings = get_settings()
     base_dir = Path(settings.media_path) / "tickets"
-    # Защита от выхода за пределы каталога вложений.
+                                                    
     safe_name = Path(filename).name
     path = (base_dir / safe_name).resolve()
     if not str(path).startswith(str(base_dir.resolve())):

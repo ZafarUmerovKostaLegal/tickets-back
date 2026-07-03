@@ -11,7 +11,7 @@ from infrastructure.database import Base
 BOARD_VIS_PERSONAL = "personal"
 BOARD_VIS_SHARED = "shared"
 
-# Заголовки по умолчанию: первая автосозданная доска vs явно созданная через POST /boards
+                                                                                         
 TODO_BOARD_TITLE_PRIMARY_DEFAULT = "Моя доска"
 TODO_BOARD_TITLE_NEW_DEFAULT = "Новая доска"
 BOARD_ROLES = frozenset({"owner", "editor", "viewer"})

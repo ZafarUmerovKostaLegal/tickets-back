@@ -30,7 +30,7 @@ def _is_database_missing_error(exc: BaseException) -> bool:
 
 
 _UPGRADE_SQL = (
-    # schedule_employees columns added in 2026
+                                              
     "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS auth_user_id INTEGER",
     "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS email VARCHAR(320)",
     "ALTER TABLE schedule_employees ALTER COLUMN excel_row_no DROP NOT NULL",
@@ -45,7 +45,7 @@ _UPGRADE_SQL = (
     END $$""",
     "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS leave_request_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_absence_days_leave_request_id ON absence_days(leave_request_id)",
-    # manual schedule entries + supporting documents (основания), added 2026
+                                                                            
     "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS manual_entry_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_absence_days_manual_entry_id ON absence_days(manual_entry_id)",
 )
@@ -60,7 +60,7 @@ async def _apply_upgrade_sql() -> None:
         for stmt in _UPGRADE_SQL:
             try:
                 await conn.execute(text(stmt))
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:                                
                 _log.warning("upgrade step failed (%s): %s", stmt[:80], exc)
 
 

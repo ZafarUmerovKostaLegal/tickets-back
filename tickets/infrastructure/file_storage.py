@@ -31,8 +31,8 @@ def _safe_base(filename: str) -> str:
 def save_attachment(filename: str, content: bytes) -> str:
     _validate_attachment(filename, content)
     upload_dir = get_tickets_upload_dir()
-    # Имя файла сохраняем «человекочитаемым» (UUID-префикс + исходное имя),
-    # чтобы при скачивании пользователь получал распознаваемый файл с расширением.
+                                                                           
+                                                                                  
     unique_name = f"{uuid.uuid4().hex}_{_safe_base(filename)}"
     path = upload_dir / unique_name
     path.write_bytes(content)

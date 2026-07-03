@@ -41,7 +41,7 @@ def _attach_budget_compat_fields(
     row["budget_remaining_amount"] = remaining_value
     row["progress_percent"] = progress_percent
 
-    # camelCase compatibility for frontend mappers
+                                                  
     row["budgetAmount"] = budget_value
     row["budgetSpent"] = spent_value
     row["budgetRemaining"] = remaining_value

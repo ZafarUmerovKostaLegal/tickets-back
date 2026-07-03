@@ -725,7 +725,7 @@ def invoice_to_dict(
         "totalAmount": float(inv.total_amount),
         "amountPaid": float(paid_display),
         "balanceDue": float(balance_due_val),
-        # Дубликаты snake_case и effective_status — контракт фронта (BACKEND_INVOICE_PAYMENTS.md)
+                                                                                                 
         "total_amount": float(inv.total_amount),
         "amount_paid": float(paid_display),
         "balance_due": float(balance_due_val),

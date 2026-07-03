@@ -13,11 +13,11 @@ class KindLegendEntry(BaseModel):
     color_text_hex: str = Field(description="Цвет текста на плашке для контраста")
 
 
-# Категории, которые сотрудник может запросить заявкой (с подтверждением партнёра).
+                                                                                   
 REQUESTABLE_KIND_CODES: tuple[int, ...] = (1, 3, 5)
 
-# Категории, для которых при ручном внесении в график обязателен документ-основание.
-# По умолчанию — все категории (для каждой нужно приложить основание/доп. документы).
+                                                                                    
+                                                                                     
 DOCUMENT_REQUIRED_KIND_CODES: tuple[int, ...] = (1, 2, 3, 4, 5)
 
 KIND_LEGEND_ENTRIES: list[KindLegendEntry] = [

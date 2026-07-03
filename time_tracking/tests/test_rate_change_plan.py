@@ -18,7 +18,7 @@ class _Rate:
 
 
 def test_first_project_override_snapshots_global_before() -> None:
-    # Пользователь имел только общую ставку 100; вводим проектную смену с 2024-01-01.
+                                                                                     
     global_rates = [_Rate(100, "USD", None, None, rid="g1")]
     project_rates: list = []
     plan = build_rate_change_plan(project_rates, global_rates, date(2024, 1, 1))
@@ -53,9 +53,9 @@ def test_change_exactly_on_period_start_updates_in_place() -> None:
 
 
 def test_pricing_after_first_override_old_before_new_after() -> None:
-    # Эмулируем результат операции для первого проектного переопределения.
+                                                                          
     rates = [
-        _Rate(100, "USD", None, None, rid="g1"),  # общая (исторически)
+        _Rate(100, "USD", None, None, rid="g1"),                       
         _Rate(100, "USD", None, date(2023, 12, 31), applies_to_project_id="proj-A", rid="b1"),
         _Rate(140, "USD", date(2024, 1, 1), None, applies_to_project_id="proj-A", rid="n1"),
     ]

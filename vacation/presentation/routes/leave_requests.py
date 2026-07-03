@@ -255,8 +255,8 @@ async def _load_request(session: AsyncSession, request_id: int) -> LeaveRequest:
     return row
 
 
-# Публичный (без JWT) email action — выполняется по подписанному токену из письма.
-# Должен быть ВЫШЕ /leave-requests/{request_id}, чтобы FastAPI не парсил 'email-action' как int.
+                                                                                  
+                                                                                                
 @router.get("/leave-requests/email-action")
 async def email_action(
     token: str = Query(...),

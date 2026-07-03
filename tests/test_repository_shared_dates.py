@@ -6,7 +6,7 @@ from service_path import ensure_service_in_path
 
 ensure_service_in_path("time_tracking")
 
-from infrastructure.repository_shared import _date_none  # noqa: E402
+from infrastructure.repository_shared import _date_none              
 
 
 def test_date_none_from_iso_string():

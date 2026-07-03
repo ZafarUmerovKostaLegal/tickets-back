@@ -23,8 +23,8 @@ class _Rate:
 
 def test_project_rate_overrides_global() -> None:
     rates = [
-        _Rate(100, "EUR", None, None),  # global
-        _Rate(180, "EUR", None, None, applies_to_project_id="proj-A"),  # per-project
+        _Rate(100, "EUR", None, None),          
+        _Rate(180, "EUR", None, None, applies_to_project_id="proj-A"),               
     ]
     scoped = billable_scoped_user_rates(rates, "EUR", "proj-A")
     assert len(scoped) == 1

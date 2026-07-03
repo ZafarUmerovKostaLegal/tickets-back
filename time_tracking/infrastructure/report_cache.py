@@ -21,9 +21,9 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-#  Generic TTL store
-# --------------------------------------------------------------------------- #
+                                                                               
+                    
+                                                                               
 
 class _TTLStore:
     """Key → (value, expiry_ts) mapping with automatic eviction on get."""
@@ -66,17 +66,17 @@ class _TTLStore:
         return len(self._data)
 
 
-# --------------------------------------------------------------------------- #
-#  Module-level singletons
-# --------------------------------------------------------------------------- #
+                                                                               
+                          
+                                                                               
 
-DIM_CACHE   = _TTLStore("dim",    ttl=60.0)   # users/projects/clients/tasks maps
-REPORT_CACHE = _TTLStore("report", ttl=90.0)  # full report payloads
+DIM_CACHE   = _TTLStore("dim",    ttl=60.0)                                      
+REPORT_CACHE = _TTLStore("report", ttl=90.0)                        
 
 
-# --------------------------------------------------------------------------- #
-#  Dimension cache helpers
-# --------------------------------------------------------------------------- #
+                                                                               
+                          
+                                                                               
 
 def get_dim(key: str) -> Any:
     return DIM_CACHE.get(key)
@@ -95,14 +95,14 @@ def invalidate_all_dims() -> None:
     DIM_CACHE.clear()
 
 
-# --------------------------------------------------------------------------- #
-#  Report cache helpers
-# --------------------------------------------------------------------------- #
+                                                                               
+                       
+                                                                               
 
 def _report_key(params: dict[str, Any]) -> str:
     """Stable hash over report parameters."""
     canonical = json.dumps(params, sort_keys=True, default=str)
-    return hashlib.sha1(canonical.encode()).hexdigest()  # noqa: S324
+    return hashlib.sha1(canonical.encode()).hexdigest()              
 
 
 def get_report(params: dict[str, Any]) -> Any:

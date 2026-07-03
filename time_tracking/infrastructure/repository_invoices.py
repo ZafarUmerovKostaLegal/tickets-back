@@ -235,8 +235,8 @@ class InvoiceRepository:
             if old_paid != new_paid or old_status != inv.status:
                 changed = True
         if changed:
-            # Один commit на запрос — через контекст Depends(get_session); внутренний commit()
-            # ломал транзакцию и мог помешать сохранению оплат/актуализации строк в том же сервисе.
+                                                                                              
+                                                                                                   
             await self._s.flush()
 
     async def reconcile_paid_fields(self, inv: InvoiceModel) -> None:

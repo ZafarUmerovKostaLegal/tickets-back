@@ -31,7 +31,7 @@ async def send_system_notification(
         "notification_type": notification_type,
     }
     if payload:
-        # Current notifications schema has no JSON metadata column yet; keep payload in description-safe text only later if needed.
+                                                                                                                                   
         body["payload"] = payload
 
     try:

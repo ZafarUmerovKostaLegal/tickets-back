@@ -37,8 +37,8 @@ async def is_work_date_locked_for_user(
     work_w0, _work_w1 = work_week_start_end_inclusive(work_date)
     current_w0, _current_w1 = work_week_start_end_inclusive(today)
 
-    # Текущая рабочая неделя (сб–пт): правки до автоматического дедлайна (след. пн 12:00),
-    # даже если сотрудник уже нажал «Отправить на утверждение».
+                                                                                          
+                                                               
     if work_w0 == current_w0:
         return is_work_week_edit_deadline_passed(work_date, submit_tz=submit_tz)
 

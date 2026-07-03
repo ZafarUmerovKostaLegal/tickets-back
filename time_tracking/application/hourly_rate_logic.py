@@ -66,8 +66,8 @@ def pick_rate_for_date(
     if len(candidates) == 1:
         return candidates[0]
 
-    # Несколько интервалов на одну дату: действует ставка с самым поздним valid_from
-    # (смена тарифа), затем стабильный tie-break по id.
+                                                                                    
+                                                       
     def _key(r: Any) -> tuple[date, str]:
         vf = getattr(r, valid_from_attr, None)
         start = effective_start(vf)

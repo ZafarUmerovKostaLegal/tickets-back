@@ -17,10 +17,10 @@ from infrastructure.models import (
     ScheduleEmployee,
 )
 
-MAX_DOCUMENT_BYTES = 25 * 1024 * 1024  # 25 MB на файл
+MAX_DOCUMENT_BYTES = 25 * 1024 * 1024                 
 MAX_DOCUMENTS_PER_ENTRY = 20
 
-# Разрешённые расширения для документов-оснований.
+                                                  
 ALLOWED_DOCUMENT_SUFFIXES = frozenset(
     {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".doc", ".docx", ".xls", ".xlsx", ".txt"}
 )
@@ -159,7 +159,7 @@ async def create_manual_entry(
         updated_at=None,
     )
     session.add(entry)
-    await session.flush()  # нужен entry.id для путей к файлам
+    await session.flush()                                     
 
     for f in files:
         storage_key = _save_document_bytes(entry, f.filename, f.content)
@@ -187,7 +187,7 @@ async def _cleanup_entry_files(entry: ManualAbsenceEntry) -> None:
         target = (base / (doc.storage_key or "")).resolve()
         if str(target).startswith(str(base)) and target.is_file():
             target.unlink(missing_ok=True)
-    # удалить пустую директорию записи, если осталась
+                                                     
     try:
         year = entry.date_from.year
         subdir = (base / "vacation_absence_documents" / str(year) / str(entry.id)).resolve()
@@ -199,7 +199,7 @@ async def _cleanup_entry_files(entry: ManualAbsenceEntry) -> None:
 
 async def delete_manual_entry(session: AsyncSession, entry: ManualAbsenceEntry) -> None:
     await _cleanup_entry_files(entry)
-    # absence_days привязаны через FK ON DELETE CASCADE, но удалим явно для предсказуемости
+                                                                                           
     await session.execute(
         delete(AbsenceDay).where(AbsenceDay.manual_entry_id == entry.id)
     )

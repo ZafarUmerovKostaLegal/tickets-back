@@ -9,7 +9,7 @@ class LeavePdfCopy:
     body: str
 
 
-# Тексты по образцу «ОТПУСК.doc» — меняются только подставляемые поля.
+                                                                      
 KIND_PDF_COPY: dict[int, LeavePdfCopy] = {
     1: LeavePdfCopy(
         subject="О предоставлении ежегодного отпуска.",

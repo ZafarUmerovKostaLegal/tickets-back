@@ -32,9 +32,9 @@ async def vacation_access(request: Request, authorization: Optional[str] = Heade
     role = (user.get("role") or "").strip()
     method = request.method.upper()
 
-    # Эндпоинты подачи заявок / выбора партнёра / справочника видов отсутствия —
-    # доступны любому авторизованному сотруднику. Сам vacation-сервис проверяет,
-    # что менять/решать заявку может только её владелец или выбранный партнёр.
+                                                                                
+                                                                                
+                                                                              
     raw_path = request.url.path
     rel_path = raw_path.split("/api/v1/vacations/", 1)[-1] if "/api/v1/vacations/" in raw_path else raw_path
     if _is_self_service_path(rel_path):

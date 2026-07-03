@@ -654,7 +654,7 @@ class KanbanRepository:
                 TodoBoardMemberModel.user_id == member_user_id,
             )
         )
-        return r.rowcount > 0  # type: ignore[union-attr,no-any-return]
+        return r.rowcount > 0                                          
 
     async def patch_board_member_role(
         self,

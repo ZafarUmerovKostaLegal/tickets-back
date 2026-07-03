@@ -100,7 +100,7 @@ def test_needs_billable_rate_only_when_billable_hours() -> None:
 
 
 def test_parse_money_rate_handles_thousands_separator() -> None:
-    # UZS-отчёты пишут ставку как "2,300,000.0"
+                                               
     assert _parse_money_rate("2,300,000.0") == Decimal("2300000.0000")
     assert _parse_money_rate("120.0") == Decimal("120.0000")
     assert _parse_money_rate("") is None

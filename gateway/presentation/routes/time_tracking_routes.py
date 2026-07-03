@@ -299,7 +299,7 @@ async def _tt_managed_scope_user_ids(manager_auth_user_id: int) -> set[int]:
 
 
 async def require_view_time_tracking_user_directory(user: dict = Depends(get_current_user)):
-    # Any authenticated user can open time-entry UI.
+                                                    
     return user
 
 
@@ -1366,8 +1366,8 @@ async def reports_time(
     user: dict = Depends(require_reports_view_role),
 ):
     params = dict(request.query_params)
-    # Frontend screens historically aggregated only current page.
-    # Request larger pages by default to reduce undercount risk.
+                                                                 
+                                                                
     try:
         per_page = int(str(params.get("per_page") or params.get("perPage") or "0"))
     except ValueError:
@@ -1384,7 +1384,7 @@ async def reports_time(
     totals = meta.get("totals_all_groups")
     if not isinstance(totals, dict):
         return payload
-    # Additive compatibility fields for older frontend code.
+                                                            
     payload.setdefault("totals", totals)
     payload["summary"] = {
         "total_hours": totals.get("total_hours", 0),

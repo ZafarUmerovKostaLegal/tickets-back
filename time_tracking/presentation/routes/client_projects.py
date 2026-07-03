@@ -778,8 +778,8 @@ async def create_client_project(
                             valid_to=None,
                         )
                         applied_project_scoped_rate = True
-                # If we just upserted a positive project-scoped rate in this request,
-                # skip legacy validation to avoid false negatives in create flow.
+                                                                                     
+                                                                                 
                 should_validate_rates = project_uses_shared_billable(row) or (
                     not applied_project_scoped_rate
                     and (

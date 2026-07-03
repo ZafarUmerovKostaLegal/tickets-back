@@ -241,7 +241,7 @@ async def add_documents_endpoint(
     if not uploads:
         raise HTTPException(status_code=400, detail="Нет файлов для загрузки")
 
-    from application.manual_absence_service import (  # local import to reuse validation/storage
+    from application.manual_absence_service import (                                            
         MAX_DOCUMENTS_PER_ENTRY,
         _save_document_bytes,
         _validate_file,

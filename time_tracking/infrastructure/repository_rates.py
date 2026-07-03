@@ -187,8 +187,8 @@ class HourlyRateRepository:
         existing = await self.list_by_user_and_kind(auth_user_id, rate_kind)
         same_cur = [r for r in existing if _rate_currency_key(r) == cur_norm]
         scope_rates = [r for r in same_cur if _applies_scope_match(r, scope)]
-        # Для проектной смены — глобальные ставки нужны только для снимка «до даты»
-        # при первом проектном переопределении.
+                                                                                   
+                                               
         global_rates = (
             [r for r in same_cur if _applies_scope_match(r, None)]
             if scope is not None

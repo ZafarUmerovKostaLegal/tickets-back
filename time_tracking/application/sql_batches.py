@@ -9,7 +9,7 @@ from typing import Iterator, TypeVar
 
 T = TypeVar("T")
 
-# Запас под другие параметры запроса (даты, статусы и т.д.).
+                                                            
 DEFAULT_SQL_IN_BATCH_SIZE = 10_000
 
 

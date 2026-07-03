@@ -5,7 +5,7 @@ from service_path import ensure_service_in_path
 
 ensure_service_in_path("time_tracking")
 
-from application.partner_pending_list_scope import (  # noqa: E402
+from application.partner_pending_list_scope import (              
     normalize_partner_pending_scope,
     pending_confirmation_visible_for_user_mine,
     viewer_can_view_all_pending_partner_confirmations,

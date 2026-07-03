@@ -20,4 +20,4 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
-from presentation.api import app  # noqa: E402
+from presentation.api import app              

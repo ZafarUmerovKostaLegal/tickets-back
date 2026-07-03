@@ -396,8 +396,8 @@ def _harvest_file_candidates(preferred: Path) -> list[Path]:
             seen.add(key)
             out.append(p)
 
-    # Если --file не передан (preferred == зашитый дефолт), приоритет — newreport.csv
-    # в папке сервиса. Если --file указан явно и существует, он будет первым.
+                                                                                     
+                                                                             
     try:
         is_default = preferred.resolve() == DEFAULT_HARVEST_FILE.resolve()
     except OSError:
@@ -411,7 +411,7 @@ def _harvest_file_candidates(preferred: Path) -> list[Path]:
             if path.is_file():
                 add(path)
 
-    # Авто-поиск: newreport*.csv / harvest_time_report*.csv в папке сервиса и типичных местах.
+                                                                                              
     search_dirs = [
         TT_ROOT,
         Path("/tmp"),
@@ -687,8 +687,8 @@ def _quantize_harvest_hours(h: Decimal) -> Decimal:
 
 
 def _clean_numeric_text(raw: object) -> str:
-    # Harvest экспортирует числа с разделителем тысяч запятой и точкой-десятичным
-    # (например "2,300,000.0" для UZS). Убираем запятые-разделители тысяч.
+                                                                                 
+                                                                          
     return str(raw if raw is not None else "").strip().replace(",", "")
 
 
@@ -1442,11 +1442,11 @@ async def _run(
         await engine.dispose()
         return 0
 
-    # В пакетном режиме (--batch-size) пропускаем уже завершённые проекты (резюм).
-    # В обычном диф-режиме обрабатываем ВСЕ проекты: контентный диф сам пропустит
-    # уже существующие строки и добавит недостающие. Это гарантирует, что ни одно
-    # расхождение по часам не будет пропущено (агрегатная сверка discover могла
-    # счесть проект «совпавшим», не проверяя отдельные строки).
+                                                                                  
+                                                                                 
+                                                                                 
+                                                                               
+                                                               
     if batch_size > 0:
         pending_project_pairs = [
             pair
@@ -1768,10 +1768,10 @@ async def _run(
         user_rows = scoped_rows if scoped_rows is not None else [
             r for r in rows if r.harvest_user_key == harvest_user_key
         ]
-        # Ставки берём по строкам ИМЕННО этого проекта (scoped_rows) и пишем их
-        # с привязкой к проекту (applies_to_project_id=project_id). Так сумма
-        # совпадает с Harvest для каждого проекта, даже если у сотрудника на
-        # разных проектах разные ставки. Глобальные/ручные ставки НЕ трогаем.
+                                                                               
+                                                                             
+                                                                            
+                                                                             
         billable_intervals = _harvest_user_rate_intervals(user_rows)
         cost_intervals = _harvest_user_rate_intervals(
             user_rows, rate_attr="cost_rate", billable_only=False
@@ -1783,8 +1783,8 @@ async def _run(
         display = _harvest_display_name(sample_row)
 
         for project_id in project_ids:
-            # Перезаписываем только harvest project-scoped ставки этого проекта
-            # (идемпотентно для повторных прогонов); глобальные не удаляем.
+                                                                               
+                                                                           
             await _delete_user_project_scoped_billable_rates(session, auth_user_id, project_id)
             for row in await hr.list_by_user_and_kind(auth_user_id, "cost"):
                 if getattr(row, "applies_to_project_id", None) == project_id:
@@ -2191,8 +2191,8 @@ async def _run(
                 )
         return out
 
-    # Сверка учитывает ВСЕ harvest-записи проекта (и старые из прошлых файлов,
-    # и новые контентные ref), т.к. диф добавляет недостающее к уже имеющемуся.
+                                                                              
+                                                                               
     harvest_file_prefix = "harvest-import:"
 
     async def aggregate_harvest_file_hours_for_project(
@@ -2433,11 +2433,11 @@ async def _run(
                         )
                 await session.flush()
 
-            # Режим дифа (по умолчанию, без --replace): существующие записи НЕ удаляем
-            # и НЕ меняем. Дубли исключаются мультимножественным дифом по контентному
-            # ключу (дата+пользователь+проект+задача+часы+billable+заметка), который не
-            # зависит от имени файла отчёта и номера строки. Удаление доступно только
-            # под явным --replace.
+                                                                                      
+                                                                                     
+                                                                                       
+                                                                                     
+                                  
             if execute and not replace and batch_size <= 0:
                 print(
                     "Режим дифа: существующие записи не трогаем; добавим только "
@@ -2593,7 +2593,7 @@ async def _run(
                         f"клиентов {synced_clients}, проектов {synced_projects}"
                     )
 
-            # Сначала гарантируем TT-пользователя для каждого имени из Harvest (даже без регистрации в auth).
+                                                                                                             
             pending_set = set(pending_project_pairs)
             user_setup_rows = [
                 r
@@ -2692,12 +2692,12 @@ async def _run(
                             print(
                                 f"Удалены старые записи: {client_name} / {project_name} — {deleted} шт."
                             )
-                    # Без --replace ничего не удаляем: диф по контентному ключу сам
-                    # пропустит уже существующие записи и добавит только отсутствующие.
+                                                                                   
+                                                                                       
                 await session.flush()
 
-            # Контентный диф: подсчитываем уже существующие в БД harvest-записи
-            # (по контентному ключу). Добавлять будем только недостающие строки CSV.
+                                                                               
+                                                                                    
             db_content_counts: Counter = Counter()
             consumed_content_counts: Counter = Counter()
             if not team_only:
@@ -2915,9 +2915,9 @@ async def _run(
 
                     description = hr.notes
                     if not team_only:
-                        # Мультимножественный диф: первые N одинаковых строк (N — сколько
-                        # уже есть в БД) считаем существующими и пропускаем; легитимные
-                        # повторы сверх этого числа добавляем. Существующее не трогаем.
+                                                                                         
+                                                                                       
+                                                                                       
                         content_key = _entry_content_key(
                             work_date=hr.work_date,
                             auth_user_id=auth_user_id,
@@ -3444,10 +3444,10 @@ async def _run(
                     f"(billable {expected_billable_total}, non-billable {expected_non_billable_total}), "
                     f"БД {db_hours_total} (billable {db_billable_total}, non-billable {db_non_billable_total})"
                 )
-                # Жёсткая сверка «БД == файл 1:1» имеет смысл только в режиме --replace
-                # (полная перезаливка проекта). В диф-режиме в БД легитимно может быть
-                # больше: ручные записи, записи из прежних импортов, проекты, чья полная
-                # история шире присланного отчёта. Поэтому здесь — предупреждения, без отката.
+                                                                                       
+                                                                                      
+                                                                                        
+                                                                                              
                 strict = replace
                 if not hours_ok or db_hours_total != expected_hours_total:
                     if strict:
@@ -3643,8 +3643,8 @@ def main() -> int:
 
     harvest_file = _resolve_harvest_file(args.file)
     if harvest_file is not None:
-        # Если в папках найдено несколько отчётов Harvest — предупреждаем, какой
-        # выбран (самый свежий по дате изменения), чтобы не залить устаревший файл.
+                                                                                
+                                                                                   
         all_found: list[Path] = []
         seen_found: set[str] = set()
         for directory in (TT_ROOT, Path("/tmp"), REPO_ROOT / "timetrackinck", Path.cwd()):
