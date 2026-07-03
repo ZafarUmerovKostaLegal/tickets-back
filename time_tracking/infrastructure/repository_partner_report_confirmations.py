@@ -268,6 +268,15 @@ class PartnerReportConfirmationRepository:
             )
         return list((await self._s.execute(q)).scalars().all())
 
+    async def list_all_pending(self) -> list[ReportPartnerConfirmationRequestModel]:
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(ReportPartnerConfirmationRequestModel.status != _STATUS_CONFIRMED)
+            .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
+            .order_by(ReportPartnerConfirmationRequestModel.created_at.desc())
+        )
+        return list((await self._s.execute(q)).scalars().all())
+
     async def list_pending_for_partner(
         self, partner_auth_user_id: int
     ) -> list[ReportPartnerConfirmationRequestModel]:

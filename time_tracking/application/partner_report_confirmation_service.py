@@ -7,6 +7,11 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.project_partner_users import list_partner_auth_user_ids_for_project
+from application.partner_pending_list_scope import (
+    normalize_partner_pending_scope,
+    pending_confirmation_visible_for_user_mine,
+    viewer_can_view_all_pending_partner_confirmations,
+)
 from application.report_viewer_scope import (
     list_partner_project_ids_for_viewer,
     viewer_can_see_all_partner_confirmations,
@@ -228,8 +233,13 @@ async def confirm_partner_report_confirmation(
     )
     if not partners:
         raise HTTPException(status_code=400, detail="По проекту не найдены партнёры")
-    if vid not in partners:
-        raise HTTPException(status_code=403, detail="Подтверждать могут только партнёры проекта")
+    signed_ids = set(await conf_repo.list_signature_partner_ids(request_id))
+    pending_ids = [p for p in partners if p not in signed_ids]
+    if vid not in pending_ids:
+        raise HTTPException(
+            status_code=403,
+            detail="Подтверждать могут только партнёры, ожидающие подписи по этой заявке",
+        )
     if not await conf_repo.partner_has_signed(request_id, vid):
         await conf_repo.add_signature(request_id, vid)
         await session.flush()
@@ -251,18 +261,27 @@ async def list_pending_partner_confirmations(
     viewer: dict,
     *,
     authorization: str | None,
+    scope: str | None = None,
 ) -> list[dict]:
     vid = _viewer_id(viewer)
+    mode = normalize_partner_pending_scope(scope)
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
-    candidates = await conf_repo.list_pending_for_partner(vid)
+    candidates = await conf_repo.list_all_pending()
+
+    if mode == "all" and not viewer_can_view_all_pending_partner_confirmations(viewer):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     out: list[dict] = []
     for m in candidates:
         partners = await list_partner_auth_user_ids_for_project(
             session, access_repo, m.project_id, authorization=authorization
         )
-        if vid not in partners:
-            continue
+        if mode == "mine":
+            if not pending_confirmation_visible_for_user_mine(
+                m, required_partners=partners, viewer_id=vid
+            ):
+                continue
         out.append(_request_to_out(m, partners))
     return out
 

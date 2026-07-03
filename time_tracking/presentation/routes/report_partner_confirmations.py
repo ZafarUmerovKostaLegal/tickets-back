@@ -109,9 +109,16 @@ async def partner_report_confirmation_pending(
     session: AsyncSession = Depends(get_session),
     viewer: dict = Depends(require_bearer_user),
     authorization: str | None = Header(None, alias="Authorization"),
+    scope: Optional[str] = Query(
+        None,
+        description="mine (default) — только заявки пользователя; all — все незавершённые (менеджер/админ)",
+    ),
 ):
     return await list_pending_partner_confirmations(
-        session, viewer, authorization=authorization
+        session,
+        viewer,
+        authorization=authorization,
+        scope=scope,
     )
 
 
