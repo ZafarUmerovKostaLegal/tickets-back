@@ -1,7 +1,3 @@
-
-# Production overlay: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-# HTTPS edge (nginx в Docker, если на хосте нет nginx на :443):
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile edge up -d edge
 services:
   edge:
     profiles: ["edge"]
