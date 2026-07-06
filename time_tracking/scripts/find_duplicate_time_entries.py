@@ -9,10 +9,19 @@
   • время (rounded_hours)
   • сумма оплаты (billable amount)
 
-=== Запуск на сервере (python, без docker) ===
+=== Запуск на сервере (python) ===
 
-  cd /path/to/tickets-back
+На хосте (из корня репозитория):
+
   python time_tracking/scripts/find_duplicate_time_entries.py -o duplicates.csv
+
+Внутри контейнера time_tracking (WORKDIR /app) — DATABASE_URL как есть (хост time_tracking_db):
+
+  python scripts/find_duplicate_time_entries.py -o /tmp/duplicates.csv
+
+На хосте вне docker — добавьте --use-localhost-db или укажите URL с 127.0.0.1:
+
+  python time_tracking/scripts/find_duplicate_time_entries.py --use-localhost-db -o duplicates.csv
 
 URL БД берётся из .env (DATABASE_URL или TIME_TRACKING_DATABASE_URL)
 или из переменных окружения. Свой файл:
@@ -82,10 +91,10 @@ def _load_dotenv_files(explicit: str | None = None) -> None:
             return
 
 
-def _normalize_database_url(url: str) -> str:
-    """При запуске на хосте заменить docker-имена хостов на localhost."""
+def _normalize_database_url(url: str, *, use_localhost: bool) -> str:
+    """Заменить docker-имена хостов на localhost (только с --use-localhost-db)."""
     u = (url or "").strip()
-    if not u:
+    if not u or not use_localhost:
         return u
     for docker_host in ("@time_tracking_db:", "@users_db:", "@postgres:"):
         if docker_host in u:
@@ -93,16 +102,16 @@ def _normalize_database_url(url: str) -> str:
     return u
 
 
-def _resolve_database_url(cli_url: str | None) -> str:
+def _resolve_database_url(cli_url: str | None, *, use_localhost: bool) -> str:
     if cli_url and cli_url.strip():
-        return _normalize_database_url(cli_url.strip())
+        return _normalize_database_url(cli_url.strip(), use_localhost=use_localhost)
     for key in ("TIME_TRACKING_DATABASE_URL", "DATABASE_URL"):
         val = (os.environ.get(key) or "").strip()
         if val:
-            normalized = _normalize_database_url(val)
-            print(f"Подключение: env {key}")
-            if normalized != val:
-                print("  (хост docker заменён на 127.0.0.1 — запуск вне контейнера)")
+            normalized = _normalize_database_url(val, use_localhost=use_localhost)
+            print(f"Подключение: env {key} -> {normalized.split('@')[-1] if '@' in normalized else normalized}")
+            if use_localhost and normalized != val:
+                print("  (--use-localhost-db: docker-хост заменён на 127.0.0.1)")
             return normalized
     raise SystemExit(
         "Задайте URL PostgreSQL time tracking:\n"
@@ -452,6 +461,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Включать void-записи (по умолчанию только активные).",
     )
     p.add_argument(
+        "--use-localhost-db",
+        action="store_true",
+        help="Заменить time_tracking_db → 127.0.0.1 (только при запуске Python на хосте, не в контейнере).",
+    )
+    p.add_argument(
         "--min-group-size",
         type=int,
         default=2,
@@ -464,7 +478,7 @@ def main() -> None:
     _configure_stdio_utf8()
     args = _build_parser().parse_args()
     _load_dotenv_files(args.env_file)
-    database_url = _resolve_database_url(args.database_url)
+    database_url = _resolve_database_url(args.database_url, use_localhost=args.use_localhost_db)
     _configure_database_url(database_url)
     args.database_url = database_url
     if args.min_group_size < 2:
