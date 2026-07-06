@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.project_partner_users import list_partner_auth_user_ids_for_project
-from application.partner_pending_list_scope import (
+from application.reports.partner_scope import (
     normalize_partner_pending_scope,
     pending_confirmation_visible_for_user_mine,
     viewer_can_view_all_pending_partner_confirmations,

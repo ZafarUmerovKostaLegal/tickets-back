@@ -17,7 +17,7 @@ class UserResponse(BaseModel):
     updated_at: Optional[datetime] = None
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
-    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
+    initials: Optional[str] = Field(None, max_length=8, description="Инициалы (3–8 букв)")
     weekly_capacity_hours: Optional[float] = Field(
         None,
         description="Норма часов в неделю (учёт времени); null если пользователь не в БД time_tracking",
@@ -40,7 +40,7 @@ class UserDetailResponse(BaseModel):
     is_archived: bool
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
-    initials: Optional[str] = Field(None, max_length=3, description="Трёхбуквенные инициалы")
+    initials: Optional[str] = Field(None, max_length=8, description="Инициалы (3–8 букв)")
     created_at: datetime
     updated_at: datetime
     weekly_capacity_hours: Optional[float] = Field(
@@ -80,8 +80,9 @@ class SetPositionRequest(BaseModel):
 class SetInitialsRequest(BaseModel):
     initials: Optional[str] = Field(
         None,
-        max_length=3,
-        description="Ровно 3 буквы (латиница или кириллица) или null для очистки",
+        min_length=3,
+        max_length=8,
+        description="От 3 до 8 букв (латиница или кириллица) или null для очистки",
     )
 
 

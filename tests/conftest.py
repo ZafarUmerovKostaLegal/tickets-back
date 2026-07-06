@@ -6,7 +6,23 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from service_path import ensure_service_in_path as _ensure_service_in_path
+from support.service_path import ensure_service_in_path as _ensure_service_in_path
+
+pytest_plugins = ["conftest_hooks"]
+
+_UNIT_SKIP_SERVICES = frozenset({"backend_common", "shared"})
+_gateway_app = None
+
+
+def pytest_runtest_setup(item):
+    parts = item.path.parts
+    try:
+        unit_idx = parts.index("unit")
+        service = parts[unit_idx + 1]
+    except (ValueError, IndexError):
+        return
+    if service not in _UNIT_SKIP_SERVICES:
+        _ensure_service_in_path(service)
 
 
 def pytest_configure(config):
@@ -37,10 +53,13 @@ def anyio_backend():
 
 @pytest.fixture
 async def gateway_client():
+    global _gateway_app
+    if _gateway_app is None:
+        _ensure_service_in_path("gateway")
+        from presentation.api import app
 
-    _ensure_service_in_path("gateway")
-    from presentation.api import app
-    transport = ASGITransport(app=app)
+        _gateway_app = app
+    transport = ASGITransport(app=_gateway_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
@@ -112,5 +131,26 @@ async def todos_client():
     _ensure_service_in_path("todos")
     from presentation.api import app
     transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+def _service_client(service: str):
+    _ensure_service_in_path(service)
+    from presentation.api import app
+
+    return ASGITransport(app=app)
+
+
+@pytest.fixture
+async def chat_client():
+    transport = _service_client("chat")
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+async def contacts_client():
+    transport = _service_client("contacts")
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

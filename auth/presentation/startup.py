@@ -17,7 +17,8 @@ _USER_COLUMN_PATCHES: Sequence[str] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS time_tracking_role VARCHAR(32)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS position VARCHAR(256)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS desktop_background VARCHAR(512)",
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS initials VARCHAR(3)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS initials VARCHAR(8)",
+    "ALTER TABLE users ALTER COLUMN initials TYPE VARCHAR(8)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_jti VARCHAR(64)",
 )
 

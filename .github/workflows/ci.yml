@@ -5,6 +5,8 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  schedule:
+    - cron: "0 3 * * 0"
 
 jobs:
   test:
@@ -27,10 +29,41 @@ jobs:
       - name: Ruff (if available)
         run: ruff check gateway auth time_tracking call_schedule expenses backend_common tests --exit-zero || true
 
-      - name: Pytest
-        run: pytest tests/ -q --tb=short
+      - name: Pytest unit + coverage
+        run: pytest tests/unit -q --tb=short --cov
         env:
-          PYTHONPATH: .
+          PYTHONPATH: tests
+
+      - name: Pytest E2E (fast, parallel, 25% auth sample)
+        run: pytest tests/e2e -q --tb=line -m "e2e and not e2e_full" -n auto
+        env:
+          PYTHONPATH: tests
+
+      - name: Pytest integration (optional stack)
+        run: pytest tests/integration -q --tb=line -m integration
+        env:
+          PYTHONPATH: tests
+        continue-on-error: true
+
+      - name: Collect performance metrics
+        run: python scripts/collect_project_metrics.py
+        env:
+          PYTHONPATH: tests
+        continue-on-error: true
+
+      - name: Upload metrics artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-metrics
+          path: scripts/project_metrics.json
+
+      - name: Pytest E2E full route sweep
+        if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[e2e-full]')
+        run: pytest tests/e2e -q --tb=line -m e2e_full -n auto
+        env:
+          PYTHONPATH: tests
+          E2E_FULL: "1"
 
   docker-build-gateway:
     runs-on: ubuntu-latest

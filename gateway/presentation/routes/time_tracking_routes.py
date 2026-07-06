@@ -10,6 +10,10 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Requ
 from starlette.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from application.time_tracking_self_user import (
+    UserUpsertBody,
+    build_self_time_tracking_user_upsert_payload,
+)
 from infrastructure.config import get_settings
 from infrastructure.upstream_auth_context import get_incoming_authorization, merge_upstream_headers
 from infrastructure.upstream_http import (
@@ -366,22 +370,6 @@ async def require_grant_time_entry_unlock(
     return await require_time_entry_write(auth_user_id, user)
 
 
-class UserUpsertBody(BaseModel):
-
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    auth_user_id: int = Field(..., alias="authUserId")
-    email: str
-    display_name: Optional[str] = Field(None, alias="displayName")
-    picture: Optional[str] = None
-    position: Optional[str] = None
-    role: str = ""
-    is_blocked: bool = Field(False, alias="isBlocked")
-    is_archived: bool = Field(False, alias="isArchived")
-    weekly_capacity_hours: Optional[Decimal] = Field(None, alias="weeklyCapacityHours")
-
-
 class ManualTimeTrackingUserCreateBody(BaseModel):
 
 
@@ -392,72 +380,6 @@ class ManualTimeTrackingUserCreateBody(BaseModel):
     position: Optional[str] = Field(None, max_length=256)
     is_archived: bool = Field(True, alias="isArchived")
     weekly_capacity_hours: Optional[Decimal] = Field(None, alias="weeklyCapacityHours")
-
-
-def _user_payload_bool(user: dict, snake: str, camel: str) -> bool:
-
-    v = user.get(snake)
-    if v is not None:
-        return v is True or v == 1 or str(v).lower() == "true"
-    v = user.get(camel)
-    if v is not None:
-        return v is True or v == 1 or str(v).lower() == "true"
-    return False
-
-
-def _self_time_tracking_user_upsert_payload(user: dict, body: UserUpsertBody) -> dict:
-
-    my_id = _current_auth_user_id(user)
-    tt_auth_role = (user.get("time_tracking_role") or user.get("timeTrackingRole") or "").strip()
-    if tt_auth_role not in {"user", "manager"}:
-        raise HTTPException(
-            status_code=403,
-            detail="Нет роли в учёте времени (сотрудник или менеджер). Обратитесь к администратору организации.",
-        )
-    email = (str(user.get("email") or "").strip()) or (body.email or "").strip()
-    if not email:
-        raise HTTPException(status_code=400, detail="У пользователя нет email для синхронизации с учётом времени")
-
-    disp = user.get("display_name")
-    if disp is None:
-        disp = user.get("displayName")
-    if disp is None:
-        display_name = body.display_name
-    else:
-        s = str(disp).strip()
-        display_name = s if s else None
-
-    pic = user.get("picture")
-    if pic is None:
-        picture = body.picture
-    else:
-        s = str(pic).strip()
-        picture = s if s else None
-
-    pos = user.get("position")
-    if pos is not None and str(pos).strip():
-        position = str(pos).strip()
-    else:
-        position = None
-
-    if tt_auth_role in {"user", "manager"} and not position:
-        raise HTTPException(
-            status_code=400,
-            detail="Для учёта времени у сотрудника должна быть указана должность. Обратитесь к администратору.",
-        )
-
-    safe = UserUpsertBody(
-        auth_user_id=my_id,
-        email=email,
-        display_name=display_name,
-        picture=picture,
-        position=position,
-        role=tt_auth_role,
-        is_blocked=_user_payload_bool(user, "is_blocked", "isBlocked"),
-        is_archived=_user_payload_bool(user, "is_archived", "isArchived"),
-        weekly_capacity_hours=body.weekly_capacity_hours,
-    )
-    return _alias_free_payload(safe, "user upsert")
 
 
 @router.get("/users/{auth_user_id}/hourly-rates")
@@ -772,7 +694,7 @@ async def upsert_user(
             detail="Синхронизировать в учёте времени другого пользователя могут только главный администратор, администратор или партнёр.",
         )
 
-    payload = _self_time_tracking_user_upsert_payload(user, body)
+    payload = build_self_time_tracking_user_upsert_payload(user, body)
     return await _tt_json("POST", "/users", json=payload)
 
 

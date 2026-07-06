@@ -1,0 +1,30 @@
+[run]
+source =
+    backend_common
+    gateway/application
+    time_tracking/application
+    auth/application
+    correspondence/application
+    expenses/application
+    notifications/application
+    inventory/application
+    chat/presentation/schemas.py
+    contacts/presentation
+omit =
+    */tests/*
+    time_tracking/application/invoice_service.py
+    time_tracking/application/labor_statistics_service.py
+    time_tracking/application/services/*
+    time_tracking/application/partner_report_confirmation_service.py
+    time_tracking/application/team_workload_builder.py
+    time_tracking/application/auth_user_directory.py
+    auth/application/use_cases.py
+    gateway/application/attendance_range_builder.py
+    contacts/presentation/routes/*
+    contacts/presentation/api.py
+    contacts/presentation/dependencies.py
+
+[report]
+fail_under = 40
+show_missing = true
+skip_covered = true

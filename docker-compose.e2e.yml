@@ -1,0 +1,62 @@
+name: kosta-e2e-stack
+
+services:
+  users_db:
+    extends:
+      file: docker-compose.yml
+      service: users_db
+
+  auth:
+    extends:
+      file: docker-compose.yml
+      service: auth
+    depends_on:
+      users_db:
+        condition: service_healthy
+
+  tickets:
+    extends:
+      file: docker-compose.yml
+      service: tickets
+    depends_on:
+      users_db:
+        condition: service_healthy
+
+  correspondence:
+    extends:
+      file: docker-compose.yml
+      service: correspondence
+
+  contacts:
+    extends:
+      file: docker-compose.yml
+      service: contacts
+
+  chat:
+    extends:
+      file: docker-compose.yml
+      service: chat
+
+  gateway:
+    extends:
+      file: docker-compose.yml
+      service: gateway
+    ports:
+      - "${GATEWAY_PORT:-1234}:1234"
+    environment:
+      AUTH_SESSION_COOKIE_SECURE: "false"
+      ATTENDANCE_RANGE_SNAPSHOT_ENABLED: "false"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+    depends_on:
+      users_db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      tickets:
+        condition: service_started
+      correspondence:
+        condition: service_started
+      contacts:
+        condition: service_started
+      chat:
+        condition: service_started

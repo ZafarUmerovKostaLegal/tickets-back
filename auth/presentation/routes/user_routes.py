@@ -43,10 +43,10 @@ def _normalize_initials(value: Optional[str]) -> Optional[str]:
     s = (value or "").strip().upper().replace("Ё", "Е")
     if not s:
         return None
-    if len(s) != 3 or not all(ch.isalpha() for ch in s):
+    if len(s) < 3 or len(s) > 8 or not all(ch.isalpha() for ch in s):
         raise HTTPException(
             status_code=400,
-            detail="Инициалы должны состоять ровно из 3 букв (латиница или кириллица)",
+            detail="Инициалы должны состоять из 3–8 букв (латиница или кириллица)",
         )
     return s
 
