@@ -196,6 +196,7 @@ class TeamWorkloadMemberOut(BaseModel):
     display_name: Optional[str] = None
     email: str
     picture: Optional[str] = None
+    initials: Optional[str] = None
     capacity_hours: Decimal
     total_hours: Decimal
     billable_hours: Decimal

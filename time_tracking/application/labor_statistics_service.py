@@ -29,11 +29,13 @@ from application.report_builder import (
     _d,
     _hours,
     _load_clients_map,
+    _load_initials_map,
     _load_projects_map,
     _load_tasks_map,
     _load_users_map,
     _money,
 )
+from application.user_initials import resolve_user_initials
 from application.services.reports.export_service import export_csv, export_xlsx
 from application.auth_user_directory import fetch_auth_user_partner_hints_by_id
 from infrastructure.models import TimeEntryModel
@@ -423,6 +425,7 @@ async def build_labor_statistics(
     clients_map = await _load_clients_map(session)
     tasks_map = await _load_tasks_map(session)
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
 
     access_repo = UserProjectAccessRepository(session)
     partners_by_project: dict[str, list[int]] = {}
@@ -482,10 +485,12 @@ async def build_labor_statistics(
                 "id": str(uuid.uuid4()),
                 "partner_id": str(partner_uid or ""),
                 "partner_name": _user_display(partner_user),
+                "partner_initials": resolve_user_initials(partner_user, initials_map=initials_map),
                 "team_id": team_id,
                 "team_name": team_name or "",
                 "lawyer_id": str(e.auth_user_id),
                 "lawyer_name": _user_display(u),
+                "lawyer_initials": resolve_user_initials(u, initials_map=initials_map),
                 "client_id": p.client_id or "",
                 "client_name": c.name if c else "—",
                 "project_id": p.id,
@@ -575,6 +580,7 @@ async def build_labor_statistics_meta(
     scope = resolve_labor_statistics_scope(viewer)
     users_repo = TimeTrackingUserRepository(session)
     users = await users_repo.list_users()
+    initials_map = await _load_initials_map(session)
     hints = await fetch_auth_user_partner_hints_by_id(authorization or "")
 
     partners: list[dict[str, str]] = []
@@ -584,12 +590,13 @@ async def build_labor_statistics_meta(
             continue
         hint = hints.get(u.auth_user_id) or {}
         label = _user_display(u)
+        initials = resolve_user_initials(u, initials_map=initials_map)
         if user_satisfies_partner_rule(u.position, hint.get("position"), hint.get("role")):
-            partners.append({"id": str(u.auth_user_id), "name": label})
+            partners.append({"id": str(u.auth_user_id), "name": label, "initials": initials})
         if scope.mode == "lawyer" and scope.auth_user_id == u.auth_user_id:
-            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email})
+            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email, "initials": initials})
         elif scope.mode != "lawyer":
-            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email})
+            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email, "initials": initials})
 
     teams_repo = TeamRepository(session)
     teams = await teams_repo.list_all(include_archived=False)
@@ -657,8 +664,10 @@ async def export_labor_statistics(
     for row in rows:
         export_rows.append({
             "Партнёр": row.get("partner_name"),
+            "Инициалы партнёра": row.get("partner_initials"),
             "Команда": row.get("team_name"),
             "Юрист": row.get("lawyer_name"),
+            "Инициалы юриста": row.get("lawyer_initials"),
             "Клиент": row.get("client_name"),
             "Проект": row.get("project_name"),
             "Задача": row.get("task_name"),

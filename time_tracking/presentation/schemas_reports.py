@@ -63,3 +63,4 @@ class ReportUserForFilterOut(BaseModel):
     id: int
     displayName: Optional[str] = None
     email: Optional[str] = None
+    initials: Optional[str] = None

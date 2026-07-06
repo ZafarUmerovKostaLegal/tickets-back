@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import date
 from decimal import Decimal
 
+from application.user_initials import resolve_user_initials
 from application.team_workload_math import capacity_for_period, workload_percent
 from application.weekly_period import work_week_start_end_inclusive
 from presentation.schemas import TeamWorkloadMemberOut, TeamWorkloadSummaryOut
@@ -19,6 +20,7 @@ def build_team_workload_members_and_summary(
     date_to: date,
     entry_counts: Mapping[int, int] | None = None,
     submitted_user_dates: set[tuple[int, date]] | None = None,
+    initials_map: Mapping[int, str | None] | None = None,
 ) -> tuple[list[TeamWorkloadMemberOut], TeamWorkloadSummaryOut]:
     counts = entry_counts or {}
     submitted = submitted_user_dates or set()
@@ -48,6 +50,7 @@ def build_team_workload_members_and_summary(
                 display_name=user.display_name,
                 email=user.email,
                 picture=user.picture,
+                initials=resolve_user_initials(user, initials_map=dict(initials_map or {})),
                 capacity_hours=cap,
                 total_hours=tot,
                 billable_hours=bill,

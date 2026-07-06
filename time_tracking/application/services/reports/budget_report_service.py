@@ -14,10 +14,12 @@ from application.entry_pricing import _billable_amount_for_entry
 from application.report_builder import (
     _base_entry_conditions,
     _load_clients_map,
+    _load_initials_map,
     _load_projects_map,
     _load_user_rates,
     _load_users_map,
 )
+from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeEntryModel, TimeManagerClientProjectModel
 from application.services.reports._base import _d, _hours, _money, _ZERO, build_response
 
@@ -77,6 +79,7 @@ async def get_budget_report(
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
 
 
     target_projects = list(projects_map.values())
@@ -155,7 +158,7 @@ async def get_budget_report(
         rem_m = max(_ZERO, lim_m - spent_m) if lim_m > _ZERO else _ZERO
 
         user_buckets = user_buckets_by_project.get(p.id, {})
-        users_list = _build_users_list(user_buckets, users_map)
+        users_list = _build_users_list(user_buckets, users_map, initials_map)
         project_currency = (getattr(p, "currency", None) or "USD")
 
         row: dict[str, Any] = {
@@ -259,6 +262,7 @@ async def get_budget_report_all_rows(
 def _build_users_list(
     user_buckets: dict,
     users_map: dict,
+    initials_map: dict[int, str | None],
 ) -> list[dict[str, Any]]:
 
     result = []
@@ -267,6 +271,7 @@ def _build_users_list(
         result.append({
             "user_id": uid,
             "user_name": (u.display_name or u.email) if u else str(uid or ""),
+            "initials": resolve_user_initials(u, initials_map=initials_map),
             "avatar_url": u.picture if u else None,
             "hours_logged": _hours(ubkt["hours"]),
             "amount_logged": _money(ubkt["amount"]),

@@ -407,6 +407,19 @@ async def _load_tasks_map(session: AsyncSession) -> dict[str, TimeManagerClientT
     return result
 
 
+async def _load_initials_map(session: AsyncSession) -> dict[int, str | None]:
+    cached = get_dim("initials_map")
+    if cached is not None:
+        return cached
+    from application.user_initials import fetch_auth_initials_by_user_id
+
+    users_map = await _load_users_map(session)
+    auth_ids = list(users_map.keys())
+    result = await fetch_auth_initials_by_user_id(auth_ids or None)
+    set_dim("initials_map", result)
+    return result
+
+
 async def build_report_summary(
     session: AsyncSession,
     *,

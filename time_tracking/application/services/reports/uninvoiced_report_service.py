@@ -13,11 +13,13 @@ from application.entry_pricing import _billable_amount_for_entry
 from application.report_builder import (
     _base_entry_conditions,
     _load_clients_map,
+    _load_initials_map,
     _load_projects_map,
     _load_user_rates,
     _load_users_map,
     _fetch_expense_report_data,
 )
+from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeEntryModel
 from application.services.reports._base import (
     _d,
@@ -45,6 +47,7 @@ async def get_uninvoiced_report(
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
 
 
     all_cond = _base_entry_conditions(
@@ -153,7 +156,7 @@ async def get_uninvoiced_report(
 
 
         user_buckets = user_buckets_by_project.get(pid, {})
-        users_list = _build_users_list(user_buckets, users_map)
+        users_list = _build_users_list(user_buckets, users_map, initials_map)
 
         all_rows.append({
             "client_id": p.client_id if p else None,
@@ -195,13 +198,18 @@ async def get_uninvoiced_report_all_rows(
     return result.get("results", [])
 
 
-def _build_users_list(user_buckets: dict, users_map: dict) -> list[dict[str, Any]]:
+def _build_users_list(
+    user_buckets: dict,
+    users_map: dict,
+    initials_map: dict[int, str | None],
+) -> list[dict[str, Any]]:
     result = []
     for uid, ubkt in user_buckets.items():
         u = users_map.get(uid)
         result.append({
             "user_id": uid,
             "user_name": (u.display_name or u.email) if u else str(uid or ""),
+            "initials": resolve_user_initials(u, initials_map=initials_map),
             "avatar_url": u.picture if u else None,
             "uninvoiced_hours": _hours(ubkt["billable"]),
             "uninvoiced_amount": _money(ubkt["amount"]),

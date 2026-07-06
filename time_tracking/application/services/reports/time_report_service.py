@@ -19,6 +19,7 @@ from application.report_builder import (
     _base_entry_conditions,
     _voided_entry_conditions,
     _d,
+    _load_initials_map,
     _load_user_cost_rates,
     _load_clients_map,
     _load_projects_map,
@@ -28,6 +29,7 @@ from application.report_builder import (
     invoice_details_for_time_entries,
     load_week_submitted_user_dates,
 )
+from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeEntryModel
 from infrastructure.report_cache import get_report, set_report
 from application.services.reports._base import (
@@ -62,6 +64,7 @@ TIME_REPORT_FLAT_COLUMNS: tuple[str, ...] = (
     "is_paid",
     "is_week_submitted",
     "employee_name",
+    "employee_initials",
     "employee_position",
     "auth_user_id",
     "billable_rate",
@@ -91,6 +94,7 @@ def _time_entry_line_snake(
     clients_map: dict[str, Any],
     tasks_map: dict[str, Any],
     users_map: dict[int, Any],
+    initials_map: dict[int, str | None],
     rates_map: dict[int, list],
     cost_rates_map: dict[int, list],
     invoice_by_entry: dict[str, dict[str, Any]],
@@ -152,6 +156,7 @@ def _time_entry_line_snake(
         "is_paid": is_paid,
         "is_week_submitted": wk_ok,
         "employee_name": (u.display_name or u.email) if u else str(uid),
+        "employee_initials": resolve_user_initials(u, initials_map=initials_map),
         "employee_position": ((u.position or "").strip() or None) if u else None,
         "auth_user_id": uid,
         "billable_rate": _money(br) if br is not None else None,
@@ -182,6 +187,7 @@ def _aggregate_entries_to_snake_line(
     clients_map: dict = line_ctx["clients_map"]
     tasks_map: dict = line_ctx["tasks_map"]
     users_map: dict = line_ctx["users_map"]
+    initials_map: dict = line_ctx["initials_map"]
     rates_map: dict = line_ctx["rates_map"]
     cost_rates_map: dict = line_ctx["cost_rates_map"]
     invoice_by_entry: dict = line_ctx["invoice_by_entry"]
@@ -284,6 +290,7 @@ def _aggregate_entries_to_snake_line(
         "is_paid": is_paid,
         "is_week_submitted": all_week,
         "employee_name": (u.display_name or u.email) if u else str(uid),
+        "employee_initials": resolve_user_initials(u, initials_map=initials_map),
         "employee_position": ((u.position or "").strip() or None) if u else None,
         "auth_user_id": uid,
         "billable_rate": eff_bill,
@@ -324,6 +331,7 @@ def _line_snake_to_api_json(line: dict[str, Any]) -> dict[str, Any]:
         "isPaid": line["is_paid"],
         "isWeekSubmitted": line["is_week_submitted"],
         "employeeName": line["employee_name"],
+        "employeeInitials": line.get("employee_initials"),
         "employeePosition": line["employee_position"] or None,
         "authUserId": line["auth_user_id"],
         "billableRate": line["billable_rate"],
@@ -416,6 +424,7 @@ async def get_time_report(
     )
 
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     tasks_map = await _load_tasks_map(session)
@@ -431,6 +440,7 @@ async def get_time_report(
         "clients_map": clients_map,
         "tasks_map": tasks_map,
         "users_map": users_map,
+        "initials_map": initials_map,
         "rates_map": rates_map,
         "cost_rates_map": cost_rates_map,
         "invoice_by_entry": inv_map,
@@ -550,6 +560,7 @@ async def get_time_report(
             projects_map,
             clients_map,
             line_ctx=line_ctx,
+            initials_map=initials_map,
         )
         all_rows.append(row)
 
@@ -650,6 +661,7 @@ async def get_time_report_flat_entries(
     )
 
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     tasks_map = await _load_tasks_map(session)
@@ -664,6 +676,7 @@ async def get_time_report_flat_entries(
         "clients_map": clients_map,
         "tasks_map": tasks_map,
         "users_map": users_map,
+        "initials_map": initials_map,
         "rates_map": rates_map,
         "cost_rates_map": cost_rates_map,
         "invoice_by_entry": inv_map,
@@ -868,6 +881,7 @@ def _build_users_list(
     *,
     group_by: str,
     line_ctx: dict[str, Any] | None,
+    initials_map: dict[int, str | None],
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for uid, ubkt in user_buckets.items():
@@ -878,6 +892,7 @@ def _build_users_list(
             {
                 "user_id": uid,
                 "user_name": (u.display_name or u.email) if u else str(uid or ""),
+                "initials": resolve_user_initials(u, initials_map=initials_map),
                 "employee_position": ep,
                 "employeePosition": ep,
                 "avatar_url": u.picture if u else None,
@@ -902,6 +917,7 @@ def _build_row(
     clients_map: dict,
     *,
     line_ctx: dict[str, Any],
+    initials_map: dict[int, str | None],
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "total_hours": _hours(bkt["total"]),
@@ -934,6 +950,7 @@ def _build_row(
             users_map,
             group_by=group_by,
             line_ctx=line_ctx,
+            initials_map=initials_map,
         )
     elif group_by == "projects":
         p = projects_map.get(gid) if gid else None
@@ -948,6 +965,7 @@ def _build_row(
             users_map,
             group_by=group_by,
             line_ctx=line_ctx,
+            initials_map=initials_map,
         )
     elif group_by == "tasks":
         tasks_map = line_ctx["tasks_map"]
@@ -972,6 +990,7 @@ def _build_row(
             users_map,
             group_by=group_by,
             line_ctx=line_ctx,
+            initials_map=initials_map,
         )
     elif group_by == "team":
         uid = bkt.get("user_id")
@@ -980,6 +999,7 @@ def _build_row(
         u = users_map.get(uid) if uid is not None else None
         row["user_id"] = uid
         row["user_name"] = (u.display_name or u.email) if u else str(uid or "")
+        row["initials"] = resolve_user_initials(u, initials_map=initials_map)
         row["avatar_url"] = u.picture if u else None
         row["is_contractor"] = _user_is_contractor(u)
         row["report_group_id"] = f"{uid}|{row['currency']}"
@@ -1042,6 +1062,7 @@ def _row_time_report_summary_for_export(r: dict[str, Any], *, group_by: str) -> 
         keys = (
             "user_id",
             "user_name",
+            "initials",
             "avatar_url",
             "is_contractor",
             "report_group_id",

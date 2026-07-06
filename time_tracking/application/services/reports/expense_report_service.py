@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.report_builder import (
     _fetch_expense_report_data,
     _load_clients_map,
+    _load_initials_map,
     _load_projects_map,
     _load_users_map,
 )
+from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeManagerClientExpenseCategoryModel
 from application.services.reports._base import (
     _d,
@@ -54,6 +56,7 @@ async def get_expense_report(
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     users_map = await _load_users_map(session)
+    initials_map = await _load_initials_map(session)
     categories_map = await _load_expense_categories_map(session)
 
     if client_ids:
@@ -88,7 +91,9 @@ async def get_expense_report(
 
     all_rows: list[dict] = []
     for gid, bkt in buckets.items():
-        row = _build_row(gid, bkt, group_by, users_map, projects_map, clients_map, categories_map)
+        row = _build_row(
+            gid, bkt, group_by, users_map, projects_map, clients_map, categories_map, initials_map,
+        )
         all_rows.append(row)
 
     all_rows.sort(key=lambda r: r.get("total_amount", 0), reverse=True)
@@ -137,13 +142,18 @@ def _get_group_id(e: dict, group_by: str, projects_map: dict) -> Any:
         return e.get("created_by_user_id")
 
 
-def _build_users_list(user_buckets: dict, users_map: dict) -> list[dict[str, Any]]:
+def _build_users_list(
+    user_buckets: dict,
+    users_map: dict,
+    initials_map: dict[int, str | None],
+) -> list[dict[str, Any]]:
     result = []
     for uid, ubkt in user_buckets.items():
         u = users_map.get(uid)
         result.append({
             "user_id": uid,
             "user_name": (u.display_name or u.email) if u else str(uid or ""),
+            "initials": resolve_user_initials(u, initials_map=initials_map),
             "avatar_url": u.picture if u else None,
             "total_amount": _money(ubkt["total"]),
             "billable_amount": _money(ubkt["billable"]),
@@ -160,6 +170,7 @@ def _build_row(
     projects_map: dict,
     clients_map: dict,
     categories_map: dict,
+    initials_map: dict[int, str | None],
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "total_amount": _money(bkt["total"]),
@@ -171,7 +182,7 @@ def _build_row(
         c = clients_map.get(gid) if gid else None
         row["client_id"] = gid
         row["client_name"] = c.name if c else None
-        row["users"] = _build_users_list(bkt["user_buckets"], users_map)
+        row["users"] = _build_users_list(bkt["user_buckets"], users_map, initials_map)
 
     elif group_by == "projects":
         p = projects_map.get(gid) if gid else None
@@ -180,18 +191,19 @@ def _build_row(
         row["client_name"] = c.name if c else None
         row["project_id"] = gid
         row["project_name"] = p.name if p else None
-        row["users"] = _build_users_list(bkt["user_buckets"], users_map)
+        row["users"] = _build_users_list(bkt["user_buckets"], users_map, initials_map)
 
     elif group_by == "categories":
         cat = categories_map.get(gid) if gid else None
         row["expense_category_id"] = gid
         row["expense_category_name"] = cat.name if cat else None
-        row["users"] = _build_users_list(bkt["user_buckets"], users_map)
+        row["users"] = _build_users_list(bkt["user_buckets"], users_map, initials_map)
 
     else:
         u = users_map.get(gid) if gid else None
         row["user_id"] = gid
         row["user_name"] = (u.display_name or u.email) if u else str(gid or "")
+        row["initials"] = resolve_user_initials(u, initials_map=initials_map)
         row["avatar_url"] = u.picture if u else None
         row["is_contractor"] = False
 

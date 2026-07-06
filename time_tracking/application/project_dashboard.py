@@ -16,10 +16,12 @@ from application.entry_pricing import (
 from application.report_builder import (
     _fetch_expense_report_data,
     _invoice_info_for_time_entries,
+    _load_initials_map,
     _load_projects_map,
     _load_user_cost_rates,
     _load_user_rates,
 )
+from application.user_initials import resolve_user_initials
 from application.services.reports._base import _d, _money
 from application.budget_mode import budget_limit_hours, budget_limit_money, budget_mode
 from application.services.reports.budget_report_service import (
@@ -152,6 +154,7 @@ async def build_client_project_dashboard(
         u.auth_user_id: u
         for u in await user_repo.list_by_auth_user_ids(team_member_ids)
     }
+    initials_map = await _load_initials_map(session)
 
     def _member_sort_key_uid(uid: int) -> str:
         u = by_auth.get(uid)
@@ -171,6 +174,7 @@ async def build_client_project_dashboard(
                 {
                     "user_id": str(uid),
                     "name": label,
+                    "initials": resolve_user_initials(u, initials_map=initials_map),
                     "hours": _hours_json(hrs),
                     "billable_amount": float(_money(task_user_bill.get(task_key, {}).get(uid, _ZERO))),
                     "internal_cost_amount": float(_money(task_user_cost.get(task_key, {}).get(uid, _ZERO))),
@@ -187,6 +191,7 @@ async def build_client_project_dashboard(
             {
                 "user_id": str(uid),
                 "name": label,
+                "initials": resolve_user_initials(u, initials_map=initials_map),
                 "hours": _hours_json(ut),
                 "billable_hours": _hours_json(ub),
                 "non_billable_hours": _hours_json(un),

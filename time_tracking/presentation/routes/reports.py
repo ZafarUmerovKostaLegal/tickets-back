@@ -36,6 +36,8 @@ from application.services.reports.budget_report_service import (
 )
 from application.services.reports.export_service import export_report
 from infrastructure.database import get_session
+from application.report_builder import _load_initials_map
+from application.user_initials import resolve_user_initials
 from infrastructure.repository_users import TimeTrackingUserRepository
 from presentation.deps import require_bearer_user
 from presentation.schemas_reports import (
@@ -172,11 +174,13 @@ async def get_reports_meta():
 async def get_users_for_filter(session: AsyncSession = Depends(get_session)):
     repo = TimeTrackingUserRepository(session)
     users = await repo.list_users()
+    initials_map = await _load_initials_map(session)
     return [
         ReportUserForFilterOut(
             id=u.auth_user_id,
             displayName=u.display_name,
             email=u.email,
+            initials=resolve_user_initials(u, initials_map=initials_map),
         )
         for u in users
         if not u.is_archived
