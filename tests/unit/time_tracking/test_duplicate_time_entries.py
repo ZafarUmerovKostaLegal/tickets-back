@@ -1,8 +1,11 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from application.duplicate_time_entries import (
     DuplicateKey,
+    build_duplicate_key_for_entry,
+    deduplicate_entries_for_report,
     split_duplicate_groups_by_work_date,
 )
 
@@ -40,6 +43,33 @@ def _group(entries: list[dict]) -> dict:
         "entries_in_group": len(entries),
         "entries": entries,
     }
+
+
+def _model(
+    entry_id: str,
+    *,
+    work_date: date,
+    created_at: datetime,
+    project_id: str = "p1",
+    description: str = "Same note",
+    hours: str = "1.233333",
+    rounded_hours: str = "1.233333",
+    task_id: str = "task-1",
+    auth_user_id: int = 1,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=entry_id,
+        auth_user_id=auth_user_id,
+        work_date=work_date,
+        created_at=created_at,
+        project_id=project_id,
+        task_id=task_id,
+        description=description,
+        hours=Decimal(hours),
+        rounded_hours=Decimal(rounded_hours),
+        is_billable=True,
+        voided_at=None,
+    )
 
 
 def test_duplicate_key_includes_work_date_and_created_date():
@@ -97,3 +127,40 @@ def test_split_drops_singleton_after_mixed_split():
     ])
     out = split_duplicate_groups_by_work_date([mixed])
     assert out == []
+
+
+def test_deduplicate_entries_for_report_keeps_earliest():
+    created = datetime(2026, 2, 12, 13, 42, tzinfo=timezone.utc)
+    entries = [
+        _model("b", work_date=date(2026, 2, 12), created_at=created.replace(hour=14)),
+        _model("a", work_date=date(2026, 2, 12), created_at=created),
+    ]
+    projects_map = {"p1": SimpleNamespace(currency="USD")}
+    kept, dropped = deduplicate_entries_for_report(entries, projects_map=projects_map, rates_map={1: []})
+    assert dropped == 1
+    assert [e.id for e in kept] == ["a"]
+
+
+def test_deduplicate_entries_for_report_keeps_distinct_import_days():
+    entries = [
+        _model(
+            "a",
+            work_date=date(2026, 2, 12),
+            created_at=datetime(2026, 2, 12, 10, 0, tzinfo=timezone.utc),
+        ),
+        _model(
+            "b",
+            work_date=date(2026, 2, 12),
+            created_at=datetime(2026, 2, 13, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    projects_map = {"p1": SimpleNamespace(currency="USD")}
+    kept, dropped = deduplicate_entries_for_report(entries, projects_map=projects_map, rates_map={1: []})
+    assert dropped == 0
+    assert {e.id for e in kept} == {"a", "b"}
+
+
+def test_build_duplicate_key_for_entry_uses_note_normalization():
+    e = _model("x", work_date=date(2026, 1, 1), created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), description="  Same   Note ")
+    key = build_duplicate_key_for_entry(e, project_currency="USD", rates_map={1: []})
+    assert key.note_norm == "same note"

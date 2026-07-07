@@ -15,6 +15,7 @@ from application.entry_pricing import (
     _billable_rate_for_entry,
     _cost_amount_for_entry,
 )
+from application.duplicate_time_entries import deduplicate_entries_for_report
 from application.report_builder import (
     _base_entry_conditions,
     _voided_entry_conditions,
@@ -435,6 +436,12 @@ async def get_time_report(
     rates_map = await _load_user_rates(session, list(uids)) if uids else {}
     cost_rates_map = await _load_user_cost_rates(session, list(uids)) if uids else {}
 
+    entries, _report_dup_dropped = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates_map,
+    )
+
     line_ctx = {
         "projects_map": projects_map,
         "clients_map": clients_map,
@@ -671,6 +678,13 @@ async def get_time_report_flat_entries(
     week_set = await load_week_submitted_user_dates(session, uids, date_from, date_to)
     rates_map = await _load_user_rates(session, list(uids)) if uids else {}
     cost_rates_map = await _load_user_cost_rates(session, list(uids)) if uids else {}
+
+    entries, _report_dup_dropped = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates_map,
+    )
+
     line_ctx: dict[str, Any] = {
         "projects_map": projects_map,
         "clients_map": clients_map,

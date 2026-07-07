@@ -84,6 +84,70 @@ class DuplicateKey:
         )
 
 
+def build_duplicate_key_for_entry(
+    e: TimeEntryModel,
+    *,
+    project_currency: str,
+    rates_map: dict[int, list],
+) -> DuplicateKey:
+    hrs = _d(e.rounded_hours if e.rounded_hours is not None else e.hours)
+    amt, cur = _billable_amount_for_entry(
+        hrs,
+        e.is_billable,
+        e.work_date,
+        rates_map.get(e.auth_user_id),
+        project_currency=project_currency,
+        time_entry_project_id=e.project_id,
+    )
+    return DuplicateKey(
+        auth_user_id=int(e.auth_user_id),
+        work_date=e.work_date,
+        created_date=_created_date(e.created_at, fallback=e.work_date),
+        task_id=(e.task_id or "").strip(),
+        note_norm=_norm_note(e.description),
+        hours_key=_hours_key(hrs),
+        amount_key=_money_key(_d(amt)),
+        currency=(cur or project_currency or "USD").strip()[:10],
+    )
+
+
+def _entry_sort_key_for_keeper(e: TimeEntryModel) -> tuple:
+    created = e.created_at
+    if created is None:
+        return (e.work_date, e.id)
+    return (created, e.id)
+
+
+def deduplicate_entries_for_report(
+    entries: list[TimeEntryModel],
+    *,
+    projects_map: dict[str, Any],
+    rates_map: dict[int, list],
+) -> tuple[list[TimeEntryModel], int]:
+    """Убрать дубликаты из отчёта: в каждой группе оставить самую раннюю запись (как при архивации)."""
+    if not entries:
+        return [], 0
+
+    by_group: dict[tuple[str, DuplicateKey], list[TimeEntryModel]] = defaultdict(list)
+    for e in entries:
+        p = projects_map.get(e.project_id) if e.project_id else None
+        cur = (getattr(p, "currency", None) or "USD") if p else "USD"
+        dk = build_duplicate_key_for_entry(e, project_currency=cur, rates_map=rates_map)
+        pid = (e.project_id or "").strip()
+        by_group[(pid, dk)].append(e)
+
+    kept: list[TimeEntryModel] = []
+    dropped = 0
+    for group in by_group.values():
+        if len(group) == 1:
+            kept.append(group[0])
+            continue
+        keeper = min(group, key=_entry_sort_key_for_keeper)
+        kept.append(keeper)
+        dropped += len(group) - 1
+    return kept, dropped
+
+
 def _entry_to_duplicate_row(
     e: TimeEntryModel,
     *,
@@ -102,15 +166,10 @@ def _entry_to_duplicate_row(
         project_currency=project_currency,
         time_entry_project_id=e.project_id,
     )
-    key = DuplicateKey(
-        auth_user_id=int(e.auth_user_id),
-        work_date=e.work_date,
-        created_date=_created_date(e.created_at, fallback=e.work_date),
-        task_id=(e.task_id or "").strip(),
-        note_norm=_norm_note(e.description),
-        hours_key=_hours_key(hrs),
-        amount_key=_money_key(_d(amt)),
-        currency=(cur or project_currency or "USD").strip()[:10],
+    key = build_duplicate_key_for_entry(
+        e,
+        project_currency=project_currency,
+        rates_map=rates_map,
     )
     user_name = (u.display_name or u.email or str(e.auth_user_id)) if u else str(e.auth_user_id)
     row = {
