@@ -1077,6 +1077,67 @@ async def get_client_project_dashboard(
     return dashboard
 
 
+@router.get("/clients/{client_id}/projects/{project_id}/duplicate-time-entries")
+async def get_project_duplicate_time_entries(
+    client_id: str,
+    project_id: str,
+    request: Request,
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json(
+        "GET",
+        f"/clients/{client_id}/projects/{project_id}/duplicate-time-entries",
+        timeout=120.0,
+        params=request.query_params,
+    )
+
+
+@router.get("/clients/{client_id}/projects/{project_id}/archived-time-entries")
+async def list_project_archived_time_entries(
+    client_id: str,
+    project_id: str,
+    request: Request,
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json(
+        "GET",
+        f"/clients/{client_id}/projects/{project_id}/archived-time-entries",
+        timeout=30.0,
+        params=request.query_params,
+    )
+
+
+@router.post("/clients/{client_id}/projects/{project_id}/duplicate-time-entries/archive")
+async def archive_project_duplicate_time_entries(
+    client_id: str,
+    project_id: str,
+    body: dict,
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json(
+        "POST",
+        f"/clients/{client_id}/projects/{project_id}/duplicate-time-entries/archive",
+        json_body=body,
+        timeout=120.0,
+    )
+
+
+@router.post(
+    "/clients/{client_id}/projects/{project_id}/archived-time-entries/{archive_id}/restore"
+)
+async def restore_project_archived_time_entry(
+    client_id: str,
+    project_id: str,
+    archive_id: str,
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json(
+        "POST",
+        f"/clients/{client_id}/projects/{project_id}/archived-time-entries/{archive_id}/restore",
+        timeout=30.0,
+    )
+
+
 @router.get("/clients/{client_id}/projects/{project_id}/team-workload")
 async def get_project_team_workload(
     client_id: str,

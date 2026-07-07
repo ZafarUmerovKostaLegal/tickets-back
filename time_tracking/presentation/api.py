@@ -36,6 +36,7 @@ from infrastructure.schema_patches import (
     apply_project_scoped_billable_rates_open_interval_patch,
     apply_time_tracking_teams_schema_patch,
     apply_report_performance_indexes_patch,
+    apply_time_entry_archives_patch,
 )
 from application.settings_sync import renormalize_time_entries_to_minute
 from presentation.deps import require_bearer_user, require_tt_reports_viewer
@@ -89,6 +90,7 @@ async def lifespan(app: FastAPI):
         await apply_project_scoped_billable_rates_open_interval_patch(conn)
         await apply_time_tracking_teams_schema_patch(conn)
         await apply_report_performance_indexes_patch(conn)
+        await apply_time_entry_archives_patch(conn)
     async with async_session_factory() as session:
         await seed_default_tasks_for_all_projects_missing_tasks(session)
         await seed_default_expense_categories_for_all_clients(session)

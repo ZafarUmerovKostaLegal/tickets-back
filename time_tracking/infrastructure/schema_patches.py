@@ -992,3 +992,49 @@ async def apply_report_performance_indexes_patch(conn: AsyncConnection) -> None:
         )
     )
 
+
+async def apply_time_entry_archives_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_entry_archives (
+                id VARCHAR(36) PRIMARY KEY,
+                time_entry_id VARCHAR(36) NOT NULL,
+                auth_user_id INTEGER NOT NULL,
+                project_id VARCHAR(36),
+                client_id VARCHAR(36),
+                duplicate_group_id TEXT,
+                archived_at TIMESTAMPTZ NOT NULL,
+                archived_by_auth_user_id INTEGER NOT NULL,
+                restored_at TIMESTAMPTZ,
+                restored_by_auth_user_id INTEGER,
+                payload TEXT NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entry_archives_project
+                ON time_tracking_entry_archives (project_id)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entry_archives_entry
+                ON time_tracking_entry_archives (time_entry_id)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entry_archives_restored
+                ON time_tracking_entry_archives (restored_at)
+            """
+        )
+    )
+

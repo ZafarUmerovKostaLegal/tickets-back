@@ -413,3 +413,16 @@ class TimeEntryRepository:
         row.updated_at = _now_utc()
         self._session.add(row)
         return row
+
+    async def restore_entry(self, auth_user_id: int, entry_id: str) -> TimeEntryModel:
+        row = await self.get_by_id(auth_user_id, entry_id)
+        if not row:
+            raise LookupError("not_found")
+        if row.voided_at is None:
+            raise ValueError("Запись не снята с учёта")
+        row.voided_at = None
+        row.voided_by_auth_user_id = None
+        row.void_kind = None
+        row.updated_at = _now_utc()
+        self._session.add(row)
+        return row

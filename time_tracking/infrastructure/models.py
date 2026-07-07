@@ -121,6 +121,29 @@ class TimeEntryModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TimeEntryArchiveModel(Base):
+    """Архив снятых дубликатов — для восстановления записей."""
+
+    __tablename__ = "time_tracking_entry_archives"
+    __table_args__ = (
+        Index("ix_tt_entry_archives_project", "project_id"),
+        Index("ix_tt_entry_archives_entry", "time_entry_id"),
+        Index("ix_tt_entry_archives_restored", "restored_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    time_entry_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    duplicate_group_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    archived_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restored_by_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class TimeManagerClientModel(Base):
 
 

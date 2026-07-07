@@ -902,3 +902,19 @@ class TimeTrackingTeamPatchBody(BaseModel):
     partner_auth_user_id: Optional[int] = Field(None, alias="partnerAuthUserId")
     member_auth_user_ids: Optional[list[int]] = Field(None, alias="memberAuthUserIds")
     is_archived: Optional[bool] = Field(None, alias="isArchived")
+
+
+class DuplicateArchiveEntryIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    auth_user_id: int = Field(..., alias="authUserId")
+    entry_id: str = Field(..., alias="entryId")
+    duplicate_group_id: Optional[str] = Field(None, alias="duplicateGroupId")
+    user_name: Optional[str] = Field(None, alias="userName")
+    task_name: Optional[str] = Field(None, alias="taskName")
+
+
+class DuplicateArchiveBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    entries: list[DuplicateArchiveEntryIn] = Field(default_factory=list)

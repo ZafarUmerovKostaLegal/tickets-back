@@ -30,7 +30,10 @@ from application.project_participants import list_project_participants_with_rate
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.report_builder import _load_user_rates
 from application.services.reports._base import _ZERO, _d, _hours, _money
-from application.access_control import ensure_can_list_project_assignees
+from application.access_control import ensure_can_list_project_assignees, _can_manage_tt
+from application.duplicate_time_entries import find_duplicate_time_entries_for_project
+from application.entry_archive_service import archive_duplicate_entries, restore_archived_entry
+from application.report_builder import _load_initials_map
 from application.project_team_workload import compute_project_team_workload
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
@@ -48,6 +51,7 @@ from infrastructure.repositories import (
 from presentation.deps import require_bearer_user
 from application.project_time_entry import is_project_closed_for_time_entries
 from presentation.routes.client_access import ensure_client_not_archived, get_client_or_404
+from infrastructure.repository_entry_archives import TimeEntryArchiveRepository
 from presentation.schemas import (
     ProjectType,
     TeamWorkloadOut,
@@ -58,6 +62,7 @@ from presentation.schemas import (
     ProjectTimeTrackingAssigneesListOut,
     ProjectTimeTrackingAssigneeOut,
     ProjectParticipantsListOut,
+    DuplicateArchiveBody,
 )
 
 router = APIRouter(prefix="/clients", tags=["client_projects"])
@@ -991,3 +996,120 @@ async def delete_client_project(
         raise HTTPException(status_code=404, detail="Project not found")
     await session.commit()
     return Response(status_code=204)
+
+
+def _ensure_duplicate_admin(viewer: dict) -> None:
+    if not _can_manage_tt(viewer):
+        raise HTTPException(status_code=403, detail="Недостаточно прав для работы с дубликатами")
+
+
+@router.get("/{client_id}/projects/{project_id}/duplicate-time-entries")
+async def get_project_duplicate_time_entries(
+    client_id: str,
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    date_from: str | None = Query(None, alias="dateFrom"),
+    date_to: str | None = Query(None, alias="dateTo"),
+):
+    await _require_client(session, client_id)
+    _ensure_duplicate_admin(viewer)
+    repo = ClientProjectRepository(session)
+    row = await repo.get_by_id(client_id, project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    df = _parse_dashboard_date(date_from)
+    dt = _parse_dashboard_date(date_to)
+    initials_map = await _load_initials_map(session)
+    payload = await find_duplicate_time_entries_for_project(
+        session,
+        project_id=project_id,
+        project_currency=row.currency or "USD",
+        date_from=df,
+        date_to=dt,
+        initials_map=initials_map,
+    )
+    return payload
+
+
+@router.get("/{client_id}/projects/{project_id}/archived-time-entries")
+async def list_project_archived_time_entries(
+    client_id: str,
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    include_restored: bool = Query(False, alias="includeRestored"),
+):
+    await _require_client(session, client_id)
+    _ensure_duplicate_admin(viewer)
+    repo = ClientProjectRepository(session)
+    row = await repo.get_by_id(client_id, project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    archive_repo = TimeEntryArchiveRepository(session)
+    rows = await archive_repo.list_for_project(
+        project_id,
+        include_restored=include_restored,
+    )
+    return {
+        "items": [TimeEntryArchiveRepository.to_api(r) for r in rows],
+        "total": len(rows),
+    }
+
+
+@router.post("/{client_id}/projects/{project_id}/duplicate-time-entries/archive")
+async def archive_project_duplicate_time_entries(
+    client_id: str,
+    project_id: str,
+    body: DuplicateArchiveBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+):
+    await _require_client(session, client_id)
+    repo = ClientProjectRepository(session)
+    row = await repo.get_by_id(client_id, project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not body.entries:
+        raise HTTPException(status_code=400, detail="Список entries пуст")
+    try:
+        result = await archive_duplicate_entries(
+            session,
+            viewer,
+            project_id=project_id,
+            client_id=client_id,
+            entries=[e.model_dump(by_alias=False) for e in body.entries],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return result
+
+
+@router.post(
+    "/{client_id}/projects/{project_id}/archived-time-entries/{archive_id}/restore"
+)
+async def restore_project_archived_time_entry(
+    client_id: str,
+    project_id: str,
+    archive_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+):
+    await _require_client(session, client_id)
+    repo = ClientProjectRepository(session)
+    row = await repo.get_by_id(client_id, project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        return await restore_archived_entry(
+            session,
+            viewer,
+            archive_id=archive_id,
+            project_id=project_id,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Архивная запись не найдена") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
