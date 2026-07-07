@@ -1117,7 +1117,7 @@ async def archive_project_duplicate_time_entries(
     return await _tt_json(
         "POST",
         f"/clients/{client_id}/projects/{project_id}/duplicate-time-entries/archive",
-        json_body=body,
+        json=body,
         timeout=120.0,
     )
 
