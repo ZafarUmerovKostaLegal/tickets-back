@@ -2,12 +2,8 @@ from __future__ import annotations
 
 """Поиск дубликатов записей времени внутри проекта.
 
-Дубликат = один сотрудник + один **день учёта** (work_date) + **день появления в системе**
-(дата created_at) + задача + заметка + часы + сумма.
-
-Одинаковая работа в разные дни учёта — не дубликат.
-Один день учёта, но запись импортирована 09.06 и 19.06 — тоже не дубликат (разные импорты).
-Два одинаковых импорта в один день (напр. два раза 19.06) — дубликат.
+Дубликат = один сотрудник + день учёта (work_date) + задача + заметка + часы + сумма.
+Время появления записи в системе (created_at) не учитывается.
 """
 
 from collections import defaultdict
@@ -50,19 +46,11 @@ def _money_key(v: Decimal) -> str:
     return str(v.quantize(_Q2, rounding=ROUND_HALF_UP))
 
 
-def _created_date(value: datetime | None, *, fallback: date) -> date:
-    if value is None:
-        return fallback
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).date()
-    return value.date()
-
 
 @dataclass(frozen=True)
 class DuplicateKey:
     auth_user_id: int
     work_date: date
-    created_date: date
     task_id: str
     note_norm: str
     hours_key: str
@@ -74,7 +62,6 @@ class DuplicateKey:
             (
                 str(self.auth_user_id),
                 self.work_date.isoformat(),
-                self.created_date.isoformat(),
                 self.task_id,
                 self.note_norm,
                 self.hours_key,
@@ -102,7 +89,6 @@ def build_duplicate_key_for_entry(
     return DuplicateKey(
         auth_user_id=int(e.auth_user_id),
         work_date=e.work_date,
-        created_date=_created_date(e.created_at, fallback=e.work_date),
         task_id=(e.task_id or "").strip(),
         note_norm=_norm_note(e.description),
         hours_key=_hours_key(hrs),
@@ -196,15 +182,14 @@ def split_duplicate_groups_by_work_date(
     *,
     min_group_size: int = 2,
 ) -> list[dict[str, Any]]:
-    """Разбить группы, если в одной оказались записи с разными work_date или created_at (защита)."""
+    """Разбить группы, если в одной оказались записи с разными work_date (защита)."""
     out: list[dict[str, Any]] = []
     for group in groups:
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         fallback = str(group.get("work_date") or "").strip()[:10]
         for entry in group.get("entries") or []:
             wd = str(entry.get("work_date") or fallback or "").strip()[:10] or "__unknown__"
-            cd = str(entry.get("created_at") or "").strip()[:10] or "__unknown__"
-            buckets[f"{wd}|{cd}"].append(entry)
+            buckets[wd].append(entry)
         if len(buckets) <= 1:
             if len(group.get("entries") or []) >= min_group_size:
                 out.append(group)
@@ -218,8 +203,7 @@ def split_duplicate_groups_by_work_date(
                 entries, key=lambda r: (r.get("created_at") or "", r.get("entry_id") or "")
             )
             first = entries_sorted[0]
-            wd = bucket_key.split("|", 1)[0]
-            wd = wd if wd != "__unknown__" else str(first.get("work_date") or fallback)
+            wd = bucket_key if bucket_key != "__unknown__" else str(first.get("work_date") or fallback)
             out.append(
                 {
                     **group,
@@ -312,9 +296,6 @@ async def find_duplicate_time_entries_for_project(
         key = DuplicateKey(
             auth_user_id=int(first["auth_user_id"]),
             work_date=date.fromisoformat(str(first["work_date"])),
-            created_date=date.fromisoformat(str(first.get("created_at") or "")[:10])
-            if first.get("created_at")
-            else date.fromisoformat(str(first["work_date"])),
             task_id=(first.get("task_id") or "").strip(),
             note_norm=_norm_note(first.get("description")),
             hours_key=_hours_key(_d(first.get("rounded_hours"))),

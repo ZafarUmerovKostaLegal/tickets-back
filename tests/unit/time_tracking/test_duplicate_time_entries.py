@@ -29,7 +29,7 @@ def _entry(entry_id: str, work_date: str, created_at: str) -> dict:
 def _group(entries: list[dict]) -> dict:
     first = entries[0]
     return {
-        "group_id": "user|2024-01-05|2026-06-19|task|note|4.27|0|USD",
+        "group_id": "user|2024-01-05|task|note|4.27|0|USD",
         "group_label": "DUP-0001",
         "auth_user_id": 1,
         "user_name": "User",
@@ -72,32 +72,29 @@ def _model(
     )
 
 
-def test_duplicate_key_includes_work_date_and_created_date():
-    k9 = DuplicateKey(
+def test_duplicate_key_ignores_created_date():
+    k1 = DuplicateKey(
         auth_user_id=1,
         work_date=date(2025, 10, 28),
-        created_date=date(2026, 6, 9),
         task_id="t1",
         note_norm="note",
         hours_key="1.0",
         amount_key="0.00",
         currency="USD",
     )
-    k19 = DuplicateKey(
+    k2 = DuplicateKey(
         auth_user_id=1,
         work_date=date(2025, 10, 28),
-        created_date=date(2026, 6, 19),
         task_id="t1",
         note_norm="note",
         hours_key="1.0",
         amount_key="0.00",
         currency="USD",
     )
-    assert k9.as_group_id() != k19.as_group_id()
+    assert k1.as_group_id() == k2.as_group_id()
 
 
-def test_split_mixed_created_dates_keeps_only_same_import_day():
-    """Импорт 09.06 + два дубликата 19.06 при одном work_date → только пара 19.06."""
+def test_split_mixed_created_dates_stays_one_group():
     mixed = _group([
         _entry("a", "2025-10-28", "2026-06-09T16:09:18Z"),
         _entry("b", "2025-10-28", "2026-06-19T13:42:10Z"),
@@ -105,11 +102,10 @@ def test_split_mixed_created_dates_keeps_only_same_import_day():
     ])
     out = split_duplicate_groups_by_work_date([mixed])
     assert len(out) == 1
-    assert out[0]["work_date"] == "2025-10-28"
-    assert [e["entry_id"] for e in out[0]["entries"]] == ["b", "c"]
+    assert len(out[0]["entries"]) == 3
 
 
-def test_split_keeps_same_work_and_created_day_group():
+def test_split_keeps_same_work_date_group():
     same_day = _group([
         _entry("a", "2025-10-28", "2026-06-19T10:00:00Z"),
         _entry("b", "2025-10-28", "2026-06-19T11:00:00Z"),
@@ -120,10 +116,10 @@ def test_split_keeps_same_work_and_created_day_group():
     assert len(out[0]["entries"]) == 3
 
 
-def test_split_drops_singleton_after_mixed_split():
+def test_split_drops_singleton_after_mixed_work_date_split():
     mixed = _group([
         _entry("only", "2025-10-28", "2026-06-09T10:00:00Z"),
-        _entry("b", "2025-10-28", "2026-06-19T13:42:10Z"),
+        _entry("b", "2026-06-19", "2026-06-19T13:42:10Z"),
     ])
     out = split_duplicate_groups_by_work_date([mixed])
     assert out == []
@@ -132,7 +128,7 @@ def test_split_drops_singleton_after_mixed_split():
 def test_deduplicate_entries_for_report_keeps_earliest():
     created = datetime(2026, 2, 12, 13, 42, tzinfo=timezone.utc)
     entries = [
-        _model("b", work_date=date(2026, 2, 12), created_at=created.replace(hour=14)),
+        _model("b", work_date=date(2026, 2, 12), created_at=created.replace(hour=16)),
         _model("a", work_date=date(2026, 2, 12), created_at=created),
     ]
     projects_map = {"p1": SimpleNamespace(currency="USD")}
@@ -141,23 +137,23 @@ def test_deduplicate_entries_for_report_keeps_earliest():
     assert [e.id for e in kept] == ["a"]
 
 
-def test_deduplicate_entries_for_report_keeps_distinct_import_days():
+def test_deduplicate_entries_for_report_treats_different_record_time_as_duplicate():
     entries = [
         _model(
             "a",
-            work_date=date(2026, 2, 12),
-            created_at=datetime(2026, 2, 12, 10, 0, tzinfo=timezone.utc),
+            work_date=date(2026, 2, 13),
+            created_at=datetime(2026, 2, 13, 13, 42, tzinfo=timezone.utc),
         ),
         _model(
             "b",
-            work_date=date(2026, 2, 12),
-            created_at=datetime(2026, 2, 13, 10, 0, tzinfo=timezone.utc),
+            work_date=date(2026, 2, 13),
+            created_at=datetime(2026, 2, 13, 16, 11, tzinfo=timezone.utc),
         ),
     ]
     projects_map = {"p1": SimpleNamespace(currency="USD")}
     kept, dropped = deduplicate_entries_for_report(entries, projects_map=projects_map, rates_map={1: []})
-    assert dropped == 0
-    assert {e.id for e in kept} == {"a", "b"}
+    assert dropped == 1
+    assert [e.id for e in kept] == ["a"]
 
 
 def test_build_duplicate_key_for_entry_uses_note_normalization():
