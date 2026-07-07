@@ -3,7 +3,8 @@
 Поиск дубликатов записей учёта времени.
 
 Дубликат — две и более записи одного пользователя с совпадением:
-  • день (work_date)
+  • день учёта (work_date)
+  • день появления в системе (дата created_at)
   • задача (task_id)
   • заметка (description)
   • время (rounded_hours)
@@ -170,6 +171,7 @@ def _money_key(v: Decimal) -> str:
 class DuplicateKey:
     auth_user_id: int
     work_date: date
+    created_date: date
     task_id: str
     note_norm: str
     hours_key: str
@@ -304,6 +306,11 @@ async def _run(args: argparse.Namespace) -> int:
         key = DuplicateKey(
             auth_user_id=int(e.auth_user_id),
             work_date=e.work_date,
+            created_date=(
+                e.created_at.astimezone(timezone.utc).date()
+                if e.created_at and e.created_at.tzinfo
+                else (e.created_at.date() if e.created_at else e.work_date)
+            ),
             task_id=(e.task_id or "").strip(),
             note_norm=_norm_note(e.description),
             hours_key=_hours_key(hrs),
