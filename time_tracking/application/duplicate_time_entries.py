@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Поиск дубликатов записей времени внутри проекта.
+
+Дубликат = один сотрудник + один **день учёта** (work_date) + задача + заметка +
+округлённые часы + сумма оплаты. Одинаковые записи в разные дни учёта — не дубликат.
+"""
+
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -111,6 +117,60 @@ def _entry_to_duplicate_row(
     return key, row
 
 
+def split_duplicate_groups_by_work_date(
+    groups: list[dict[str, Any]],
+    *,
+    min_group_size: int = 2,
+) -> list[dict[str, Any]]:
+    """Разбить группы, если в одной оказались записи с разными work_date (защита от старых данных)."""
+    out: list[dict[str, Any]] = []
+    for group in groups:
+        buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        fallback = str(group.get("work_date") or "").strip()[:10]
+        for entry in group.get("entries") or []:
+            wd = str(entry.get("work_date") or fallback or "").strip()[:10] or "__unknown__"
+            buckets[wd].append(entry)
+        if len(buckets) <= 1:
+            if len(group.get("entries") or []) >= min_group_size:
+                out.append(group)
+            continue
+        part = 0
+        for work_date, entries in buckets.items():
+            if len(entries) < min_group_size:
+                continue
+            part += 1
+            entries_sorted = sorted(
+                entries, key=lambda r: (r.get("created_at") or "", r.get("entry_id") or "")
+            )
+            first = entries_sorted[0]
+            wd = work_date if work_date != "__unknown__" else str(first.get("work_date") or fallback)
+            out.append(
+                {
+                    **group,
+                    "group_id": f"{group.get('group_id', '')}__{wd}",
+                    "group_label": f"{group.get('group_label', 'DUP')}__{part}",
+                    "work_date": wd,
+                    "entries": entries_sorted,
+                    "entries_in_group": len(entries_sorted),
+                    "auth_user_id": first.get("auth_user_id"),
+                    "user_name": first.get("user_name"),
+                    "user_initials": first.get("user_initials"),
+                    "task_id": first.get("task_id"),
+                    "task_name": first.get("task_name"),
+                    "description": first.get("description"),
+                    "rounded_hours": first.get("rounded_hours"),
+                    "billable_amount": first.get("billable_amount"),
+                    "currency": first.get("currency"),
+                }
+            )
+    return out
+
+
+def _renumber_duplicate_group_labels(groups: list[dict[str, Any]]) -> None:
+    for idx, group in enumerate(groups, start=1):
+        group["group_label"] = f"DUP-{idx:04d}"
+
+
 async def find_duplicate_time_entries_for_project(
     session: AsyncSession,
     *,
@@ -201,6 +261,9 @@ async def find_duplicate_time_entries_for_project(
                 "entries": rows_sorted,
             }
         )
+
+    out_groups = split_duplicate_groups_by_work_date(out_groups, min_group_size=min_group_size)
+    _renumber_duplicate_group_labels(out_groups)
 
     entry_count = sum(g["entries_in_group"] for g in out_groups)
     user_count = len({g["auth_user_id"] for g in out_groups})
