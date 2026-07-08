@@ -61,6 +61,52 @@ async def build_report_confirmation_title(
     return f"{code} {date_from.isoformat()}–{date_to.isoformat()}"
 
 
+def partners_confirmation_is_complete(
+    required_partners: list[int],
+    signed_partner_ids: set[int],
+) -> bool:
+    """True when every current project partner signed, or partners were removed but signatures remain."""
+    if not signed_partner_ids:
+        return False
+    if not required_partners:
+        return True
+    return set(required_partners).issubset(signed_partner_ids)
+
+
+async def reconcile_confirmation_if_complete(
+    conf_repo: PartnerReportConfirmationRepository,
+    request_row,
+    required_partners: list[int],
+) -> bool:
+    if (getattr(request_row, "status", None) or "").strip() == "fully_confirmed":
+        return False
+    signed_ids = {s.partner_auth_user_id for s in (request_row.signatures or [])}
+    if not partners_confirmation_is_complete(required_partners, signed_ids):
+        return False
+    await conf_repo.mark_fully_confirmed(request_row.id)
+    request_row.status = "fully_confirmed"
+    return True
+
+
+async def _reconcile_all_completable_pending(
+    session: AsyncSession,
+    access_repo: UserProjectAccessRepository,
+    *,
+    authorization: str | None,
+) -> None:
+    conf_repo = PartnerReportConfirmationRepository(session)
+    candidates = await conf_repo.list_all_pending()
+    changed = False
+    for m in candidates:
+        partners = await list_partner_auth_user_ids_for_project(
+            session, access_repo, m.project_id, authorization=authorization
+        )
+        if await reconcile_confirmation_if_complete(conf_repo, m, partners):
+            changed = True
+    if changed:
+        await session.commit()
+
+
 def _request_to_out(m, required_partners: list[int]) -> dict:
     sigs = [
         {
@@ -184,6 +230,8 @@ async def submit_partner_report_confirmation_from_preview(
                 status_code=400,
                 detail="По проекту не найдены партнёры для подтверждения (доступ и роль/должность)",
             )
+        if await reconcile_confirmation_if_complete(conf_repo, existing, partners):
+            await session.commit()
         return _request_to_out(existing, partners)
     vid = _viewer_id(viewer)
     projects = ClientProjectRepository(session)
@@ -248,7 +296,7 @@ async def confirm_partner_report_confirmation(
         await conf_repo.add_signature(request_id, vid)
         await session.flush()
     signed_ids = set(await conf_repo.list_signature_partner_ids(request_id))
-    if partners and set(partners).issubset(signed_ids):
+    if partners_confirmation_is_complete(partners, signed_ids):
         await conf_repo.mark_fully_confirmed(request_id)
     await session.commit()
     req = await conf_repo.get_request_by_id(request_id, load_signatures=True)
@@ -271,6 +319,9 @@ async def list_pending_partner_confirmations(
     mode = normalize_partner_pending_scope(scope)
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
+    await _reconcile_all_completable_pending(
+        session, access_repo, authorization=authorization
+    )
     candidates = await conf_repo.list_all_pending()
 
     if mode == "all" and not viewer_can_view_all_pending_partner_confirmations(viewer):
@@ -320,6 +371,9 @@ async def list_confirmed_partner_confirmations(
     vid = _viewer_id(viewer)
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
+    await _reconcile_all_completable_pending(
+        session, access_repo, authorization=authorization
+    )
     if _viewer_can_see_all_confirmations(viewer):
         rows = await conf_repo.list_all_fully_confirmed(
             date_from=date_from,
