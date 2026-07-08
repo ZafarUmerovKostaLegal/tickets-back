@@ -7,7 +7,6 @@ from presentation.api import _cors_origin_regex, _cors_origins
 def test_production_cors_includes_tickets_frontend(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("FRONTEND_URL", "")
-    monkeypatch.setenv("ADMIN_FRONTEND_URL", "")
     monkeypatch.setenv("CORS_ALLOW_PRIVATE_NETWORK", "false")
     get_settings.cache_clear()
     try:
@@ -21,7 +20,6 @@ def test_production_cors_regex_matches_kostalegal_hosts():
     settings = Settings(
         ENVIRONMENT="production",
         FRONTEND_URL="",
-        ADMIN_FRONTEND_URL="",
         CORS_ALLOW_PRIVATE_NETWORK=False,
     )
     regex = _cors_origin_regex(settings)

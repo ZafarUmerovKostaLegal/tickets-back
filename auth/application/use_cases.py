@@ -1,8 +1,5 @@
-import secrets
 import uuid
 from typing import Optional, Sequence
-
-import bcrypt
 
 from domain.entities import User
 from domain.roles import Role
@@ -47,97 +44,6 @@ class AzureLoginUseCase:
         )
         token = self._token_service.create_access_token(user.id, user.azure_oid, jti)
         return user, token
-
-
-LOCAL_ADMIN_OID = "local-admin"
-
-
-class AdminLoginUseCase:
-    def __init__(
-        self,
-        user_repo: UserRepositoryPort,
-        token_service: TokenServicePort,
-        admin_username: str,
-        admin_password: str,
-    ):
-        self._user_repo = user_repo
-        self._token_service = token_service
-        self._admin_username = admin_username
-        self._admin_password = admin_password
-
-    async def execute(self, username: str, password: str) -> str | None:
-        creds = await self._user_repo.get_local_admin_credentials()
-        if creds:
-            stored_user, stored_hash = creds
-            if (username or "").strip() != (stored_user or "").strip():
-                return None
-            try:
-                if not bcrypt.checkpw(
-                    (password or "").encode("utf-8"),
-                    stored_hash.encode("ascii"),
-                ):
-                    return None
-            except (ValueError, TypeError):
-                return None
-        else:
-            if not (self._admin_password or "").strip():
-                return None
-            if (username or "").strip() != (self._admin_username or "").strip() or (password or "") != self._admin_password:
-                return None
-        user = await self._user_repo.get_by_azure_oid(LOCAL_ADMIN_OID)
-        if not user:
-            user = await self._user_repo.create(
-                azure_oid=LOCAL_ADMIN_OID,
-                email="admin@local",
-                display_name="Главный администратор",
-                picture=None,
-                role=Role.MAIN_ADMIN.value,
-            )
-        jti = str(uuid.uuid4())
-        await self._user_repo.register_session_jti(
-            user.id,
-            jti,
-            max_sessions=get_settings().auth_max_concurrent_sessions,
-        )
-        return self._token_service.create_access_token(user.id, user.azure_oid, jti)
-
-
-class BootstrapAdminUseCase:
-
-
-    def __init__(
-        self,
-        user_repo: UserRepositoryPort,
-        admin_username: str,
-        bootstrap_secret: str,
-    ):
-        self._user_repo = user_repo
-        self._admin_username = (admin_username or "admin").strip()
-        self._bootstrap_secret = (bootstrap_secret or "").strip()
-
-    async def execute(self, secret: str) -> tuple[str, str] | None:
-
-        if not self._bootstrap_secret:
-            return None
-        if (secret or "").strip() != self._bootstrap_secret:
-            return None
-        if await self._user_repo.get_local_admin_credentials():
-            return None
-        plain = secrets.token_urlsafe(18)
-        pw_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
-        await self._user_repo.save_local_admin_credentials(self._admin_username, pw_hash)
-        user = await self._user_repo.get_by_azure_oid(LOCAL_ADMIN_OID)
-        if not user:
-            await self._user_repo.create(
-                azure_oid=LOCAL_ADMIN_OID,
-                email="admin@local",
-                display_name="Главный администратор",
-                picture=None,
-                role=Role.MAIN_ADMIN.value,
-            )
-        else:
-            await self._user_repo.set_role(user.id, Role.MAIN_ADMIN.value)
-        return (self._admin_username, plain)
 
 
 class GetCurrentUserUseCase:

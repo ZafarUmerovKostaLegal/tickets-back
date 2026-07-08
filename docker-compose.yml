@@ -27,9 +27,21 @@ services:
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
+      - AUTH_DATABASE_URL=${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
+      - TICKETS_DATABASE_URL=${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
+      - NOTIFICATIONS_DATABASE_URL=${NOTIFICATIONS_DATABASE_URL:-postgresql://notifications:notifications@notifications_db:5432/kosta_notifications}
+      - INVENTORY_DATABASE_URL=${INVENTORY_DATABASE_URL:-postgresql://inventory:inventory@inventory_db:5432/kosta_inventory}
+      - ATTENDANCE_DATABASE_URL=${ATTENDANCE_DATABASE_URL:-postgresql://attendance:attendance@attendance_db:5432/kosta_attendance}
+      - TODOS_DATABASE_URL=${TODOS_DATABASE_URL:-postgresql://todos:todos@todos_db:5432/kosta_todos}
+      - TIME_TRACKING_DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
+      - EXPENSES_DATABASE_URL=${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
+      - PROJECTS_DATABASE_URL=${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
+      - VACATION_DATABASE_URL=${VACATION_DATABASE_URL:-postgresql://vacation:vacation@vacation_db:5432/kosta_vacation}
+      - CHAT_DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - CORRESPONDENCE_DATABASE_URL=${CORRESPONDENCE_DATABASE_URL:-postgresql://correspondence:correspondence@correspondence_db:5432/kosta_correspondence}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
-      - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-http://localhost:8080}
       - CORS_ALLOW_PRIVATE_NETWORK=${CORS_ALLOW_PRIVATE_NETWORK:-true}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
@@ -169,6 +181,7 @@ services:
       PROJECTS_DATABASE_URL: ${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
       VACATION_DATABASE_URL: ${VACATION_DATABASE_URL:-postgresql://vacation:vacation@vacation_db:5432/kosta_vacation}
       CHAT_DATABASE_URL: ${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      CORRESPONDENCE_DATABASE_URL: ${CORRESPONDENCE_DATABASE_URL:-postgresql://correspondence:correspondence@correspondence_db:5432/kosta_correspondence}
     volumes:
       - backup_storage:/backups
       - media_storage:/media:ro
@@ -200,6 +213,8 @@ services:
       vacation_db:
         condition: service_healthy
       chat_db:
+        condition: service_healthy
+      correspondence_db:
         condition: service_healthy
 
   call_schedule:
@@ -341,11 +356,8 @@ services:
       - AUTH_SESSION_COOKIE_SECURE=${AUTH_SESSION_COOKIE_SECURE:-true}
       - AUTH_SESSION_COOKIE_SAMESITE=${AUTH_SESSION_COOKIE_SAMESITE:-lax}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
-      - ADMIN_FRONTEND_URL=${ADMIN_FRONTEND_URL:-http://localhost:8080}
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - ADMIN_BOOTSTRAP_SECRET=${ADMIN_BOOTSTRAP_SECRET:-}
       - AUTH_MAX_CONCURRENT_SESSIONS=${AUTH_MAX_CONCURRENT_SESSIONS:-2}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf http://localhost:1236/health || exit 1" ]
       interval: 10s
@@ -355,14 +367,6 @@ services:
     depends_on:
       users_db:
         condition: service_healthy
-
-  admin-panel:
-    build:
-      context: ./admin-panel
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "${ADMIN_PANEL_PORT:-8080}:80"
 
   notifications:
     build:
@@ -534,17 +538,10 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
-      - AUTH_DATABASE_URL=${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
-      - TIME_TRACKING_DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
-      - TICKETS_DATABASE_URL=${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
-      - TODOS_DATABASE_URL=${TODOS_DATABASE_URL:-postgresql://todos:todos@todos_db:5432/kosta_todos}
-      - NOTIFICATIONS_DATABASE_URL=${NOTIFICATIONS_DATABASE_URL:-postgresql://notifications:notifications@notifications_db:5432/kosta_notifications}
-      - INVENTORY_DATABASE_URL=${INVENTORY_DATABASE_URL:-postgresql://inventory:inventory@inventory_db:5432/kosta_inventory}
-      - ATTENDANCE_DATABASE_URL=${ATTENDANCE_DATABASE_URL:-postgresql://attendance:attendance@attendance_db:5432/kosta_attendance}
-      - EXPENSES_DATABASE_URL=${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
-      - VACATION_DATABASE_URL=${VACATION_DATABASE_URL:-}
-      - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - TIME_TRACKING_DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
+      - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
       - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
       - TT_SMTP_HOST=${TT_SMTP_HOST:-${EXPENSE_SMTP_HOST:-}}
       - TT_SMTP_PORT=${TT_SMTP_PORT:-${EXPENSE_SMTP_PORT:-587}}
@@ -658,7 +655,6 @@ services:
       - EXPENSE_EMAIL_ACTION_CONFIRM_STEP=${EXPENSE_EMAIL_ACTION_CONFIRM_STEP:-true}
       - EXPENSE_NOTIFY_AUTHOR_ON_DECISION=${EXPENSE_NOTIFY_AUTHOR_ON_DECISION:-true}
       - EXPENSE_AUTH_BEARER_FOR_AUTHOR_EMAIL=${EXPENSE_AUTH_BEARER_FOR_AUTHOR_EMAIL:-}
-      - EXPENSE_ALLOW_DATABASE_RESET=${EXPENSE_ALLOW_DATABASE_RESET:-true}
     volumes:
       - media_storage:/app/media
     healthcheck:

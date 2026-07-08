@@ -107,6 +107,7 @@ def _user_to_public(user: User) -> UserPublicResponse:
         picture=user.picture,
         role=user.role,
         position=user.position,
+        initials=user.initials,
         is_archived=user.is_archived,
     )
 

@@ -49,15 +49,6 @@ class Settings(BaseSettings):
         description="lax | strict | none (none требует secure=true)",
     )
     frontend_url: str = ""
-    admin_frontend_url: str = ""
-    admin_username: str = "admin"
-    admin_password: str = ""
-
-
-    admin_bootstrap_secret: str = Field(
-        default="",
-        validation_alias=AliasChoices("ADMIN_BOOTSTRAP_SECRET", "admin_bootstrap_secret"),
-    )
     auth_max_concurrent_sessions: int = Field(
         default=2,
         ge=1,
@@ -66,6 +57,10 @@ class Settings(BaseSettings):
         description="Максимум одновременных активных входов (устройств) на одного пользователя.",
     )
     service_name: str = "auth"
+    ws_internal_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("WS_INTERNAL_SECRET", "ws_internal_secret"),
+    )
 
 
 _log = logging.getLogger("auth.config")

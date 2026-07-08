@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
 from infrastructure.auth_upstream import access_token_from_request, verify_bearer_and_get_user
 from infrastructure.config import get_settings
-from presentation.routes.users import require_main_admin
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +79,6 @@ async def _forward(
         )
     resp_headers = {k: v for k, v in r.headers.items() if k.lower() not in ("connection", "transfer-encoding")}
     return Response(content=r.content, status_code=r.status_code, headers=resp_headers)
-
-
-@router.post("/admin/expenses-database/reset")
-async def proxy_expenses_database_reset(
-    request: Request,
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-    _: dict = Depends(require_main_admin),
-):
-
-    return await _forward(request, "admin/expenses-database/reset", authorization, timeout=300.0)
 
 
 @router.get("/expenses/{expense_id}/email-action")

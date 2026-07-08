@@ -72,11 +72,3 @@ async def test_gateway_ws_url(gateway_client):
     assert "url" in data
     assert "tickets" in data["url"]
 
-
-async def test_gateway_admin_login(gateway_client):
-
-    r = await gateway_client.post(
-        "/api/v1/auth/admin/login",
-        json={"username": "admin", "password": "wrong"},
-    )
-    assert r.status_code in (401, 502)

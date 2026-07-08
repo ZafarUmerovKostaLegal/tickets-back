@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     correspondence_service_url: str = ""
     smart_home_service_url: str = ""
     frontend_url: str = ""
-    admin_frontend_url: str = ""
 
     cors_allow_private_network: bool = Field(
         default=False,

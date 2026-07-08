@@ -15,8 +15,6 @@ def request_body(method: str, path: str) -> Any | None:
         return None
     p = fill_path_for_body(path)
 
-    if "/auth/admin/login" in p or p.endswith("/admin-login"):
-        return {"username": "admin", "password": "wrong"}
     if "/time-tracking/users" in p and method == "POST":
         return {"auth_user_id": 1, "email": "e2e@test.local", "role": "user"}
     if "/time-tracking/time-entries" in p and method == "POST":

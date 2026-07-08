@@ -1,10 +1,7 @@
 
-
-from typing import Literal, Optional
+from typing import Optional
 
 import jwt
-
-OAuthTarget = Literal["main", "admin"]
 
 
 def parse_oauth_state_token(
@@ -12,14 +9,11 @@ def parse_oauth_state_token(
     *,
     jwt_secret: str,
     jwt_algorithm: str,
-) -> Optional[OAuthTarget]:
+) -> bool:
     if not state or not (jwt_secret or "").strip():
-        return None
+        return False
     try:
         p = jwt.decode(state.strip(), jwt_secret, algorithms=[jwt_algorithm])
-        if not p.get("oauth_st"):
-            return None
-        t = (p.get("t") or "main").strip()
-        return "admin" if t == "admin" else "main"
+        return bool(p.get("oauth_st"))
     except Exception:
-        return None
+        return False

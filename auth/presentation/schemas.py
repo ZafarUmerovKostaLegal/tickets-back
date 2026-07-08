@@ -28,6 +28,7 @@ class UserPublicResponse(BaseModel):
     picture: Optional[str] = None
     role: Optional[str] = None
     position: Optional[str] = None
+    initials: Optional[str] = Field(None, max_length=8, description="Инициалы (3–8 букв)")
     is_archived: bool = False
 
 
@@ -105,33 +106,6 @@ class ProfileUpdateRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-
-
-class AdminLoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class AdminBootstrapRequest(BaseModel):
-
-
-    secret: str
-
-
-class AdminBootstrapResponse(BaseModel):
-    username: str
-    password: str
-    message: str = (
-        "Сохраните пароль в надёжном месте. Повторный запрос вернёт ошибку. "
-        "Секрет ADMIN_BOOTSTRAP_SECRET после этого можно убрать из окружения."
-    )
-
-
-class AdminBootstrapStatusResponse(BaseModel):
-
-
-    bootstrap_available: bool
-    credentials_in_database: bool
 
 
 class HealthResponse(BaseModel):

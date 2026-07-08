@@ -33,6 +33,12 @@ WHERE u.active_session_jti IS NOT NULL
   )
 """
 
+_ADMIN_PANEL_CLEANUP: Sequence[str] = (
+    "DROP TABLE IF EXISTS local_admin_credentials CASCADE",
+    "UPDATE users SET active_session_jti = NULL WHERE active_session_jti IS NOT NULL",
+    "DELETE FROM users WHERE azure_oid = 'local-admin'",
+)
+
 
 def seed_default_roles(sync_conn) -> None:
 
@@ -89,11 +95,6 @@ def seed_default_roles(sync_conn) -> None:
             {"role_id": main_admin_id},
         )
 
-    sync_conn.execute(
-        text("UPDATE users SET role = :role WHERE azure_oid = 'local-admin'"),
-        {"role": Role.MAIN_ADMIN.value},
-    )
-
 
 async def ensure_auth_schema(conn) -> None:
 
@@ -103,3 +104,8 @@ async def ensure_auth_schema(conn) -> None:
         await conn.execute(text(_LEGACY_SESSION_MIGRATION))
     except Exception:
         pass
+    for statement in _ADMIN_PANEL_CLEANUP:
+        try:
+            await conn.execute(text(statement))
+        except Exception:
+            pass

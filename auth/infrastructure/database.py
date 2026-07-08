@@ -12,6 +12,9 @@ def make_async_url(url: str) -> str:
 engine = create_async_engine(
     make_async_url(get_settings().database_url),
     echo=False,
+    pool_size=8,
+    max_overflow=4,
+    pool_pre_ping=True,
 )
 
 async_session_factory = async_sessionmaker(

@@ -133,15 +133,6 @@ class UserRepositoryPort(ABC):
     async def clear_all_session_jtis(self, user_id: int) -> None:
         pass
 
-    @abstractmethod
-    async def get_local_admin_credentials(self) -> Optional[Tuple[str, str]]:
-
-        pass
-
-    @abstractmethod
-    async def save_local_admin_credentials(self, username: str, password_hash: str) -> None:
-        pass
-
 
 class TokenServicePort(ABC):
     @abstractmethod

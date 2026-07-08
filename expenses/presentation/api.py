@@ -10,7 +10,7 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure.repositories import seed_reference_data
-from presentation.routes import admin_db, expense_email_action, expenses, health, reference
+from presentation.routes import expense_email_action, expenses, health, reference
 
 _log = logging.getLogger("expenses.startup")
 
@@ -113,7 +113,6 @@ app.add_middleware(
 )
 app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(health.router)
-app.include_router(admin_db.router)
                                                                                                            
                                                                                           
 app.include_router(reference.router)

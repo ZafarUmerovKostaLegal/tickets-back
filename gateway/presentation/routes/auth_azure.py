@@ -50,25 +50,19 @@ async def azure_exchange(body: AzureExchangeBody):
 
 def _clear_oauth_cookies(resp: RedirectResponse) -> None:
     resp.delete_cookie("oauth_state_nonce", path="/")
-    resp.delete_cookie("oauth_target", path="/")
 
 
 @router.get(
     "/login",
     summary="Azure Login",
     description=(
-        "Редирект на вход через Microsoft. target=admin — после входа редирект на админ-панель (state=admin устарел). "
         "**Не вызывайте из Swagger «Try it out» / fetch / XHR:** ответ — цепочка 302 на другой хост, браузер заблокирует как CORS и покажет «Failed to fetch». "
         "Откройте URL вручную в новой вкладке или используйте кнопку входа во фронтенде."
     ),
 )
-async def azure_login(
-    target: str = Query("main"),
-    state: Optional[str] = Query(None, description="Устарело: используйте target=admin"),
-):
+async def azure_login():
     settings = get_settings()
-    t = "admin" if (state == "admin" or target == "admin") else "main"
-    url = f"{settings.auth_service_url}/auth/login?target={t}"
+    url = f"{settings.auth_service_url}/auth/login"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, follow_redirects=False)
@@ -148,11 +142,9 @@ async def azure_logout():
     raise HTTPException(status_code=502, detail="Auth service unavailable")
 
 
-def _redirect_auth_failed(settings, target_t: str) -> RedirectResponse:
-    base = settings.admin_frontend_url if target_t == "admin" else settings.frontend_url
-    base = (base or settings.frontend_url or "http://localhost").rstrip("/")
-    path = "/index.html?error=auth_failed" if target_t == "admin" else "/login?error=auth_failed"
-    resp = RedirectResponse(url=base + path, status_code=302)
+def _redirect_auth_failed(settings) -> RedirectResponse:
+    base = (settings.frontend_url or "http://localhost").rstrip("/")
+    resp = RedirectResponse(url=base + "/login?error=auth_failed", status_code=302)
     _clear_oauth_cookies(resp)
     return resp
 
@@ -165,21 +157,18 @@ async def azure_callback(
 ):
     settings = get_settings()
     try:
-        target_t = parse_oauth_state_token(
+        state_ok = parse_oauth_state_token(
             state,
             jwt_secret=settings.jwt_secret,
             jwt_algorithm=settings.jwt_algorithm or "HS256",
         )
-        if target_t is None:
+        if not state_ok:
             nonce_ok = (request.cookies.get("oauth_state_nonce") or "").strip()
-            cookie_tgt = (request.cookies.get("oauth_target") or "main").strip()
-            if state and nonce_ok and state == nonce_ok:
-                target_t = "admin" if cookie_tgt == "admin" else "main"
-        if target_t is None:
-            base = (settings.frontend_url or "http://localhost").rstrip("/")
-            resp = RedirectResponse(url=base + "/login?error=oauth_state", status_code=302)
-            _clear_oauth_cookies(resp)
-            return resp
+            if not (state and nonce_ok and state == nonce_ok):
+                base = (settings.frontend_url or "http://localhost").rstrip("/")
+                resp = RedirectResponse(url=base + "/login?error=oauth_state", status_code=302)
+                _clear_oauth_cookies(resp)
+                return resp
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
@@ -192,20 +181,16 @@ async def azure_callback(
                 r.status_code,
                 (r.text or "")[:500],
             )
-            return _redirect_auth_failed(settings, target_t)
+            return _redirect_auth_failed(settings)
         try:
             data = r.json()
         except Exception as e:
             _log.warning("auth exchange returned non-JSON: %s", e)
-            return _redirect_auth_failed(settings, target_t)
+            return _redirect_auth_failed(settings)
         access_token = data.get("access_token", "")
 
-        if target_t == "admin" and settings.admin_frontend_url:
-            base = settings.admin_frontend_url.rstrip("/")
-            callback_path = "/auth/callback.html"
-        else:
-            base = settings.frontend_url.rstrip("/")
-            callback_path = "/auth/callback"
+        base = (settings.frontend_url or "http://localhost").rstrip("/")
+        callback_path = "/auth/callback"
         s = settings
         if s.auth_set_session_cookie and access_token:
             redirect_url = f"{base}{callback_path}?set_session=1"

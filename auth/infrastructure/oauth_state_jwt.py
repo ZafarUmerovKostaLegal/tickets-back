@@ -1,20 +1,16 @@
 
-
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional
 
 import jwt
 
-OAuthTarget = Literal["main", "admin"]
 
-
-def create_oauth_state_token(*, jwt_secret: str, jwt_algorithm: str, target: OAuthTarget) -> str:
+def create_oauth_state_token(*, jwt_secret: str, jwt_algorithm: str) -> str:
     if not (jwt_secret or "").strip():
         raise ValueError("JWT_SECRET is required to sign OAuth state")
     now = datetime.now(timezone.utc)
     payload = {
         "oauth_st": True,
-        "t": target,
+        "t": "main",
         "exp": now + timedelta(minutes=10),
         "iat": now,
     }
@@ -26,14 +22,11 @@ def parse_oauth_state_token(
     *,
     jwt_secret: str,
     jwt_algorithm: str,
-) -> Optional[OAuthTarget]:
+) -> bool:
     if not state or not (jwt_secret or "").strip():
-        return None
+        return False
     try:
         p = jwt.decode(state.strip(), jwt_secret, algorithms=[jwt_algorithm])
-        if not p.get("oauth_st"):
-            return None
-        t = (p.get("t") or "main").strip()
-        return "admin" if t == "admin" else "main"
+        return bool(p.get("oauth_st"))
     except Exception:
-        return None
+        return False

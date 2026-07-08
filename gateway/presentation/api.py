@@ -15,8 +15,8 @@ from presentation.routes import (
     spa_auth_callback,
     health,
     ops,
+    ops_databases,
     auth_azure,
-    auth_admin,
     users,
     positions,
     tickets,
@@ -83,7 +83,7 @@ _KNOWN_PRODUCTION_ORIGINS = (
 def _cors_origins() -> list[str]:
     settings = get_settings()
     origins: list[str] = []
-    for url in (settings.frontend_url or "").strip(), (settings.admin_frontend_url or "").strip():
+    for url in (settings.frontend_url or "").strip(),:
         if url and url != "*":
             origins.extend(u.strip() for u in url.split(",") if u.strip() and u.strip() != "*")
     defaults = [
@@ -157,10 +157,10 @@ app.add_middleware(IncomingAuthorizationMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.include_router(spa_auth_callback.router)
 app.include_router(ops.router)
+app.include_router(ops_databases.router)
 app.include_router(health.router)
 app.include_router(desktop_backgrounds_public.router)
 app.include_router(auth_azure.router)
-app.include_router(auth_admin.router)
 app.include_router(users.router)
 app.include_router(positions.router)
 app.include_router(time_tracking_users_hourly_alias.router)

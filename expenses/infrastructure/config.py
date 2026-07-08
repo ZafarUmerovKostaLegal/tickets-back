@@ -133,11 +133,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXPENSE_AUTH_BEARER_FOR_AUTHOR_EMAIL"),
     )
 
-    expense_allow_database_reset: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("EXPENSE_ALLOW_DATABASE_RESET"),
-    )
-
     model_config = SettingsConfigDict(
         env_file=_env_files(),
         env_file_encoding="utf-8",
@@ -193,7 +188,6 @@ class Settings(BaseSettings):
         "expense_email_action_confirm_step",
         "expense_notify_author_on_decision",
         "expense_notify_author_on_paid",
-        "expense_allow_database_reset",
         mode="before",
     )
     @classmethod

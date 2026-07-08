@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import engine, Base
 from infrastructure.config import get_settings, validate_production_secrets
-from presentation.routes import auth_routes, user_routes, role_routes, health
+from presentation.routes import auth_routes, user_routes, role_routes, health, internal_routes
 from presentation.startup import ensure_auth_schema, seed_default_roles
 
 _log = logging.getLogger("auth.startup")
@@ -58,7 +58,7 @@ app = FastAPI(
 def _auth_cors_origins() -> list[str]:
     s = get_settings()
     origins: list[str] = []
-    for url in (s.frontend_url or "").strip(), (s.admin_frontend_url or "").strip():
+    for url in (s.frontend_url or "").strip(),:
         if url and url != "*":
             origins.extend(u.strip() for u in url.split(",") if u.strip() and u.strip() != "*")
     if not origins:
@@ -86,3 +86,4 @@ app.include_router(auth_routes.router)
 app.include_router(user_routes.router)
 app.include_router(role_routes.router)
 app.include_router(health.router)
+app.include_router(internal_routes.router)

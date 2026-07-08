@@ -39,8 +39,6 @@ _PUBLIC_PATH_PREFIXES = (
     "/api/v1/auth/azure/login",
     "/api/v1/auth/azure/callback",
     "/api/v1/auth/azure/logout",
-    "/api/v1/auth/admin/login",
-    "/api/v1/auth/admin/bootstrap",
     "/api/v1/tickets/ws-url",
     "/api/v1/tickets/statuses",
     "/api/v1/tickets/priorities",
