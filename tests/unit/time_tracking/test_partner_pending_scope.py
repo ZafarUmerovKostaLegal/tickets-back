@@ -78,6 +78,35 @@ def test_pending_visible_for_user_mine_required_partner():
     )
 
 
+def test_pending_visible_for_user_mine_requires_team_overlap_for_new_review():
+    req = _Req(status="pending_partners")
+    assert pending_confirmation_visible_for_user_mine(
+        req,
+        required_partners=[10],
+        viewer_id=10,
+        team_member_ids={101, 102},
+        report_user_ids={102, 103},
+    )
+    assert not pending_confirmation_visible_for_user_mine(
+        req,
+        required_partners=[10],
+        viewer_id=10,
+        team_member_ids={101, 102},
+        report_user_ids={999},
+    )
+
+
+def test_pending_visible_for_user_mine_signed_bypasses_team_overlap():
+    req = _Req(status="pending_partners", signatures=[_Sig(10)])
+    assert pending_confirmation_visible_for_user_mine(
+        req,
+        required_partners=[10, 11],
+        viewer_id=10,
+        team_member_ids={101},
+        report_user_ids={999},
+    )
+
+
 def test_pending_visible_for_user_mine_signed_waiting_for_others():
     req = _Req(status="pending_partners", signatures=[_Sig(10)])
     assert pending_confirmation_visible_for_user_mine(

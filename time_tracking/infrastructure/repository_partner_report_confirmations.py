@@ -323,6 +323,10 @@ class PartnerReportConfirmationRepository:
             if m.project_id in partner_project_ids:
                 out.append(m)
                 continue
+            signed_ids = {s.partner_auth_user_id for s in (m.signatures or [])}
+            if vid in signed_ids:
+                out.append(m)
+                continue
         return out
 
     async def list_visible_for(
@@ -361,6 +365,10 @@ class PartnerReportConfirmationRepository:
                 out.append(m)
                 continue
             if m.project_id in partner_project_ids:
+                out.append(m)
+                continue
+            signed_ids = {s.partner_auth_user_id for s in (m.signatures or [])}
+            if vid in signed_ids:
                 out.append(m)
                 continue
         return out

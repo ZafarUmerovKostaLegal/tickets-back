@@ -7,6 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.project_partner_users import list_partner_auth_user_ids_for_project
+from application.partner_confirmation_team_scope import (
+    list_report_auth_user_ids_for_project_period,
+    list_team_member_auth_user_ids_for_partner,
+)
 from application.reports.partner_scope import (
     normalize_partner_pending_scope,
     pending_confirmation_visible_for_user_mine,
@@ -273,13 +277,31 @@ async def list_pending_partner_confirmations(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     out: list[dict] = []
+    team_members_cache: dict[int, set[int]] = {}
+    report_users_cache: dict[tuple[str, date, date], set[int]] = {}
     for m in candidates:
         partners = await list_partner_auth_user_ids_for_project(
             session, access_repo, m.project_id, authorization=authorization
         )
         if mode == "mine":
+            if vid not in team_members_cache:
+                team_members_cache[vid] = await list_team_member_auth_user_ids_for_partner(
+                    session, vid
+                )
+            report_key = (m.project_id, m.date_from, m.date_to)
+            if report_key not in report_users_cache:
+                report_users_cache[report_key] = await list_report_auth_user_ids_for_project_period(
+                    session,
+                    project_id=m.project_id,
+                    date_from=m.date_from,
+                    date_to=m.date_to,
+                )
             if not pending_confirmation_visible_for_user_mine(
-                m, required_partners=partners, viewer_id=vid
+                m,
+                required_partners=partners,
+                viewer_id=vid,
+                team_member_ids=team_members_cache[vid],
+                report_user_ids=report_users_cache[report_key],
             ):
                 continue
         out.append(_request_to_out(m, partners))

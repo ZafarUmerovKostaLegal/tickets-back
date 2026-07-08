@@ -57,6 +57,24 @@ class TeamRepository:
             out[tid].sort()
         return out
 
+    async def list_member_auth_user_ids_for_partner(self, partner_auth_user_id: int) -> list[int]:
+        pid = int(partner_auth_user_id)
+        if pid <= 0:
+            return []
+        r = await self._session.execute(
+            select(TimeTrackingTeamMemberModel.auth_user_id)
+            .join(
+                TimeTrackingTeamModel,
+                TimeTrackingTeamMemberModel.team_id == TimeTrackingTeamModel.id,
+            )
+            .where(
+                TimeTrackingTeamModel.partner_auth_user_id == pid,
+                TimeTrackingTeamModel.is_archived.is_(False),
+            )
+            .order_by(TimeTrackingTeamMemberModel.auth_user_id.asc())
+        )
+        return sorted({int(x) for x in r.scalars().all()})
+
     async def has_active_name_conflict(self, name: str, *, exclude_id: str | None = None) -> bool:
         n = (name or "").strip()
         if not n:

@@ -42,11 +42,23 @@ def pending_confirmation_visible_for_user_mine(
     *,
     required_partners: list[int],
     viewer_id: int,
+    team_member_ids: set[int] | None = None,
+    report_user_ids: set[int] | None = None,
 ) -> bool:
     if (getattr(request_row, "status", None) or "").strip() == "fully_confirmed":
         return False
     signatures = getattr(request_row, "signatures", None) or []
     signed_ids = {s.partner_auth_user_id for s in signatures}
-    if viewer_id in required_partners:
+    if viewer_id in signed_ids:
         return True
-    return viewer_id in signed_ids
+    if viewer_id not in required_partners:
+        return False
+    if team_member_ids is not None and report_user_ids is not None:
+        from application.partner_confirmation_team_scope import partner_team_overlaps_report
+
+        if not partner_team_overlaps_report(
+            team_member_ids=team_member_ids,
+            report_user_ids=report_user_ids,
+        ):
+            return False
+    return True
