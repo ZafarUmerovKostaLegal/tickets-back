@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.partner_report_confirmation_service import (
     confirm_partner_report_confirmation,
+    delete_partner_report_confirmation,
     list_confirmed_partner_confirmations,
     list_pending_partner_confirmations,
     submit_partner_report_confirmation,
@@ -102,6 +103,18 @@ async def partner_report_confirmation_confirm(
     return await confirm_partner_report_confirmation(
         session, viewer, rid, authorization=authorization
     )
+
+
+@router.delete("/partner-confirmations/{request_id}")
+async def partner_report_confirmation_delete(
+    request_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+):
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await delete_partner_report_confirmation(session, viewer, rid)
 
 
 @router.get("/partner-confirmations/pending")

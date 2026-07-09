@@ -195,6 +195,18 @@ class PartnerReportConfirmationRepository:
         row.updated_at = _now_utc()
         self._s.add(row)
 
+    async def delete_request(self, request_id: str) -> bool:
+        """Удаляет заявку и подписи (CASCADE). Возвращает False, если записи нет."""
+        rid = (request_id or "").strip()
+        if not rid:
+            return False
+        row = await self.get_request_by_id(rid, load_signatures=False)
+        if not row:
+            return False
+        await self._s.delete(row)
+        await self._s.flush()
+        return True
+
     async def has_fully_confirmed_for_project_period(
         self,
         project_id: str,

@@ -308,6 +308,43 @@ async def confirm_partner_report_confirmation(
     return _request_to_out(req, partners)
 
 
+async def delete_partner_report_confirmation(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+) -> dict:
+    """Удаляет заявку на проверку (не fully_confirmed).
+
+    Разрешено отправителю заявки или пользователям с полным доступом к списку pending.
+    """
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    vid = _viewer_id(viewer)
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    status = (getattr(req, "status", None) or "").strip()
+    if status == "fully_confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="Полностью подтверждённый отчёт нельзя удалить из списка на проверку",
+        )
+    is_submitter = int(req.submitted_by_auth_user_id) == vid
+    can_manage = viewer_can_view_all_pending_partner_confirmations(viewer)
+    if not is_submitter and not can_manage:
+        raise HTTPException(
+            status_code=403,
+            detail="Удалить может только отправитель отчёта или администратор",
+        )
+    ok = await conf_repo.delete_request(rid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    await session.commit()
+    return {"ok": True, "id": rid}
+
+
 async def list_pending_partner_confirmations(
     session: AsyncSession,
     viewer: dict,
