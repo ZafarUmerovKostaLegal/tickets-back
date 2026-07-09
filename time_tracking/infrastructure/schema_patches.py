@@ -560,6 +560,37 @@ async def apply_reports_schema_patch(conn: AsyncConnection) -> None:
             """
         )
     )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS tt_report_partner_confirmation_comments (
+                id VARCHAR(36) PRIMARY KEY,
+                request_id VARCHAR(36) NOT NULL
+                    REFERENCES tt_report_partner_confirmation_requests (id) ON DELETE CASCADE,
+                auth_user_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_comments_request_created
+                ON tt_report_partner_confirmation_comments (request_id, created_at)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_comments_author
+                ON tt_report_partner_confirmation_comments (auth_user_id)
+            """
+        )
+    )
 
 
 async def apply_invoices_schema_patch(conn: AsyncConnection) -> None:

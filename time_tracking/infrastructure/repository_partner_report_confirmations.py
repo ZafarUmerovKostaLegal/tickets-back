@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from infrastructure.models_reports import (
+    ReportPartnerConfirmationCommentModel,
     ReportPartnerConfirmationRequestModel,
     ReportPartnerConfirmationSignatureModel,
     ReportSnapshotRowModel,
@@ -383,4 +384,84 @@ class PartnerReportConfirmationRepository:
             if vid in signed_ids:
                 out.append(m)
                 continue
+        return out
+
+    async def list_comments(
+        self, request_id: str
+    ) -> list[ReportPartnerConfirmationCommentModel]:
+        q = (
+            select(ReportPartnerConfirmationCommentModel)
+            .where(ReportPartnerConfirmationCommentModel.request_id == request_id)
+            .order_by(ReportPartnerConfirmationCommentModel.created_at.asc())
+        )
+        return list((await self._s.execute(q)).scalars().all())
+
+    async def add_comment(
+        self,
+        *,
+        request_id: str,
+        auth_user_id: int,
+        text: str,
+    ) -> ReportPartnerConfirmationCommentModel:
+        now = _now_utc()
+        row = ReportPartnerConfirmationCommentModel(
+            id=str(uuid.uuid4()),
+            request_id=request_id,
+            auth_user_id=int(auth_user_id),
+            text=text,
+            created_at=now,
+            updated_at=None,
+        )
+        self._s.add(row)
+        await self._s.flush()
+        return row
+
+    async def comments_summary_by_request_ids(
+        self, request_ids: list[str]
+    ) -> dict[str, tuple[int, ReportPartnerConfirmationCommentModel | None]]:
+        """Для списка confirmed: (count, last_comment) по request_id."""
+        ids = [str(x).strip() for x in request_ids if str(x).strip()]
+        if not ids:
+            return {}
+        count_q = (
+            select(
+                ReportPartnerConfirmationCommentModel.request_id,
+                func.count().label("cnt"),
+            )
+            .where(ReportPartnerConfirmationCommentModel.request_id.in_(ids))
+            .group_by(ReportPartnerConfirmationCommentModel.request_id)
+        )
+        counts = {
+            str(rid): int(cnt or 0)
+            for rid, cnt in (await self._s.execute(count_q)).all()
+        }
+        # Последний комментарий: max(created_at) per request
+        last_subq = (
+            select(
+                ReportPartnerConfirmationCommentModel.request_id.label("rid"),
+                func.max(ReportPartnerConfirmationCommentModel.created_at).label(
+                    "max_created"
+                ),
+            )
+            .where(ReportPartnerConfirmationCommentModel.request_id.in_(ids))
+            .group_by(ReportPartnerConfirmationCommentModel.request_id)
+            .subquery()
+        )
+        last_q = (
+            select(ReportPartnerConfirmationCommentModel)
+            .join(
+                last_subq,
+                and_(
+                    ReportPartnerConfirmationCommentModel.request_id == last_subq.c.rid,
+                    ReportPartnerConfirmationCommentModel.created_at
+                    == last_subq.c.max_created,
+                ),
+            )
+        )
+        last_by_id: dict[str, ReportPartnerConfirmationCommentModel] = {}
+        for row in (await self._s.execute(last_q)).scalars().all():
+            last_by_id[str(row.request_id)] = row
+        out: dict[str, tuple[int, ReportPartnerConfirmationCommentModel | None]] = {}
+        for rid in ids:
+            out[rid] = (counts.get(rid, 0), last_by_id.get(rid))
         return out

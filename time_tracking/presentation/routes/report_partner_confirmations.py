@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.partner_report_confirmation_service import (
     confirm_partner_report_confirmation,
+    create_partner_confirmation_comment,
     delete_partner_report_confirmation,
     list_confirmed_partner_confirmations,
+    list_partner_confirmation_comments,
     list_pending_partner_confirmations,
     submit_partner_report_confirmation,
     submit_partner_report_confirmation_from_preview,
@@ -38,6 +40,12 @@ class PartnerReportConfirmationSubmitFromPreviewBody(BaseModel):
     project_id: str = Field(..., alias="projectId")
     date_from: date = Field(..., alias="dateFrom")
     date_to: date = Field(..., alias="dateTo")
+
+
+class PartnerConfirmationCommentCreateBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str = Field(..., min_length=1, max_length=4000)
 
 
 @router.post("/partner-confirmations/submit-from-preview")
@@ -174,4 +182,39 @@ async def partner_report_confirmation_confirmed(
         date_from=df,
         date_to=dt,
         before=bf,
+    )
+
+
+@router.get("/partner-confirmations/{request_id}/comments")
+async def partner_report_confirmation_comments_list(
+    request_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await list_partner_confirmation_comments(
+        session, viewer, rid, authorization=authorization
+    )
+
+
+@router.post("/partner-confirmations/{request_id}/comments")
+async def partner_report_confirmation_comments_create(
+    request_id: str,
+    body: PartnerConfirmationCommentCreateBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await create_partner_confirmation_comment(
+        session,
+        viewer,
+        rid,
+        text=body.text,
+        authorization=authorization,
     )

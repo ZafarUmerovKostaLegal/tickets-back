@@ -117,6 +117,12 @@ class ReportPartnerConfirmationRequestModel(Base):
         back_populates="request",
         cascade="all, delete-orphan",
     )
+    comments: Mapped[list["ReportPartnerConfirmationCommentModel"]] = relationship(
+        "ReportPartnerConfirmationCommentModel",
+        back_populates="request",
+        cascade="all, delete-orphan",
+        order_by="ReportPartnerConfirmationCommentModel.created_at",
+    )
 
 
 class ReportPartnerConfirmationSignatureModel(Base):
@@ -143,4 +149,24 @@ class ReportPartnerConfirmationSignatureModel(Base):
 
     request: Mapped["ReportPartnerConfirmationRequestModel"] = relationship(
         "ReportPartnerConfirmationRequestModel", back_populates="signatures"
+    )
+
+
+class ReportPartnerConfirmationCommentModel(Base):
+    __tablename__ = "tt_report_partner_confirmation_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tt_report_partner_confirmation_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    request: Mapped["ReportPartnerConfirmationRequestModel"] = relationship(
+        "ReportPartnerConfirmationRequestModel", back_populates="comments"
     )

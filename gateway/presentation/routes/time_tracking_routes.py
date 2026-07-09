@@ -1354,6 +1354,32 @@ async def reports_partner_confirmation_confirmed(
     )
 
 
+@router.get("/reports/partner-confirmations/{request_id}/comments")
+async def reports_partner_confirmation_comments_list(
+    request_id: str,
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "GET",
+        f"/reports/partner-confirmations/{request_id}/comments",
+        timeout=30.0,
+    )
+
+
+@router.post("/reports/partner-confirmations/{request_id}/comments")
+async def reports_partner_confirmation_comments_create(
+    request_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "POST",
+        f"/reports/partner-confirmations/{request_id}/comments",
+        json=body,
+        timeout=30.0,
+    )
+
+
 @router.get("/reports/time/{group_by}")
 async def reports_time(
     group_by: str,

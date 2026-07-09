@@ -107,7 +107,22 @@ async def _reconcile_all_completable_pending(
         await session.commit()
 
 
-def _request_to_out(m, required_partners: list[int]) -> dict:
+def _comment_to_out(c) -> dict:
+    return {
+        "id": c.id,
+        "authUserId": int(c.auth_user_id),
+        "text": c.text,
+        "createdAt": c.created_at.isoformat(),
+    }
+
+
+def _request_to_out(
+    m,
+    required_partners: list[int],
+    *,
+    comments_count: int | None = None,
+    last_comment=None,
+) -> dict:
     sigs = [
         {
             "partnerAuthUserId": s.partner_auth_user_id,
@@ -117,7 +132,7 @@ def _request_to_out(m, required_partners: list[int]) -> dict:
     ]
     signed_ids = {s.partner_auth_user_id for s in (m.signatures or [])}
     pending_ids = [p for p in required_partners if p not in signed_ids]
-    return {
+    out = {
         "id": m.id,
         "snapshotId": m.snapshot_id,
         "projectId": m.project_id,
@@ -132,6 +147,10 @@ def _request_to_out(m, required_partners: list[int]) -> dict:
         "createdAt": m.created_at.isoformat(),
         "updatedAt": m.updated_at.isoformat() if m.updated_at else None,
     }
+    if comments_count is not None:
+        out["commentsCount"] = int(comments_count)
+        out["lastComment"] = _comment_to_out(last_comment) if last_comment is not None else None
+    return out
 
 
 def can_bypass_partner_confirmation_gate(viewer: dict) -> bool:
@@ -434,12 +453,116 @@ async def list_confirmed_partner_confirmations(
             before=before,
         )
     out: list[dict] = []
+    summaries = await conf_repo.comments_summary_by_request_ids([m.id for m in rows])
     for m in rows:
         partners = await list_partner_auth_user_ids_for_project(
             session, access_repo, m.project_id, authorization=authorization
         )
-        out.append(_request_to_out(m, partners))
+        count, last = summaries.get(m.id, (0, None))
+        out.append(
+            _request_to_out(
+                m,
+                partners,
+                comments_count=count,
+                last_comment=last,
+            )
+        )
     return out
+
+
+_COMMENT_TEXT_MAX = 4000
+
+
+async def _viewer_can_access_confirmation_request(
+    session: AsyncSession,
+    viewer: dict,
+    req,
+    *,
+    authorization: str | None,
+) -> bool:
+    """Те же правила видимости, что у списка confirmed."""
+    if _viewer_can_see_all_confirmations(viewer):
+        return True
+    vid = _viewer_id(viewer)
+    if int(req.submitted_by_auth_user_id) == vid:
+        return True
+    signed_ids = {s.partner_auth_user_id for s in (req.signatures or [])}
+    if vid in signed_ids:
+        return True
+    partner_projects = set(
+        await list_partner_project_ids_for_viewer(
+            session, viewer, authorization=authorization
+        )
+    )
+    return req.project_id in partner_projects
+
+
+def _normalize_comment_text(raw: str | None) -> str:
+    text = (raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Текст комментария не может быть пустым")
+    if len(text) > _COMMENT_TEXT_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Текст комментария не длиннее {_COMMENT_TEXT_MAX} символов",
+        )
+    return text
+
+
+async def list_partner_confirmation_comments(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    *,
+    authorization: str | None,
+) -> list[dict]:
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    if not await _viewer_can_access_confirmation_request(
+        session, viewer, req, authorization=authorization
+    ):
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    comments = await conf_repo.list_comments(rid)
+    return [_comment_to_out(c) for c in comments]
+
+
+async def create_partner_confirmation_comment(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    *,
+    text: str,
+    authorization: str | None,
+) -> dict:
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    body_text = _normalize_comment_text(text)
+    vid = _viewer_id(viewer)
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    if not await _viewer_can_access_confirmation_request(
+        session, viewer, req, authorization=authorization
+    ):
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    status = (getattr(req, "status", None) or "").strip()
+    if status != "fully_confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="Комментарии доступны только для полностью подтверждённых отчётов",
+        )
+    row = await conf_repo.add_comment(
+        request_id=rid, auth_user_id=vid, text=body_text
+    )
+    await session.commit()
+    return _comment_to_out(row)
 
 
 async def invalidate_confirmations_after_row_edit(
