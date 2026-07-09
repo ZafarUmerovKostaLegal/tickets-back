@@ -42,6 +42,11 @@ class UserResponse(BaseModel):
         alias="isManual",
         description="Создан в учёте времени без регистрации в auth",
     )
+    can_transfer_time_without_project_access: bool = Field(
+        False,
+        alias="canTransferTimeWithoutProjectAccess",
+        description="Может переносить записи времени на проекты без доступа у владельца записи",
+    )
 
 
 class ManualTimeTrackingUserCreateBody(BaseModel):
@@ -69,6 +74,12 @@ class WeeklyCapacityPatchBody(BaseModel):
 
 
     weekly_capacity_hours: Decimal = Field(..., gt=0, le=168, description="Часов в неделю (ёмкость)")
+
+
+class TransferWithoutProjectAccessPatchBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(..., description="Разрешить перенос записей без доступа владельца к целевому проекту")
 
 
 class UserUpsertBody(BaseModel):

@@ -107,6 +107,20 @@ class TimeTrackingUserRepository:
         self._session.add(row)
         return row
 
+    async def patch_can_transfer_time_without_project_access(
+        self,
+        auth_user_id: int,
+        *,
+        enabled: bool,
+    ) -> TimeTrackingUserModel | None:
+        row = await self.get_by_auth_user_id(auth_user_id)
+        if not row:
+            return None
+        row.can_transfer_time_without_project_access = bool(enabled)
+        row.updated_at = _now_utc()
+        self._session.add(row)
+        return row
+
     async def delete_by_auth_user_id(self, auth_user_id: int) -> bool:
         r = await self._session.execute(
             delete(TimeTrackingUserModel).where(TimeTrackingUserModel.auth_user_id == auth_user_id)

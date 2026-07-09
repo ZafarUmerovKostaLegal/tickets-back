@@ -42,6 +42,12 @@ class TimeTrackingUserModel(Base):
         default=Decimal("35"),
         server_default=text("35"),
     )
+    can_transfer_time_without_project_access: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     reports_to_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

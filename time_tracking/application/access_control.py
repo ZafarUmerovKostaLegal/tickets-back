@@ -45,6 +45,27 @@ async def viewer_can_bypass_work_week_submission_lock(
     return bool(row and (row.role or "").strip() == "manager")
 
 
+async def viewer_can_transfer_time_without_project_access(
+    session: AsyncSession,
+    viewer: dict,
+) -> bool:
+    """Перенос записей на проект, к которому у владельца записи нет доступа."""
+    if _can_manage_tt(viewer):
+        return True
+    ur = TimeTrackingUserRepository(session)
+    row = await ur.get_by_auth_user_id(_viewer_id(viewer))
+    return bool(row and getattr(row, "can_transfer_time_without_project_access", False))
+
+
+def ensure_can_patch_transfer_without_project_access(viewer: dict) -> None:
+    if _can_manage_tt(viewer):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Настраивать перенос без доступа к проекту могут только администраторы и партнёры",
+    )
+
+
 def _org_role(viewer: dict) -> str:
     return (viewer.get("role") or "").strip()
 

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access_control import (
     ensure_time_entry_subject_allowed,
     viewer_can_bypass_work_week_submission_lock,
+    viewer_can_transfer_time_without_project_access,
 )
 from application.project_time_entry import is_project_closed_for_time_entries
 from application.time_entry_task import resolve_time_entry_task_for_project
@@ -88,12 +89,18 @@ async def _require_project_access_if_set(
     session: AsyncSession,
     auth_user_id: int,
     project_id: str | None,
+    *,
+    viewer: dict | None = None,
+    allow_transfer_bypass: bool = False,
 ) -> None:
     if project_id is None:
         return
     pid = str(project_id).strip()
     if not pid:
         return
+    if allow_transfer_bypass and viewer is not None:
+        if await viewer_can_transfer_time_without_project_access(session, viewer):
+            return
     par = UserProjectAccessRepository(session)
     if not await par.has_access(auth_user_id, pid):
         raise HTTPException(
@@ -228,7 +235,13 @@ async def patch_time_entry(
             work_date=patch.get("work_date") or row.work_date,
         )
         patch["project_id"] = project_id
-        await _require_project_access_if_set(session, auth_user_id, project_id)
+        await _require_project_access_if_set(
+            session,
+            auth_user_id,
+            project_id,
+            viewer=viewer,
+            allow_transfer_bypass=True,
+        )
         new_norm = _normalize_project_id(
             str(project_id) if project_id is not None else None
         )

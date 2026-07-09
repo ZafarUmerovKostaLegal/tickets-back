@@ -19,6 +19,7 @@ from application.access_control import (
     ensure_upsert_user_allowed,
     ensure_weekly_capacity_patch_allowed,
     ensure_can_grant_time_entry_edit_unlock,
+    ensure_can_patch_transfer_without_project_access,
 )
 from application.manual_tt_users import create_manual_tt_user, is_manual_tt_auth_user_id
 from application.project_partner_requirement import (
@@ -38,6 +39,7 @@ from presentation.schemas import (
     UserResponse,
     UserUpsertBody,
     WeeklyCapacityPatchBody,
+    TransferWithoutProjectAccessPatchBody,
     TimeEntryEditUnlockBody,
     TimeEntryEditUnlockOut,
 )
@@ -74,6 +76,9 @@ def _user_response_directory(
         created_at=row.created_at,
         updated_at=row.updated_at,
         is_manual=is_manual_tt_auth_user_id(int(row.auth_user_id)),
+        can_transfer_time_without_project_access=bool(
+            getattr(row, "can_transfer_time_without_project_access", False)
+        ),
     )
 
 
@@ -270,6 +275,38 @@ async def patch_weekly_capacity(
     await ensure_weekly_capacity_patch_allowed(viewer, auth_user_id)
     repo = TimeTrackingUserRepository(session)
     row = await repo.patch_weekly_capacity_hours(auth_user_id, body.weekly_capacity_hours)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not in time tracking")
+    await session.commit()
+    ap = await fetch_auth_user_position(authorization or "", auth_user_id)
+    pos = row.position
+    if pos is not None and str(pos).strip():
+        pos = str(pos).strip()
+    elif ap is not None:
+        pos = ap
+    else:
+        pos = None
+    return _user_response_directory(row, position=pos)
+
+
+@router.patch(
+    "/{auth_user_id}/transfer-without-project-access",
+    response_model=UserResponse,
+    summary="Разрешить/запретить перенос записей без доступа владельца к целевому проекту",
+)
+async def patch_transfer_without_project_access(
+    auth_user_id: int,
+    body: TransferWithoutProjectAccessPatchBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> UserResponse:
+    ensure_can_patch_transfer_without_project_access(viewer)
+    repo = TimeTrackingUserRepository(session)
+    row = await repo.patch_can_transfer_time_without_project_access(
+        auth_user_id,
+        enabled=body.enabled,
+    )
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
     await session.commit()
