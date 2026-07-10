@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.kind_legend import ALL_KIND_CODES, document_required_for
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.models import (
     AbsenceDay,
@@ -74,9 +75,8 @@ def _save_document_bytes(entry: ManualAbsenceEntry, original_name: str, data: by
 
 
 def document_disk_path(doc: AbsenceDocument) -> Path | None:
-    base = _media_base()
-    target = (base / (doc.storage_key or "")).resolve()
-    if not str(target).startswith(str(base)) or not target.is_file():
+    target = safe_media_path(_media_base(), doc.storage_key or "")
+    if target is None or not target.is_file():
         return None
     return target
 
@@ -184,14 +184,15 @@ async def create_manual_entry(
 async def _cleanup_entry_files(entry: ManualAbsenceEntry) -> None:
     base = _media_base()
     for doc in entry.documents:
-        target = (base / (doc.storage_key or "")).resolve()
-        if str(target).startswith(str(base)) and target.is_file():
+        target = safe_media_path(base, doc.storage_key or "")
+        if target is not None and target.is_file():
             target.unlink(missing_ok=True)
-                                                     
     try:
         year = entry.date_from.year
-        subdir = (base / "vacation_absence_documents" / str(year) / str(entry.id)).resolve()
-        if str(subdir).startswith(str(base)) and subdir.is_dir():
+        subdir = safe_media_path(
+            base, f"vacation_absence_documents/{year}/{entry.id}"
+        )
+        if subdir is not None and subdir.is_dir():
             subdir.rmdir()
     except OSError:
         pass

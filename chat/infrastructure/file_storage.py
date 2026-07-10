@@ -2,6 +2,7 @@ import re
 import uuid
 from pathlib import Path
 
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 
 
@@ -33,8 +34,8 @@ def save_chat_file(
         raise ValueError(f"File size exceeds {mb}MB")
     rel_dir = Path("chat_attachments") / str(room_id) / str(message_id)
     media_base = _media_base()
-    target_dir = (media_base / rel_dir).resolve()
-    if not str(target_dir).startswith(str(media_base)):
+    target_dir = safe_media_path(media_base, rel_dir)
+    if target_dir is None:
         raise ValueError("Invalid path")
     target_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(original_filename or "").suffix[:32]
@@ -48,10 +49,7 @@ def save_chat_file(
 def resolve_storage_path(storage_key: str) -> Path | None:
     if not storage_key:
         return None
-    media_base = _media_base()
-    path = (media_base / storage_key).resolve()
-    if not str(path).startswith(str(media_base)):
-        return None
-    if not path.is_file():
+    path = safe_media_path(_media_base(), storage_key)
+    if path is None or not path.is_file():
         return None
     return path

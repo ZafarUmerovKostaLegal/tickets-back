@@ -82,6 +82,13 @@ class TransferWithoutProjectAccessPatchBody(BaseModel):
     enabled: bool = Field(..., description="Разрешить перенос записей без доступа владельца к целевому проекту")
 
 
+class LifecycleFlagsPatchBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    is_blocked: bool = Field(..., alias="isBlocked")
+    is_archived: bool = Field(..., alias="isArchived")
+
+
 class UserUpsertBody(BaseModel):
 
 

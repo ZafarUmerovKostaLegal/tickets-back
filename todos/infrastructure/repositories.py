@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 from application.ports import HealthRepositoryPort
 from infrastructure.config import get_settings
 from infrastructure.file_storage import save_todo_card_file
@@ -29,6 +30,12 @@ from infrastructure.models import (
     TodoCardParticipantModel,
     TodoColumnModel,
     TodoUserPreferenceModel,
+)
+from infrastructure.token_crypto import (
+    decrypt_token,
+    encrypt_token,
+    encryption_enabled,
+    is_encrypted_token,
 )
 
 
@@ -54,7 +61,13 @@ class OutlookCalendarTokenRepository:
                 OutlookCalendarTokenModel.user_id == user_id
             )
         )
-        return r.scalars().one_or_none()
+        row = r.scalars().one_or_none()
+        if row is None:
+            return None
+        # Decrypt in-memory without marking the row dirty (avoids plaintext flush).
+        set_committed_value(row, "access_token", decrypt_token(row.access_token))
+        set_committed_value(row, "refresh_token", decrypt_token(row.refresh_token))
+        return row
 
     async def upsert(
         self,
@@ -64,21 +77,50 @@ class OutlookCalendarTokenRepository:
         refresh_token: str,
         expires_at: datetime | None,
     ) -> None:
-        row = await self.get_by_user_id(user_id)
+        enc_access = encrypt_token(access_token)
+        enc_refresh = encrypt_token(refresh_token)
+        r = await self._session.execute(
+            select(OutlookCalendarTokenModel).where(
+                OutlookCalendarTokenModel.user_id == user_id
+            )
+        )
+        row = r.scalars().one_or_none()
         if row:
-            row.access_token = access_token
-            row.refresh_token = refresh_token
+            row.access_token = enc_access
+            row.refresh_token = enc_refresh
             row.expires_at = expires_at
             self._session.add(row)
         else:
             self._session.add(
                 OutlookCalendarTokenModel(
                     user_id=user_id,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
+                    access_token=enc_access,
+                    refresh_token=enc_refresh,
                     expires_at=expires_at,
                 )
             )
+
+    async def reencrypt_plaintext_tokens(self) -> int:
+        """Encrypt legacy plaintext rows when Fernet key is set. Idempotent; no data loss."""
+        if not encryption_enabled():
+            return 0
+        r = await self._session.execute(select(OutlookCalendarTokenModel))
+        rows = list(r.scalars().all())
+        updated = 0
+        for row in rows:
+            changed = False
+            if row.access_token and not is_encrypted_token(row.access_token):
+                row.access_token = encrypt_token(row.access_token)
+                changed = True
+            if row.refresh_token and not is_encrypted_token(row.refresh_token):
+                row.refresh_token = encrypt_token(row.refresh_token)
+                changed = True
+            if changed:
+                self._session.add(row)
+                updated += 1
+        if updated:
+            await self._session.commit()
+        return updated
 
 
 def _utc_now() -> datetime:

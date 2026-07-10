@@ -452,6 +452,17 @@ async def apply_time_entries_task_id_schema_patch(conn: AsyncConnection) -> None
     )
 
 
+async def apply_time_entries_project_date_index_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entries_project_date
+                ON time_tracking_entries (project_id, work_date)
+            """
+        )
+    )
+
+
 async def apply_reports_schema_patch(conn: AsyncConnection) -> None:
 
     await conn.execute(

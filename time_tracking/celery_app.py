@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import os
@@ -7,7 +5,10 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 
+from backend_common.redis_url_warn import warn_if_redis_url_unauthenticated
+
 REDIS = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+warn_if_redis_url_unauthenticated(REDIS, service="time_tracking_celery")
 app = Celery(
     "time_tracking",
     broker=REDIS,

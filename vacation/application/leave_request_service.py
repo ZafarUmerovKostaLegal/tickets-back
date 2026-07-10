@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.kind_legend import REQUESTABLE_KIND_CODES
+from backend_common.media_path import safe_media_path
 from infrastructure.auth_lookup import AuthUser
 from infrastructure.config import get_settings
 from infrastructure.models import (
@@ -201,9 +202,8 @@ async def cleanup_pdf(req: LeaveRequest) -> None:
     if not req.pdf_storage_key:
         return
     settings = get_settings()
-    base = Path(settings.media_path).resolve()
-    target = (base / req.pdf_storage_key).resolve()
-    if str(target).startswith(str(base)) and target.is_file():
+    target = safe_media_path(settings.media_path, req.pdf_storage_key)
+    if target is not None and target.is_file():
         target.unlink(missing_ok=True)
 
 

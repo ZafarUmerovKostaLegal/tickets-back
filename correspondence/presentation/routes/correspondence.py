@@ -453,7 +453,7 @@ async def download_attachment_file(
     if not att:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
     path = resolve_storage_path(att.storage_key)
-    if not path.is_file():
+    if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
     mime = (att.content_type or "application/octet-stream").strip()
     disp = "inline" if mime.startswith(_INLINE_MIME_PREFIXES) else "attachment"

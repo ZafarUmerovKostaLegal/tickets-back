@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from pathlib import Path
 from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -16,6 +15,7 @@ from application.kind_legend import (
     KIND_LEGEND_ENTRIES,
     REQUESTABLE_KIND_CODES,
 )
+from backend_common.media_path import safe_media_path
 from application.leave_request_service import (
     apply_decision,
     create_leave_request,
@@ -341,9 +341,8 @@ async def get_leave_request_pdf(
     if not req.pdf_storage_key:
         raise HTTPException(status_code=404, detail="PDF не сформирован")
     settings = get_settings()
-    target = (Path(settings.media_path).resolve() / req.pdf_storage_key).resolve()
-    media_base = Path(settings.media_path).resolve()
-    if not str(target).startswith(str(media_base)) or not target.is_file():
+    target = safe_media_path(settings.media_path, req.pdf_storage_key)
+    if target is None or not target.is_file():
         raise HTTPException(status_code=404, detail="PDF файл недоступен")
     return FileResponse(target, media_type="application/pdf", filename=f"leave_request_{req.id}.pdf")
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import html as html_mod
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -12,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.expense_author_decision_notify import run_author_decision_notification_safe
 from infrastructure.database import get_session
@@ -263,8 +263,8 @@ async def expense_attachment_email_file(
     if not att_row:
         return HTMLResponse(_page("Файл не найден", "Вложение отсутствует.", False), status_code=404)
 
-    p = Path(settings.media_path) / att_row.storage_key
-    if not p.is_file():
+    p = safe_media_path(settings.media_path, att_row.storage_key)
+    if p is None or not p.is_file():
         return HTMLResponse(_page("Файл не найден", "Файл на диске отсутствует.", False), status_code=404)
 
     media = (att_row.mime_type or "").strip() or "application/octet-stream"

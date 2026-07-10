@@ -560,7 +560,9 @@ async def block_user(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return _normalize_desktop_background_url(r.json())
+    user_payload = r.json()
+    await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(user_payload)
 
 
 @router.patch("/{user_id}/archive", response_model=UserDetailResponse)
@@ -583,7 +585,9 @@ async def archive_user(
         raise HTTPException(status_code=404, detail="User not found")
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return _normalize_desktop_background_url(r.json())
+    user_payload = r.json()
+    await _sync_time_tracking_user(user_payload, bearer_for_upstream(request, authorization))
+    return _normalize_desktop_background_url(user_payload)
 
 
 @router.patch("/{user_id}/time-tracking-role", response_model=UserDetailResponse)

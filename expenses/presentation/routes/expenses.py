@@ -19,6 +19,7 @@ from application.expense_service import (
     validate_expense_subtype_rules,
     validate_submit_fields,
 )
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
@@ -1168,8 +1169,8 @@ async def download_attachment_file(
     att_row = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
     if not att_row:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
-    p = Path(settings.media_path) / att_row.storage_key
-    if not p.is_file():
+    p = safe_media_path(settings.media_path, att_row.storage_key)
+    if p is None or not p.is_file():
         raise HTTPException(status_code=404, detail="Файл на диске не найден")
     media = (att_row.mime_type or "").strip() or "application/octet-stream"
     return FileResponse(
@@ -1335,9 +1336,9 @@ async def delete_attachment(
     ok = await repo.delete_attachment(expense_id, attachment_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
-    p = Path(settings.media_path) / storage_key
+    p = safe_media_path(settings.media_path, storage_key)
     try:
-        if p.is_file():
+        if p is not None and p.is_file():
             p.unlink()
     except OSError:
         pass

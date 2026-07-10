@@ -121,6 +121,22 @@ class TimeTrackingUserRepository:
         self._session.add(row)
         return row
 
+    async def patch_lifecycle_flags(
+        self,
+        auth_user_id: int,
+        *,
+        is_blocked: bool,
+        is_archived: bool,
+    ) -> TimeTrackingUserModel | None:
+        row = await self.get_by_auth_user_id(auth_user_id)
+        if not row:
+            return None
+        row.is_blocked = bool(is_blocked)
+        row.is_archived = bool(is_archived)
+        row.updated_at = _now_utc()
+        self._session.add(row)
+        return row
+
     async def delete_by_auth_user_id(self, auth_user_id: int) -> bool:
         r = await self._session.execute(
             delete(TimeTrackingUserModel).where(TimeTrackingUserModel.auth_user_id == auth_user_id)

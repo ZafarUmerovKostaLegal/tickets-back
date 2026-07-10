@@ -1,9 +1,8 @@
-
-
 import re
 import uuid
 from pathlib import Path
 
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 
 
@@ -32,8 +31,8 @@ def save_todo_card_file(
         raise ValueError(f"File size exceeds {get_settings().max_upload_mb}MB")
     rel_dir = Path("todo_cards") / str(owner_user_id) / str(card_id)
     media_base = Path(get_settings().media_path).resolve()
-    target_dir = (media_base / rel_dir).resolve()
-    if not str(target_dir).startswith(str(media_base)):
+    target_dir = safe_media_path(media_base, rel_dir)
+    if target_dir is None:
         raise ValueError("Invalid path")
     target_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(original_filename).suffix[:32]
@@ -78,8 +77,8 @@ def save_todo_board_background(
 
     rel_dir = Path("todo_board_backgrounds") / str(owner_user_id) / str(board_id)
     media_base = Path(get_settings().media_path).resolve()
-    target_dir = (media_base / rel_dir).resolve()
-    if not str(target_dir).startswith(str(media_base)):
+    target_dir = safe_media_path(media_base, rel_dir)
+    if target_dir is None:
         raise ValueError("Invalid path")
     target_dir.mkdir(parents=True, exist_ok=True)
 

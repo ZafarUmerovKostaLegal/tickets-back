@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,12 +20,15 @@ from infrastructure.models import (
     TodoColumnModel,
 )
 from presentation.routes import board_routes, boards_multi_routes, calendar_routes, health
-from infrastructure.database import Base, engine
+from infrastructure.database import Base, async_session_factory, engine
+from infrastructure.repositories import OutlookCalendarTokenRepository
 from infrastructure.schema_patches import (
     apply_todo_board_columns_collapsed_patch,
     apply_todo_boards_multi_user_patch,
     apply_todo_kanban_extended_patch,
 )
+
+_log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -35,6 +39,13 @@ async def lifespan(app: FastAPI):
         await apply_todo_board_columns_collapsed_patch(conn)
         await apply_todo_kanban_extended_patch(conn)
         await apply_todo_boards_multi_user_patch(conn)
+    try:
+        async with async_session_factory() as session:
+            n = await OutlookCalendarTokenRepository(session).reencrypt_plaintext_tokens()
+            if n:
+                _log.info("Re-encrypted %s Outlook calendar token row(s) at rest", n)
+    except Exception:
+        _log.exception("Outlook token re-encrypt on startup failed (non-fatal)")
     yield
 
 

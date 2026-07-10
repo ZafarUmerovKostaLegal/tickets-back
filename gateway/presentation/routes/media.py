@@ -1,10 +1,10 @@
 import re
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from backend_common.media_path import safe_media_path
 from infrastructure.auth_upstream import verify_bearer_and_get_user
 from infrastructure.config import get_settings
 
@@ -35,9 +35,8 @@ async def get_desktop_background_media(user_id: int, filename: str):
     if not _DESKTOP_BG_FILENAME.match(filename):
         raise HTTPException(status_code=404, detail="Not found")
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
-    target = (base_dir / "desktop_backgrounds" / str(user_id) / filename).resolve()
-    if not str(target).startswith(str(base_dir)):
+    target = safe_media_path(settings.media_path, f"desktop_backgrounds/{user_id}/{filename}")
+    if target is None:
         raise HTTPException(status_code=400, detail="Invalid media path")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -51,11 +50,11 @@ async def get_todo_board_background_media(owner_user_id: int, board_id: int, fil
     if not _TODO_BOARD_BG_FILENAME.match(filename):
         raise HTTPException(status_code=404, detail="Not found")
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
-    target = (
-        base_dir / "todo_board_backgrounds" / str(owner_user_id) / str(board_id) / filename
-    ).resolve()
-    if not str(target).startswith(str(base_dir)):
+    target = safe_media_path(
+        settings.media_path,
+        f"todo_board_backgrounds/{owner_user_id}/{board_id}/{filename}",
+    )
+    if target is None:
         raise HTTPException(status_code=400, detail="Invalid media path")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -65,10 +64,8 @@ async def get_todo_board_background_media(owner_user_id: int, board_id: int, fil
 @router.get("/{subpath:path}")
 async def get_media(subpath: str, _: dict = Depends(get_current_user)):
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
-    target_path = (base_dir / subpath).resolve()
-
-    if not str(target_path).startswith(str(base_dir)):
+    target_path = safe_media_path(settings.media_path, subpath)
+    if target_path is None:
         raise HTTPException(status_code=400, detail="Invalid media path")
 
     if not target_path.exists() or not target_path.is_file():

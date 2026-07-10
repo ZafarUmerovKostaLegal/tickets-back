@@ -18,7 +18,6 @@ class DatabaseMonitorSettings(BaseSettings):
     todos_database_url: str = Field(default="", validation_alias="TODOS_DATABASE_URL")
     time_tracking_database_url: str = Field(default="", validation_alias="TIME_TRACKING_DATABASE_URL")
     expenses_database_url: str = Field(default="", validation_alias="EXPENSES_DATABASE_URL")
-    projects_database_url: str = Field(default="", validation_alias="PROJECTS_DATABASE_URL")
     vacation_database_url: str = Field(default="", validation_alias="VACATION_DATABASE_URL")
     chat_database_url: str = Field(default="", validation_alias="CHAT_DATABASE_URL")
     correspondence_database_url: str = Field(default="", validation_alias="CORRESPONDENCE_DATABASE_URL")
@@ -36,7 +35,6 @@ def database_targets(settings: DatabaseMonitorSettings | None = None) -> list[tu
         ("todos", s.todos_database_url),
         ("time_tracking", s.time_tracking_database_url),
         ("expenses", s.expenses_database_url),
-        ("projects", s.projects_database_url),
         ("vacation", s.vacation_database_url),
         ("chat", s.chat_database_url),
         ("correspondence", s.correspondence_database_url),

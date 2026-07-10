@@ -149,13 +149,32 @@ async def upsert_time_tracking_user_from_auth_record(
     if not base:
         return
     auth_headers = _auth_headers(authorization)
+    is_blocked = _bool_from_record(record, "is_blocked", "isBlocked")
+    is_archived = _bool_from_record(record, "is_archived", "isArchived")
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         if tt_role in _TT_ROLES:
             pos = record.get("position")
             pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
             if not pos_s:
-                return
+                # Critical dual-write fix: still sync block/archive flags without full upsert.
+                r = await client.patch(
+                    f"{base}/users/{int(uid)}/lifecycle-flags",
+                    json={"isBlocked": is_blocked, "isArchived": is_archived},
+                    headers=auth_headers,
+                )
+                if r.status_code in (200, 404):
+                    return
+                detail = (r.text or "").strip()
+                if len(detail) > 500:
+                    detail = detail[:500]
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Не удалось синхронизировать флаги пользователя с Time Tracking: "
+                        f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
+                    ),
+                )
             payload = build_tt_upsert_payload_from_auth_record(record, default_tt_role=tt_role)
             if not payload:
                 return

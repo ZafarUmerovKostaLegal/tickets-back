@@ -40,6 +40,7 @@ from presentation.schemas import (
     UserUpsertBody,
     WeeklyCapacityPatchBody,
     TransferWithoutProjectAccessPatchBody,
+    LifecycleFlagsPatchBody,
     TimeEntryEditUnlockBody,
     TimeEntryEditUnlockOut,
 )
@@ -306,6 +307,39 @@ async def patch_transfer_without_project_access(
     row = await repo.patch_can_transfer_time_without_project_access(
         auth_user_id,
         enabled=body.enabled,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not in time tracking")
+    await session.commit()
+    ap = await fetch_auth_user_position(authorization or "", auth_user_id)
+    pos = row.position
+    if pos is not None and str(pos).strip():
+        pos = str(pos).strip()
+    elif ap is not None:
+        pos = ap
+    else:
+        pos = None
+    return _user_response_directory(row, position=pos)
+
+
+@router.patch(
+    "/{auth_user_id}/lifecycle-flags",
+    response_model=UserResponse,
+    summary="Синхронизация is_blocked / is_archived из auth (без требования должности)",
+)
+async def patch_lifecycle_flags(
+    auth_user_id: int,
+    body: LifecycleFlagsPatchBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> UserResponse:
+    ensure_upsert_user_allowed(viewer, auth_user_id)
+    repo = TimeTrackingUserRepository(session)
+    row = await repo.patch_lifecycle_flags(
+        auth_user_id,
+        is_blocked=body.is_blocked,
+        is_archived=body.is_archived,
     )
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")

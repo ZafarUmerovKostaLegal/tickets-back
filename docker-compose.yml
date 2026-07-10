@@ -19,7 +19,6 @@ services:
       - TODOS_SERVICE_URL=${TODOS_SERVICE_URL:-http://todos:1240}
       - TIME_TRACKING_SERVICE_URL=${TIME_TRACKING_SERVICE_URL:-http://time_tracking:1241}
       - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
-      - PROJECTS_SERVICE_URL=${PROJECTS_SERVICE_URL:-http://projects:1243}
       - ATTENDANCE_SERVICE_URL=${ATTENDANCE_SERVICE_URL:-http://attendance:1239}
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
@@ -35,7 +34,6 @@ services:
       - TODOS_DATABASE_URL=${TODOS_DATABASE_URL:-postgresql://todos:todos@todos_db:5432/kosta_todos}
       - TIME_TRACKING_DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
       - EXPENSES_DATABASE_URL=${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
-      - PROJECTS_DATABASE_URL=${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
       - VACATION_DATABASE_URL=${VACATION_DATABASE_URL:-postgresql://vacation:vacation@vacation_db:5432/kosta_vacation}
       - CHAT_DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
       - CORRESPONDENCE_DATABASE_URL=${CORRESPONDENCE_DATABASE_URL:-postgresql://correspondence:correspondence@correspondence_db:5432/kosta_correspondence}
@@ -77,8 +75,6 @@ services:
       time_tracking:
         condition: service_started
       expenses:
-        condition: service_started
-      projects:
         condition: service_started
       attendance:
         condition: service_started
@@ -178,7 +174,6 @@ services:
       ATTENDANCE_DATABASE_URL: ${ATTENDANCE_DATABASE_URL:-postgresql://attendance:attendance@attendance_db:5432/kosta_attendance}
       TIME_TRACKING_DATABASE_URL: ${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
       EXPENSES_DATABASE_URL: ${EXPENSES_DATABASE_URL:-postgresql://expenses:expenses@expenses_db:5432/kosta_expenses}
-      PROJECTS_DATABASE_URL: ${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
       VACATION_DATABASE_URL: ${VACATION_DATABASE_URL:-postgresql://vacation:vacation@vacation_db:5432/kosta_vacation}
       CHAT_DATABASE_URL: ${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
       CORRESPONDENCE_DATABASE_URL: ${CORRESPONDENCE_DATABASE_URL:-postgresql://correspondence:correspondence@correspondence_db:5432/kosta_correspondence}
@@ -207,8 +202,6 @@ services:
       time_tracking_db:
         condition: service_healthy
       expenses_db:
-        condition: service_healthy
-      projects_db:
         condition: service_healthy
       vacation_db:
         condition: service_healthy
@@ -496,6 +489,7 @@ services:
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-15}
       - NOTIFICATION_PUSH_URL=${NOTIFICATION_PUSH_URL:-http://gateway:1234/api/v1/notifications/system}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - OUTLOOK_TOKEN_FERNET_KEY=${OUTLOOK_TOKEN_FERNET_KEY:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
@@ -563,11 +557,23 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: [ "redis-server", "--appendonly", "yes" ]
+    # Optional: REDIS_PASSWORD + REDIS_URL=redis://:PASSWORD@redis:6379/0
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi',
+      ]
     volumes:
       - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test:
+        [
+          "CMD-SHELL",
+          'if [ -n "$$REDIS_PASSWORD" ]; then redis-cli -a "$$REDIS_PASSWORD" ping; else redis-cli ping; fi',
+        ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -581,7 +587,7 @@ services:
     working_dir: /app
     environment:
       - DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
     depends_on:
       redis:
@@ -599,7 +605,7 @@ services:
     command: [ "celery", "-A", "celery_app", "beat", "--loglevel=info" ]
     working_dir: /app
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
       - WEEKLY_SUBMIT_HOUR=${WEEKLY_SUBMIT_HOUR:-12}
       - WEEKLY_SUBMIT_MINUTE=${WEEKLY_SUBMIT_MINUTE:-0}
@@ -683,39 +689,6 @@ services:
       timeout: 5s
       retries: 5
 
-  projects_db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    command: [ "postgres", "-c", "log_min_messages=warning" ]
-    environment:
-      POSTGRES_USER: ${PROJECTS_DB_USER:-projects}
-      POSTGRES_PASSWORD: ${PROJECTS_DB_PASSWORD:-projects}
-      POSTGRES_DB: ${PROJECTS_DB_NAME:-kosta_projects}
-    volumes:
-      - projects_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  projects:
-    build:
-      context: .
-      dockerfile: projects/Dockerfile
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=${PROJECTS_DATABASE_URL:-postgresql://projects:projects@projects_db:5432/kosta_projects}
-    depends_on:
-      projects_db:
-        condition: service_healthy
-    healthcheck:
-      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1243/health\", timeout=3)"' ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
   vacation:
     build:
       context: .
@@ -792,7 +765,6 @@ volumes:
   todos_db_data:
   time_tracking_db_data:
   expenses_db_data:
-  projects_db_data:
   vacation_db_data:
   chat_db_data:
   correspondence_db_data:
