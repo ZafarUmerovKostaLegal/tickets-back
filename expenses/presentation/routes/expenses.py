@@ -201,11 +201,27 @@ def _ensure_can_delete(row: ExpenseRequestModel, user: dict) -> None:
     uid = int(user["id"])
     if is_admin_editor(user):
         return
-    if row.created_by_user_id == uid and row.status in ("draft", "revision_required"):
+    if is_moderator(user):
+        if row.status in ("paid", "closed"):
+            raise HTTPException(
+                status_code=400,
+                detail="Удаление недоступно для выплаченных и закрытых заявок",
+            )
+        return
+    if row.created_by_user_id == uid and row.status in (
+        "draft",
+        "revision_required",
+        "pending_approval",
+        "withdrawn",
+        "rejected",
+    ):
         return
     raise HTTPException(
         status_code=403,
-        detail="Удалить может автор в статусах «Черновик» и «На доработке» или администратор",
+        detail=(
+            "Удалить может автор (черновик, на доработке, на согласовании, отозванные, отклонённые), "
+            "модератор (кроме выплаченных и закрытых) или администратор"
+        ),
     )
 
 
