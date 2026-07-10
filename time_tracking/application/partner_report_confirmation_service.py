@@ -351,9 +351,10 @@ async def delete_partner_report_confirmation(
     viewer: dict,
     request_id: str,
 ) -> dict:
-    """Удаляет заявку на проверку (не fully_confirmed).
+    """Удаляет заявку на подтверждение (на проверке или полностью подтверждённую).
 
-    Разрешено отправителю заявки или пользователям с полным доступом к списку pending.
+    Разрешено отправителю заявки или пользователям с полным доступом к спискам отчётов.
+    Записи времени не удаляются.
     """
     rid = (request_id or "").strip()
     if not rid:
@@ -363,14 +364,11 @@ async def delete_partner_report_confirmation(
     req = await conf_repo.get_request_by_id(rid, load_signatures=True)
     if not req:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
-    status = (getattr(req, "status", None) or "").strip()
-    if status == "fully_confirmed":
-        raise HTTPException(
-            status_code=409,
-            detail="Полностью подтверждённый отчёт нельзя удалить из списка на проверку",
-        )
     is_submitter = int(req.submitted_by_auth_user_id) == vid
-    can_manage = viewer_can_view_all_pending_partner_confirmations(viewer)
+    can_manage = (
+        viewer_can_view_all_pending_partner_confirmations(viewer)
+        or _viewer_can_see_all_confirmations(viewer)
+    )
     if not is_submitter and not can_manage:
         raise HTTPException(
             status_code=403,
