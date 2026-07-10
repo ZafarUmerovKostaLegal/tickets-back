@@ -1,5 +1,6 @@
 from application.partner_report_confirmation_service import (
     _comment_to_out,
+    _ensure_commentable_request_status,
     _normalize_comment_text,
     _request_to_out,
 )
@@ -15,6 +16,15 @@ def test_normalize_comment_text_trims_and_rejects_empty():
     with pytest.raises(HTTPException) as too_long:
         _normalize_comment_text("x" * 4001)
     assert too_long.value.status_code == 400
+
+
+def test_commentable_request_statuses_allow_pending_and_confirmed():
+    _ensure_commentable_request_status("fully_confirmed")
+    _ensure_commentable_request_status("pending_partners")
+    with pytest.raises(HTTPException) as rejected:
+        _ensure_commentable_request_status("cancelled")
+    assert rejected.value.status_code == 409
+    assert "на проверке" in str(rejected.value.detail)
 
 
 def test_request_to_out_includes_comments_summary():

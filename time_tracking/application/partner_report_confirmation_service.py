@@ -471,6 +471,16 @@ async def list_confirmed_partner_confirmations(
 
 
 _COMMENT_TEXT_MAX = 4000
+_COMMENTABLE_REQUEST_STATUSES = frozenset({"fully_confirmed", "pending_partners"})
+
+
+def _ensure_commentable_request_status(status: str | None) -> None:
+    normalized = (status or "").strip()
+    if normalized not in _COMMENTABLE_REQUEST_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="Комментарии доступны только для отчётов на проверке или полностью подтверждённых",
+        )
 
 
 async def _viewer_can_access_confirmation_request(
@@ -552,12 +562,7 @@ async def create_partner_confirmation_comment(
         session, viewer, req, authorization=authorization
     ):
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
-    status = (getattr(req, "status", None) or "").strip()
-    if status != "fully_confirmed":
-        raise HTTPException(
-            status_code=409,
-            detail="Комментарии доступны только для полностью подтверждённых отчётов",
-        )
+    _ensure_commentable_request_status(getattr(req, "status", None))
     row = await conf_repo.add_comment(
         request_id=rid, auth_user_id=vid, text=body_text
     )
