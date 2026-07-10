@@ -26,6 +26,7 @@ from infrastructure.repository_partner_report_confirmations import (
     PartnerReportConfirmationRepository,
     project_id_from_snapshot_row,
 )
+from infrastructure.repository_entries import TimeEntryRepository
 from infrastructure.repository_reports import ReportSnapshotRepository
 
 
@@ -116,12 +117,26 @@ def _comment_to_out(c) -> dict:
     }
 
 
+async def _entry_counts_for_request_rows(session: AsyncSession, rows: list) -> dict[str, int]:
+    if not rows:
+        return {}
+    repo = TimeEntryRepository(session)
+    periods = list(dict.fromkeys((m.project_id, m.date_from, m.date_to) for m in rows))
+    counts_by_period = await repo.count_entries_by_project_periods(periods)
+    out: dict[str, int] = {}
+    for m in rows:
+        key = (m.project_id, m.date_from, m.date_to)
+        out[m.id] = int(counts_by_period.get(key, 0))
+    return out
+
+
 def _request_to_out(
     m,
     required_partners: list[int],
     *,
     comments_count: int | None = None,
     last_comment=None,
+    entry_count: int | None = None,
 ) -> dict:
     sigs = [
         {
@@ -150,6 +165,10 @@ def _request_to_out(
     if comments_count is not None:
         out["commentsCount"] = int(comments_count)
         out["lastComment"] = _comment_to_out(last_comment) if last_comment is not None else None
+    if entry_count is not None:
+        ec = int(entry_count)
+        out["entryCount"] = ec
+        out["isEmpty"] = ec == 0
     return out
 
 
@@ -383,7 +402,7 @@ async def list_pending_partner_confirmations(
     if mode == "all" and not viewer_can_view_all_pending_partner_confirmations(viewer):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    out: list[dict] = []
+    visible: list[tuple[object, list[int]]] = []
     team_members_cache: dict[int, set[int]] = {}
     report_users_cache: dict[tuple[str, date, date], set[int]] = {}
     for m in candidates:
@@ -411,8 +430,14 @@ async def list_pending_partner_confirmations(
                 report_user_ids=report_users_cache[report_key],
             ):
                 continue
-        out.append(_request_to_out(m, partners))
-    return out
+        visible.append((m, partners))
+    entry_counts = await _entry_counts_for_request_rows(
+        session, [m for m, _ in visible]
+    )
+    return [
+        _request_to_out(m, partners, entry_count=entry_counts.get(m.id, 0))
+        for m, partners in visible
+    ]
 
 
 async def list_confirmed_partner_confirmations(
@@ -452,8 +477,9 @@ async def list_confirmed_partner_confirmations(
             date_to=date_to,
             before=before,
         )
-    out: list[dict] = []
     summaries = await conf_repo.comments_summary_by_request_ids([m.id for m in rows])
+    entry_counts = await _entry_counts_for_request_rows(session, rows)
+    out: list[dict] = []
     for m in rows:
         partners = await list_partner_auth_user_ids_for_project(
             session, access_repo, m.project_id, authorization=authorization
@@ -465,6 +491,7 @@ async def list_confirmed_partner_confirmations(
                 partners,
                 comments_count=count,
                 last_comment=last,
+                entry_count=entry_counts.get(m.id, 0),
             )
         )
     return out

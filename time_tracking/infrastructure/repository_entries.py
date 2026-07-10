@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Numeric, and_, case, cast, delete, func, select
+from sqlalchemy import Numeric, and_, case, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.types import DateTime
 
@@ -99,6 +99,51 @@ class TimeEntryRepository:
         )
         r = await self._session.execute(q)
         return {int(row.auth_user_id): int(row.cnt) for row in r.all()}
+
+    async def count_entries_by_project_periods(
+        self,
+        periods: list[tuple[str, date, date]],
+    ) -> dict[tuple[str, date, date], int]:
+        """Число активных записей времени по каждому (project_id, date_from, date_to)."""
+        unique = list(dict.fromkeys(periods))
+        if not unique:
+            return {}
+
+        period_filters = or_(
+            *[
+                and_(
+                    TimeEntryModel.project_id == pid,
+                    TimeEntryModel.work_date >= df,
+                    TimeEntryModel.work_date <= dt,
+                )
+                for pid, df, dt in unique
+            ]
+        )
+        q = (
+            select(
+                TimeEntryModel.project_id,
+                TimeEntryModel.work_date,
+                func.count(TimeEntryModel.id),
+            )
+            .where(
+                TimeEntryModel.voided_at.is_(None),
+                period_filters,
+            )
+            .group_by(TimeEntryModel.project_id, TimeEntryModel.work_date)
+        )
+        daily: dict[str, dict[date, int]] = {}
+        for project_id, work_date, cnt in (await self._session.execute(q)).all():
+            pid = str(project_id)
+            daily.setdefault(pid, {})[work_date] = int(cnt)
+
+        out: dict[tuple[str, date, date], int] = {}
+        for pid, df, dt in unique:
+            total = 0
+            for wd, cnt in daily.get(pid, {}).items():
+                if df <= wd <= dt:
+                    total += cnt
+            out[(pid, df, dt)] = total
+        return out
 
     async def aggregate_totals_for_project(
         self,
