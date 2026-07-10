@@ -197,6 +197,18 @@ def _ensure_can_edit(row: ExpenseRequestModel, user: dict) -> None:
         )
 
 
+def _ensure_can_delete(row: ExpenseRequestModel, user: dict) -> None:
+    uid = int(user["id"])
+    if is_admin_editor(user):
+        return
+    if row.created_by_user_id == uid and row.status in ("draft", "revision_required"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Удалить может автор в статусах «Черновик» и «На доработке» или администратор",
+    )
+
+
 def _author_snippet(user_id: int, profile: dict | None) -> ExpenseAuthorSnippet:
     p = profile or {}
     return ExpenseAuthorSnippet(
@@ -1121,6 +1133,34 @@ async def withdraw_expense(
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
     return await _detail_response(row, authorization)
+
+
+@router.delete("/{expense_id}", status_code=204)
+async def delete_expense(
+    expense_id: str,
+    user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    settings = get_settings()
+    repo = ExpenseRepository(session)
+    row = await repo.get_by_id(expense_id, load_children=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    await _ensure_access(row, user)
+    _ensure_can_delete(row, user)
+    storage_keys = [a.storage_key for a in (row.attachments or []) if a.storage_key]
+    ok = await repo.delete_request(expense_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    await session.commit()
+    for storage_key in storage_keys:
+        p = safe_media_path(settings.media_path, storage_key)
+        try:
+            if p is not None and p.is_file():
+                p.unlink()
+        except OSError:
+            pass
 
 
 @router.get("/{expense_id}/attachments", response_model=list[AttachmentOut])

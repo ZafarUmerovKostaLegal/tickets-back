@@ -354,6 +354,13 @@ class ExpenseRepository:
         await self._session.delete(row)
         return True
 
+    async def delete_request(self, expense_request_id: str) -> bool:
+        row = await self.get_by_id(expense_request_id, load_children=True)
+        if not row:
+            return False
+        await self._session.delete(row)
+        return True
+
     async def health_check(self) -> bool:
         try:
             await self._session.execute(text("SELECT 1"))
