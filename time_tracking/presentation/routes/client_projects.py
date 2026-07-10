@@ -30,7 +30,11 @@ from application.project_participants import list_project_participants_with_rate
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
 from application.report_builder import _load_user_rates
 from application.services.reports._base import _ZERO, _d, _hours, _money
-from application.access_control import ensure_can_list_project_assignees, _can_manage_tt
+from application.access_control import (
+    _can_manage_tt,
+    ensure_can_list_project_assignees,
+    viewer_can_transfer_time_without_project_access,
+)
 from application.duplicate_time_entries import find_duplicate_time_entries_for_project
 from application.entry_archive_service import archive_duplicate_entries, restore_archived_entry
 from application.report_builder import _load_initials_map
@@ -90,6 +94,7 @@ async def list_all_projects_for_expenses(
     limit: int | None = Query(None, ge=1, le=500, description="Если задано — пагинированный ответ"),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
 ):
 
     repo = ClientProjectRepository(session)
@@ -97,6 +102,16 @@ async def list_all_projects_for_expenses(
 
     cr = ClientRepository(session)
     today = date.today()
+
+    allowed_ids: set[str] | None = None
+    if not _can_manage_tt(viewer):
+        if not await viewer_can_transfer_time_without_project_access(session, viewer):
+            vid = viewer.get("id")
+            if vid is None:
+                raise HTTPException(status_code=403, detail="В токене нет id пользователя")
+            par = UserProjectAccessRepository(session)
+            allowed_ids = set(await par.list_project_ids(int(vid)))
+
     if limit is None:
         clients = {c.id: c for c in await cr.list_all(include_archived=True)}
         rows = await repo.list_all_global(include_archived=include_archived)
@@ -108,6 +123,8 @@ async def list_all_projects_for_expenses(
         clients = await cr.get_by_ids(cids)
     items = []
     for r in rows:
+        if allowed_ids is not None and r.id not in allowed_ids:
+            continue
         if not include_archived and is_project_closed_for_time_entries(
             is_archived=bool(r.is_archived),
             end_date=r.end_date,
@@ -884,6 +901,8 @@ async def patch_client_project(
         patch["records_language"] = rl.value if hasattr(rl, "value") else str(rl)
     if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
+        if patch["is_archived"] is False and row.end_date is not None and row.end_date < date.today():
+            patch["end_date"] = None
 
     if any(
         k in patch
