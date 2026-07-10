@@ -89,6 +89,21 @@ class LifecycleFlagsPatchBody(BaseModel):
     is_archived: bool = Field(..., alias="isArchived")
 
 
+class AuthProfileSyncBody(BaseModel):
+    """Sync auth catalog fields into TT without wiping position unless requested."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str
+    display_name: Optional[str] = Field(None, alias="displayName")
+    picture: Optional[str] = None
+    role: str = ""
+    is_blocked: bool = Field(False, alias="isBlocked")
+    is_archived: bool = Field(False, alias="isArchived")
+    position: Optional[str] = None
+    update_position: bool = Field(False, alias="updatePosition")
+
+
 class UserUpsertBody(BaseModel):
 
 

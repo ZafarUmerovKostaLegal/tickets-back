@@ -12,33 +12,8 @@ from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure import models_reports
 from infrastructure import models_invoices
-from infrastructure.schema_patches import (
-    apply_client_expense_categories_schema_patch,
-    apply_client_projects_schema_patch,
-    apply_client_tasks_project_scope_migration,
-    apply_client_tasks_schema_patch,
-    apply_team_workload_schema_patch,
-    apply_client_extra_contacts_schema_patch,
-    apply_time_manager_clients_schema_patch,
-    apply_user_project_access_patch,
-    apply_time_entries_task_id_schema_patch,
-    apply_time_entries_project_date_index_patch,
-    apply_time_entries_hours_precision_patch,
-    apply_time_entries_seconds_and_rounded_patch,
-    apply_time_entries_external_reference_patch,
-    apply_time_entries_manager_void_patch,
-    apply_reports_schema_patch,
-    apply_invoices_schema_patch,
-    apply_project_currency_patch,
-    apply_weekly_submissions_schema_patch,
-    apply_client_projects_project_billable_amount_patch,
-    apply_client_projects_records_language_patch,
-    apply_hourly_rates_applies_to_project_patch,
-    apply_project_scoped_billable_rates_open_interval_patch,
-    apply_time_tracking_teams_schema_patch,
-    apply_report_performance_indexes_patch,
-    apply_time_entry_archives_patch,
-)
+from infrastructure.schema_patches import REGISTERED_SCHEMA_PATCHES
+from infrastructure.schema_patch_runner import apply_registered_schema_patches
 from application.settings_sync import renormalize_time_entries_to_minute
 from presentation.deps import require_bearer_user, require_tt_reports_viewer
 from presentation.exception_handlers import register_exception_handlers
@@ -68,31 +43,7 @@ from presentation.routes import (
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await apply_team_workload_schema_patch(conn)
-        await apply_time_manager_clients_schema_patch(conn)
-        await apply_client_extra_contacts_schema_patch(conn)
-        await apply_client_expense_categories_schema_patch(conn)
-        await apply_client_projects_schema_patch(conn)
-        await apply_client_tasks_schema_patch(conn)
-        await apply_client_tasks_project_scope_migration(conn)
-        await apply_user_project_access_patch(conn)
-        await apply_time_entries_task_id_schema_patch(conn)
-        await apply_time_entries_project_date_index_patch(conn)
-        await apply_time_entries_hours_precision_patch(conn)
-        await apply_reports_schema_patch(conn)
-        await apply_invoices_schema_patch(conn)
-        await apply_project_currency_patch(conn)
-        await apply_time_entries_seconds_and_rounded_patch(conn)
-        await apply_time_entries_external_reference_patch(conn)
-        await apply_time_entries_manager_void_patch(conn)
-        await apply_weekly_submissions_schema_patch(conn)
-        await apply_client_projects_project_billable_amount_patch(conn)
-        await apply_client_projects_records_language_patch(conn)
-        await apply_hourly_rates_applies_to_project_patch(conn)
-        await apply_project_scoped_billable_rates_open_interval_patch(conn)
-        await apply_time_tracking_teams_schema_patch(conn)
-        await apply_report_performance_indexes_patch(conn)
-        await apply_time_entry_archives_patch(conn)
+        await apply_registered_schema_patches(conn, REGISTERED_SCHEMA_PATCHES)
     async with async_session_factory() as session:
         await seed_default_tasks_for_all_projects_missing_tasks(session)
         await seed_default_expense_categories_for_all_clients(session)

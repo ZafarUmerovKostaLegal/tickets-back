@@ -679,6 +679,20 @@ async def proxy_patch_lifecycle_flags(
     )
 
 
+@router.patch("/users/{auth_user_id}/auth-profile")
+async def proxy_patch_auth_profile(
+    auth_user_id: int,
+    body: dict = Body(...),
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json(
+        "PATCH",
+        f"/users/{auth_user_id}/auth-profile",
+        json=body,
+        timeout=30.0,
+    )
+
+
 @router.get("/users/partners")
 async def list_partner_users(user: dict = Depends(require_view_time_tracking_user_directory)):
 

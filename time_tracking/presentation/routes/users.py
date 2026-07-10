@@ -35,6 +35,7 @@ from infrastructure.repositories import (
 from infrastructure.repository_time_entry_unlocks import TimeEntryEditUnlockRepository
 from presentation.deps import require_bearer_user
 from presentation.schemas import (
+    AuthProfileSyncBody,
     ManualTimeTrackingUserCreateBody,
     UserResponse,
     UserUpsertBody,
@@ -307,6 +308,45 @@ async def patch_transfer_without_project_access(
     row = await repo.patch_can_transfer_time_without_project_access(
         auth_user_id,
         enabled=body.enabled,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not in time tracking")
+    await session.commit()
+    ap = await fetch_auth_user_position(authorization or "", auth_user_id)
+    pos = row.position
+    if pos is not None and str(pos).strip():
+        pos = str(pos).strip()
+    elif ap is not None:
+        pos = ap
+    else:
+        pos = None
+    return _user_response_directory(row, position=pos)
+
+
+@router.patch(
+    "/{auth_user_id}/auth-profile",
+    response_model=UserResponse,
+    summary="Синхронизация профиля из auth (email, имя, роль, флаги; position — только если updatePosition)",
+)
+async def patch_auth_profile(
+    auth_user_id: int,
+    body: AuthProfileSyncBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> UserResponse:
+    ensure_upsert_user_allowed(viewer, auth_user_id)
+    repo = TimeTrackingUserRepository(session)
+    row = await repo.patch_auth_profile(
+        auth_user_id,
+        email=body.email,
+        display_name=body.display_name,
+        picture=body.picture,
+        role=body.role,
+        is_blocked=body.is_blocked,
+        is_archived=body.is_archived,
+        position=body.position,
+        update_position=body.update_position,
     )
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")

@@ -1089,3 +1089,32 @@ async def apply_time_entry_archives_patch(conn: AsyncConnection) -> None:
         )
     )
 
+
+REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
+    ("team_workload", apply_team_workload_schema_patch),
+    ("time_manager_clients", apply_time_manager_clients_schema_patch),
+    ("client_extra_contacts", apply_client_extra_contacts_schema_patch),
+    ("client_expense_categories", apply_client_expense_categories_schema_patch),
+    ("client_projects", apply_client_projects_schema_patch),
+    ("client_tasks", apply_client_tasks_schema_patch),
+    ("client_tasks_project_scope", apply_client_tasks_project_scope_migration),
+    ("user_project_access", apply_user_project_access_patch),
+    ("time_entries_task_id", apply_time_entries_task_id_schema_patch),
+    ("time_entries_project_date_index", apply_time_entries_project_date_index_patch),
+    ("time_entries_hours_precision", apply_time_entries_hours_precision_patch),
+    ("reports", apply_reports_schema_patch),
+    ("invoices", apply_invoices_schema_patch),
+    ("project_currency", apply_project_currency_patch),
+    ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
+    ("time_entries_external_reference", apply_time_entries_external_reference_patch),
+    ("time_entries_manager_void", apply_time_entries_manager_void_patch),
+    ("weekly_submissions", apply_weekly_submissions_schema_patch),
+    ("client_projects_billable_amount", apply_client_projects_project_billable_amount_patch),
+    ("client_projects_records_language", apply_client_projects_records_language_patch),
+    ("hourly_rates_applies_to_project", apply_hourly_rates_applies_to_project_patch),
+    ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),
+    ("time_tracking_teams", apply_time_tracking_teams_schema_patch),
+    ("report_performance_indexes", apply_report_performance_indexes_patch),
+    ("time_entry_archives", apply_time_entry_archives_patch),
+)
+

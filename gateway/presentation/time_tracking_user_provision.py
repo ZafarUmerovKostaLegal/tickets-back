@@ -136,6 +136,30 @@ async def _tt_user_exists(auth_user_id: int, authorization: str | None) -> bool:
     return r.status_code == 200
 
 
+def build_auth_profile_sync_payload_from_auth_record(
+    record: dict,
+    *,
+    default_tt_role: str = "user",
+) -> dict[str, Any] | None:
+    payload = build_tt_upsert_payload_from_auth_record(record, default_tt_role=default_tt_role)
+    if not payload:
+        return None
+    pos = payload.get("position")
+    pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
+    out: dict[str, Any] = {
+        "email": payload["email"],
+        "displayName": payload.get("display_name"),
+        "picture": payload.get("picture"),
+        "role": payload.get("role") or default_tt_role,
+        "isBlocked": payload.get("is_blocked", False),
+        "isArchived": payload.get("is_archived", False),
+    }
+    if pos_s:
+        out["position"] = pos_s
+        out["updatePosition"] = True
+    return out
+
+
 async def upsert_time_tracking_user_from_auth_record(
     record: dict,
     authorization: str | None,
@@ -154,12 +178,39 @@ async def upsert_time_tracking_user_from_auth_record(
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         if tt_role in _TT_ROLES:
+            uid_int = int(uid)
+            exists = await _tt_user_exists(uid_int, authorization)
             pos = record.get("position")
             pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
-            if not pos_s:
-                # Critical dual-write fix: still sync block/archive flags without full upsert.
+
+            if exists:
+                profile_payload = build_auth_profile_sync_payload_from_auth_record(
+                    record,
+                    default_tt_role=tt_role,
+                )
+                if not profile_payload:
+                    return
                 r = await client.patch(
-                    f"{base}/users/{int(uid)}/lifecycle-flags",
+                    f"{base}/users/{uid_int}/auth-profile",
+                    json=profile_payload,
+                    headers=auth_headers,
+                )
+                if r.status_code in (200, 404):
+                    return
+                detail = (r.text or "").strip()
+                if len(detail) > 500:
+                    detail = detail[:500]
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Не удалось синхронизировать профиль пользователя с Time Tracking: "
+                        f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
+                    ),
+                )
+
+            if not pos_s:
+                r = await client.patch(
+                    f"{base}/users/{uid_int}/lifecycle-flags",
                     json={"isBlocked": is_blocked, "isArchived": is_archived},
                     headers=auth_headers,
                 )

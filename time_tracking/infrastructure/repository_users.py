@@ -137,6 +137,34 @@ class TimeTrackingUserRepository:
         self._session.add(row)
         return row
 
+    async def patch_auth_profile(
+        self,
+        auth_user_id: int,
+        *,
+        email: str,
+        display_name: str | None,
+        picture: str | None,
+        role: str,
+        is_blocked: bool,
+        is_archived: bool,
+        position: str | None = None,
+        update_position: bool = False,
+    ) -> TimeTrackingUserModel | None:
+        row = await self.get_by_auth_user_id(auth_user_id)
+        if not row:
+            return None
+        row.email = email
+        row.display_name = display_name
+        row.picture = picture
+        row.role = role
+        row.is_blocked = bool(is_blocked)
+        row.is_archived = bool(is_archived)
+        if update_position:
+            row.position = (position or "").strip() or None
+        row.updated_at = _now_utc()
+        self._session.add(row)
+        return row
+
     async def delete_by_auth_user_id(self, auth_user_id: int) -> bool:
         r = await self._session.execute(
             delete(TimeTrackingUserModel).where(TimeTrackingUserModel.auth_user_id == auth_user_id)
