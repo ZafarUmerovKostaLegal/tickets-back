@@ -339,6 +339,8 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         send_budget_alerts=row.send_budget_alerts,
         budget_alert_threshold_percent=row.budget_alert_threshold_percent,
         fixed_fee_amount=_out_fixed_fee_amount_for_api(row),
+        package_hours_per_month=getattr(row, "package_hours_per_month", None),
+        package_fee_amount=getattr(row, "package_fee_amount", None),
         is_archived=row.is_archived,
         records_language=getattr(row, "records_language", "ENG") or "ENG",
         created_at=row.created_at,
@@ -710,6 +712,27 @@ async def create_client_project(
             detail="Another project with this code already exists for this client",
         )
     budget_amount = body.budget_amount
+    package_hours = body.package_hours_per_month
+    package_fee = body.package_fee_amount
+    if body.project_type == ProjectType.hour_package:
+        if not _positive_budget_amount(package_hours):
+            package_hours = body.budget_hours
+        if not _positive_budget_amount(package_fee):
+            package_fee = budget_amount
+        if not _positive_budget_amount(package_hours) or not _positive_budget_amount(package_fee):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Для пакета часов укажите packageHoursPerMonth (N) и packageFeeAmount ($X); "
+                    "неиспользованные часы переносятся только на следующий месяц."
+                ),
+            )
+        # Mirror into budget fields for progress widgets.
+        budget_amount = package_fee
+        body_budget_hours = package_hours
+    else:
+        body_budget_hours = body.budget_hours
+
     if body.project_type == ProjectType.fixed_fee:
         if _positive_budget_amount(body.fixed_fee_amount) and not _positive_budget_amount(budget_amount):
             budget_amount = body.fixed_fee_amount
@@ -724,7 +747,7 @@ async def create_client_project(
             if _d(body.progress_budget_amount) > 0:
                 money_for_type = body.progress_budget_amount
     _bt_persist = normalize_budget_type_for_persist(
-        body.budget_hours,
+        body_budget_hours,
         money_for_type if _positive_budget_amount(money_for_type) else None,
     )
     _budget_type_create = _bt_persist if _bt_persist is not None else body.budget_type
@@ -749,12 +772,14 @@ async def create_client_project(
             budget_type=_budget_type_create,
             budget_amount=budget_amount,
             progress_budget_amount=body.progress_budget_amount,
-            budget_hours=body.budget_hours,
+            budget_hours=body_budget_hours,
             budget_resets_every_month=body.budget_resets_every_month,
             budget_includes_expenses=body.budget_includes_expenses,
             send_budget_alerts=body.send_budget_alerts,
             budget_alert_threshold_percent=body.budget_alert_threshold_percent,
             fixed_fee_amount=fixed_fee_stored,
+            package_hours_per_month=package_hours if body.project_type == ProjectType.hour_package else None,
+            package_fee_amount=package_fee if body.project_type == ProjectType.hour_package else None,
             is_archived=body.is_archived,
             records_language=body.records_language.value,
         )
@@ -913,6 +938,8 @@ async def patch_client_project(
             "budget_type",
             "project_type",
             "fixed_fee_amount",
+            "package_hours_per_month",
+            "package_fee_amount",
         )
     ):
         m_h = patch["budget_hours"] if "budget_hours" in patch else row.budget_hours
@@ -922,8 +949,34 @@ async def patch_client_project(
             if "progress_budget_amount" in patch
             else row.progress_budget_amount
         )
+        m_ph = (
+            patch["package_hours_per_month"]
+            if "package_hours_per_month" in patch
+            else getattr(row, "package_hours_per_month", None)
+        )
+        m_pf = (
+            patch["package_fee_amount"]
+            if "package_fee_amount" in patch
+            else getattr(row, "package_fee_amount", None)
+        )
         eff_pt = patch["project_type"] if "project_type" in patch else row.project_type
-        if eff_pt == "fixed_fee":
+        if eff_pt == "hour_package":
+            if not _positive_budget_amount(m_ph):
+                m_ph = m_h
+            if not _positive_budget_amount(m_pf):
+                m_pf = m_a
+            if not _positive_budget_amount(m_ph) or not _positive_budget_amount(m_pf):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Для пакета часов укажите packageHoursPerMonth и packageFeeAmount.",
+                )
+            patch["package_hours_per_month"] = m_ph
+            patch["package_fee_amount"] = m_pf
+            patch["budget_hours"] = m_ph
+            patch["budget_amount"] = m_pf
+            m_h, m_a = m_ph, m_pf
+            nt = normalize_budget_type_for_persist(m_h, m_a)
+        elif eff_pt == "fixed_fee":
             if "fixed_fee_amount" in patch and patch["fixed_fee_amount"] is not None:
                 ffa = patch["fixed_fee_amount"]
                 if not _positive_budget_amount(m_a) and _positive_budget_amount(ffa):

@@ -60,6 +60,11 @@ class Settings(BaseSettings):
         default=14,
         validation_alias="VACATION_MIN_CONTINUOUS_DAYS",
     )
+    # Short annual parts allowed before the continuous block (1+2+3… up to this total).
+    flexible_annual_days: int = Field(
+        default=7,
+        validation_alias="VACATION_FLEXIBLE_ANNUAL_DAYS",
+    )
 
     @field_validator("vacation_db_password", "vacation_db_user", "vacation_db_name", mode="before")
     @classmethod

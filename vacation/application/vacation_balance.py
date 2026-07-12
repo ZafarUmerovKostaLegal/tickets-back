@@ -1,9 +1,16 @@
 """Annual vacation balance and legislation rules (calendar days).
 
 Default entitlement: 28 calendar days/year (configurable).
-Mandatory continuous portion: first annual leave block must be >= 14 days
-until such a continuous portion has been used (approved); afterwards any
-size up to remaining balance is allowed.
+
+Rules for annual paid leave:
+- Up to `flexible_annual_days` (default 7) may be taken in short parts
+  (1–2–3… days) before the mandatory continuous block is used.
+- Once the flexible pool is exhausted and the continuous block
+  (>= min_continuous, default 14) is not yet used, further short annual
+  requests are rejected — user should take >=14 continuous days or
+  unpaid Day Off instead.
+- After the continuous block is satisfied, any size up to remaining
+  balance is allowed.
 """
 
 from __future__ import annotations
@@ -56,6 +63,9 @@ class VacationBalance:
     remaining_days: int
     continuous_14_satisfied: bool
     min_continuous_days: int
+    flexible_days_max: int
+    flexible_days_used: int
+    flexible_days_remaining: int
 
     def as_dict(self) -> dict:
         return {
@@ -67,6 +77,9 @@ class VacationBalance:
             "remainingDays": self.remaining_days,
             "continuous14Satisfied": self.continuous_14_satisfied,
             "minContinuousDays": self.min_continuous_days,
+            "flexibleDaysMax": self.flexible_days_max,
+            "flexibleDaysUsed": self.flexible_days_used,
+            "flexibleDaysRemaining": self.flexible_days_remaining,
         }
 
 
@@ -82,6 +95,31 @@ async def _sum_leave_request_days(
             LeaveRequest.employee_user_id == employee_user_id,
             LeaveRequest.kind_code == ANNUAL_VACATION_KIND,
             LeaveRequest.status.in_(statuses),
+            LeaveRequest.date_from <= date(year, 12, 31),
+            LeaveRequest.date_to >= date(year, 1, 1),
+        )
+    )
+    total = 0
+    for req in r.scalars().all():
+        total += days_of_period_in_year(req.date_from, req.date_to, year)
+    return total
+
+
+async def _sum_short_leave_request_days(
+    session: AsyncSession,
+    *,
+    employee_user_id: int,
+    year: int,
+    min_continuous: int,
+    statuses: tuple[str, ...],
+) -> int:
+    """Days from annual leave requests shorter than the continuous minimum."""
+    r = await session.execute(
+        select(LeaveRequest).where(
+            LeaveRequest.employee_user_id == employee_user_id,
+            LeaveRequest.kind_code == ANNUAL_VACATION_KIND,
+            LeaveRequest.status.in_(statuses),
+            LeaveRequest.days_count < min_continuous,
             LeaveRequest.date_from <= date(year, 12, 31),
             LeaveRequest.date_to >= date(year, 1, 1),
         )
@@ -171,6 +209,7 @@ async def get_vacation_balance(
     settings = get_settings()
     entitled = max(0, int(settings.annual_entitled_days))
     min_cont = max(1, int(settings.min_continuous_vacation_days))
+    flex_max = max(0, int(getattr(settings, "flexible_annual_days", 7) or 7))
 
     used_from_requests = await _sum_leave_request_days(
         session,
@@ -199,6 +238,20 @@ async def get_vacation_balance(
         year=year,
         min_continuous=min_cont,
     )
+
+    flex_used = await _sum_short_leave_request_days(
+        session,
+        employee_user_id=employee_user_id,
+        year=year,
+        min_continuous=min_cont,
+        statuses=(LEAVE_STATUS_APPROVED, LEAVE_STATUS_PENDING),
+    )
+    # Manual days (no leave request) count toward flexible pool until 14 is satisfied.
+    if not continuous_ok:
+        flex_used += used_manual
+    flex_used = min(flex_used, flex_max) if flex_max else flex_used
+    flex_remaining = max(0, flex_max - flex_used) if not continuous_ok else flex_max
+
     return VacationBalance(
         year=year,
         employee_user_id=employee_user_id,
@@ -208,6 +261,9 @@ async def get_vacation_balance(
         remaining_days=remaining,
         continuous_14_satisfied=continuous_ok,
         min_continuous_days=min_cont,
+        flexible_days_max=flex_max,
+        flexible_days_used=flex_used,
+        flexible_days_remaining=flex_remaining,
     )
 
 
@@ -246,16 +302,30 @@ def validate_annual_vacation_request(
                 "и автоматически в неоплачиваемый не переводятся — сократите период."
             )
 
-    # Continuous portion rule applies to the whole continuous request period.
     primary_year = date_from.year
     bal0 = balances_by_year[primary_year]
-    if not bal0.continuous_14_satisfied and days_count < bal0.min_continuous_days:
-        raise ValueError(
-            f"Пока не использована обязательная непрерывная часть отпуска "
-            f"({bal0.min_continuous_days} календарных дней), оформить можно только отпуск "
-            f"продолжительностью не менее {bal0.min_continuous_days} календарных дней. "
-            f"В заявке — {days_count}."
-        )
+    if bal0.continuous_14_satisfied:
+        return
+
+    # Continuous block not yet used.
+    if days_count >= bal0.min_continuous_days:
+        return
+
+    # Short part: only within flexible pool.
+    flex_rem = bal0.flexible_days_remaining
+    if days_count <= flex_rem:
+        return
+
+    raise ValueError(
+        f"Дробный ежегодный отпуск доступен только в пределах "
+        f"{bal0.flexible_days_max} календарных дней "
+        f"(уже использовано/зарезервировано {bal0.flexible_days_used}, "
+        f"осталось {flex_rem}). "
+        f"В заявке — {days_count} дн. "
+        f"Дальше оформите непрерывный ежегодный отпуск не менее "
+        f"{bal0.min_continuous_days} календарных дней "
+        f"либо выберите Day Off (нерабочий / неоплачиваемый)."
+    )
 
 
 def simulate_balance_after_consume(
@@ -275,6 +345,14 @@ def simulate_balance_after_consume(
         pending = bal.pending_days + days
         continuous = bal.continuous_14_satisfied
     remaining = max(0, bal.entitled_days - used - pending)
+
+    flex_used = bal.flexible_days_used
+    if not continuous and days < bal.min_continuous_days:
+        flex_used = min(bal.flexible_days_max, bal.flexible_days_used + days)
+    flex_remaining = (
+        max(0, bal.flexible_days_max - flex_used) if not continuous else bal.flexible_days_max
+    )
+
     return VacationBalance(
         year=bal.year,
         employee_user_id=bal.employee_user_id,
@@ -284,4 +362,7 @@ def simulate_balance_after_consume(
         remaining_days=remaining,
         continuous_14_satisfied=continuous,
         min_continuous_days=bal.min_continuous_days,
+        flexible_days_max=bal.flexible_days_max,
+        flexible_days_used=flex_used,
+        flexible_days_remaining=flex_remaining,
     )

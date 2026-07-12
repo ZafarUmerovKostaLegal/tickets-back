@@ -10,6 +10,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.entry_pricing import _billable_amount_for_entry
+from application.package_billing import build_package_splits_index
 from application.report_builder import (
     _base_entry_conditions,
     _load_clients_map,
@@ -77,7 +78,12 @@ async def get_uninvoiced_report(
 
     all_uid_set = {e.auth_user_id for e in all_entries} | {e.auth_user_id for e in uninv_entries}
     rates_map = await _load_user_rates(session, list(all_uid_set) or None)
-
+    package_splits, package_months_by_project = build_package_splits_index(
+        projects_map,
+        uninv_entries,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
     raw_expenses = await _fetch_expense_report_data(date_from, date_to, user_ids, project_ids)
     if client_ids:
@@ -106,14 +112,26 @@ async def get_uninvoiced_report(
         uninv_hours_by_project[pid] = uninv_hours_by_project.get(pid, _ZERO) + h
         p_ent = projects_map.get(pid) if pid else None
         pc = (getattr(p_ent, "currency", None) or "USD") if p_ent else "USD"
-        amt, cur = _billable_amount_for_entry(
-            h,
-            e.is_billable,
-            e.work_date,
-            rates_map.get(e.auth_user_id),
-            project_currency=pc,
-            time_entry_project_id=pid,
-        )
+        split = package_splits.get(str(e.id))
+        if split is not None:
+            oh = _d(split.overage_hours)
+            amt, cur = _billable_amount_for_entry(
+                oh,
+                oh > 0,
+                e.work_date,
+                rates_map.get(e.auth_user_id),
+                project_currency=pc,
+                time_entry_project_id=pid,
+            )
+        else:
+            amt, cur = _billable_amount_for_entry(
+                h,
+                e.is_billable,
+                e.work_date,
+                rates_map.get(e.auth_user_id),
+                project_currency=pc,
+                time_entry_project_id=pid,
+            )
         uninv_amount_by_project[pid] = uninv_amount_by_project.get(pid, _ZERO) + amt
         if cur != "USD":
             uninv_currency_by_project[pid] = cur
@@ -150,6 +168,11 @@ async def get_uninvoiced_report(
         uninv_h = uninv_hours_by_project.get(pid, _ZERO)
         uninv_exp = uninv_expenses_by_project.get(pid, _ZERO)
         uninv_amt = uninv_amount_by_project.get(pid, _ZERO)
+        # Accrue unpaid package fees for months with uninvoiced time on hour_package projects.
+        pkg_fee = _ZERO
+        for s in package_months_by_project.get(pid or "", []):
+            pkg_fee += _d(s.package_fee)
+        uninv_amt = uninv_amt + pkg_fee
 
         project_currency = (getattr(p, "currency", None) or "USD") if p else "USD"
         currency = project_currency if project_currency != "USD" else uninv_currency_by_project.get(pid, "USD")
@@ -168,6 +191,7 @@ async def get_uninvoiced_report(
             "uninvoiced_hours": _hours(uninv_h),
             "uninvoiced_expenses": _money(uninv_exp),
             "uninvoiced_amount": _money(uninv_amt),
+            "uninvoiced_package_fees": _money(pkg_fee) if pkg_fee else None,
             "users": users_list,
         })
 

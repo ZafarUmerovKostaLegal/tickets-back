@@ -109,6 +109,9 @@ class VacationBalanceOut(BaseModel):
     remaining_days: int = Field(..., alias="remainingDays")
     continuous_14_satisfied: bool = Field(..., alias="continuous14Satisfied")
     min_continuous_days: int = Field(..., alias="minContinuousDays")
+    flexible_days_max: int = Field(7, alias="flexibleDaysMax")
+    flexible_days_used: int = Field(0, alias="flexibleDaysUsed")
+    flexible_days_remaining: int = Field(7, alias="flexibleDaysRemaining")
 
 
 class CreateLeaveRequestBody(BaseModel):
@@ -189,6 +192,9 @@ async def get_leave_balance(
         remaining_days=bal.remaining_days,
         continuous_14_satisfied=bal.continuous_14_satisfied,
         min_continuous_days=bal.min_continuous_days,
+        flexible_days_max=bal.flexible_days_max,
+        flexible_days_used=bal.flexible_days_used,
+        flexible_days_remaining=bal.flexible_days_remaining,
     )
 
 

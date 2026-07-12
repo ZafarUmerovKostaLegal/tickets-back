@@ -628,6 +628,7 @@ class ProjectType(str, Enum):
     time_and_materials = "time_and_materials"
     fixed_fee = "fixed_fee"
     non_billable = "non_billable"
+    hour_package = "hour_package"
 
 
 class ProjectCurrency(str, Enum):
@@ -679,6 +680,16 @@ class TimeManagerClientProjectOut(BaseModel):
     send_budget_alerts: bool = False
     budget_alert_threshold_percent: Optional[Decimal] = None
     fixed_fee_amount: Optional[Decimal] = None
+    package_hours_per_month: Optional[Decimal] = Field(
+        None,
+        alias="packageHoursPerMonth",
+        description="Месячный пакет: N часов за packageFeeAmount.",
+    )
+    package_fee_amount: Optional[Decimal] = Field(
+        None,
+        alias="packageFeeAmount",
+        description="Фиксированная плата за месячный пакет часов.",
+    )
     is_archived: bool = False
     records_language: str = Field("ENG", alias="recordsLanguage")
     created_at: datetime
@@ -776,6 +787,18 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело: сумма фикс-контракта задаётся в budgetAmount. Поле принимается для совместимости.",
+    )
+    package_hours_per_month: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageHoursPerMonth",
+        description="Для hour_package: N часов в месяц, включённых в пакет.",
+    )
+    package_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageFeeAmount",
+        description="Для hour_package: фиксированная плата $X за месячный пакет.",
     )
     records_language: ProjectRecordsLanguage = Field(
         ProjectRecordsLanguage.ENG,
@@ -886,6 +909,18 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело: используйте budgetAmount.",
+    )
+    package_hours_per_month: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageHoursPerMonth",
+        description="Для hour_package: N часов в месяц.",
+    )
+    package_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageFeeAmount",
+        description="Для hour_package: плата за месячный пакет.",
     )
     records_language: Optional[ProjectRecordsLanguage] = Field(
         None,

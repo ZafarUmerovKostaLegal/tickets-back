@@ -16,6 +16,13 @@ from application.entry_pricing import (
     _cost_amount_for_entry,
 )
 from application.duplicate_time_entries import deduplicate_entries_for_report
+from application.package_billing import (
+    MonthPackageSummary,
+    add_month,
+    build_package_splits_index,
+    is_hour_package_project,
+    month_key,
+)
 from application.report_builder import (
     _base_entry_conditions,
     _voided_entry_conditions,
@@ -88,6 +95,35 @@ TIME_REPORT_FLAT_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _entry_billable_amount_with_package(
+    e: TimeEntryModel,
+    *,
+    project_currency: str,
+    rates_map: dict[int, list],
+    package_splits: dict[str, Any] | None,
+) -> tuple[Decimal, str]:
+    br = rates_map.get(e.auth_user_id)
+    split = (package_splits or {}).get(str(e.id)) if package_splits else None
+    if split is not None:
+        oh = _d(getattr(split, "overage_hours", 0))
+        return _billable_amount_for_entry(
+            oh,
+            bool(e.is_billable) and oh > 0,
+            e.work_date,
+            br,
+            project_currency=project_currency,
+            time_entry_project_id=e.project_id,
+        )
+    return _billable_amount_for_entry(
+        _d(e.hours),
+        bool(e.is_billable),
+        e.work_date,
+        br,
+        project_currency=project_currency,
+        time_entry_project_id=e.project_id,
+    )
+
+
 def _time_entry_line_snake(
     e: TimeEntryModel,
     *,
@@ -100,6 +136,7 @@ def _time_entry_line_snake(
     cost_rates_map: dict[int, list],
     invoice_by_entry: dict[str, dict[str, Any]],
     week_submitted: set[tuple[int, date]],
+    package_splits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 
     p = projects_map.get(e.project_id) if e.project_id else None
@@ -111,14 +148,30 @@ def _time_entry_line_snake(
     uid = e.auth_user_id
     brates = rates_map.get(uid) or []
     crates = cost_rates_map.get(uid) or []
-    amt, _cur = _billable_amount_for_entry(
-        h,
-        e.is_billable,
-        e.work_date,
-        brates,
-        project_currency=project_currency,
-        time_entry_project_id=e.project_id,
-    )
+
+    covered_h = _ZERO
+    overage_h = h if e.is_billable else _ZERO
+    split = (package_splits or {}).get(str(e.id)) if package_splits else None
+    if split is not None:
+        covered_h = _d(getattr(split, "covered_hours", 0))
+        overage_h = _d(getattr(split, "overage_hours", 0)) if e.is_billable else _ZERO
+        amt, _cur = _billable_amount_for_entry(
+            overage_h,
+            e.is_billable and overage_h > 0,
+            e.work_date,
+            brates,
+            project_currency=project_currency,
+            time_entry_project_id=e.project_id,
+        )
+    else:
+        amt, _cur = _billable_amount_for_entry(
+            h,
+            e.is_billable,
+            e.work_date,
+            brates,
+            project_currency=project_currency,
+            time_entry_project_id=e.project_id,
+        )
     br, _brc = _billable_rate_for_entry(
         e.work_date,
         brates,
@@ -147,10 +200,13 @@ def _time_entry_line_snake(
         "project_id": e.project_id,
         "project_name": p.name if p else None,
         "project_code": p.code if p else None,
+        "project_type": getattr(p, "project_type", None) if p else None,
         "task_id": e.task_id,
         "task_name": t.name if t else None,
         "note": desc or None,
         "hours": _hours(h),
+        "covered_hours": _hours(covered_h) if split is not None else None,
+        "overage_hours": _hours(overage_h) if split is not None else None,
         "is_billable": e.is_billable,
         "task_billable_by_default": bool(t.billable_by_default) if t else None,
         "is_invoiced": is_invoiced,
@@ -442,6 +498,34 @@ async def get_time_report(
         rates_map=rates_map,
     )
 
+    package_pids = {
+        str(e.project_id)
+        for e in entries
+        if e.project_id and is_hour_package_project(projects_map.get(e.project_id))
+    }
+    package_attr_entries = list(entries)
+    if package_pids:
+        sy, sm = add_month(date_from.year, date_from.month, -1)
+        carry_from = date(sy, sm, 1)
+        prior_q = select(TimeEntryModel).where(
+            and_(
+                TimeEntryModel.project_id.in_(list(package_pids)),
+                TimeEntryModel.voided_at.is_(None),
+                TimeEntryModel.is_billable.is_(True),
+                TimeEntryModel.work_date >= carry_from,
+                TimeEntryModel.work_date < date_from,
+            )
+        )
+        prior = list((await session.execute(prior_q)).scalars().all())
+        if prior:
+            package_attr_entries = prior + package_attr_entries
+    package_splits, package_months_by_project = build_package_splits_index(
+        projects_map,
+        package_attr_entries,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
     line_ctx = {
         "projects_map": projects_map,
         "clients_map": clients_map,
@@ -452,6 +536,7 @@ async def get_time_report(
         "cost_rates_map": cost_rates_map,
         "invoice_by_entry": inv_map,
         "week_submitted": week_set,
+        "package_splits": package_splits,
     }
 
     buckets: dict[Any, dict] = {}
@@ -480,14 +565,11 @@ async def get_time_report(
             bkt["raw_entry_count"] = int(bkt.get("raw_entry_count", 0)) + 1
             if e.is_billable:
                 bkt["billable"] += h
-                br = rates_map.get(e.auth_user_id)
-                amt, effective_cur = _billable_amount_for_entry(
-                    h,
-                    True,
-                    e.work_date,
-                    br,
+                amt, effective_cur = _entry_billable_amount_with_package(
+                    e,
                     project_currency=project_currency,
-                    time_entry_project_id=e.project_id,
+                    rates_map=rates_map,
+                    package_splits=package_splits,
                 )
                 bkt["amount"] += amt
                 bkt["currency"] = effective_cur or project_currency
@@ -542,14 +624,11 @@ async def get_time_report(
         ubkt["total"] += h
         if e.is_billable:
             bkt["billable"] += h
-            br = rates_map.get(uid)
-            amt, effective_cur = _billable_amount_for_entry(
-                h,
-                True,
-                e.work_date,
-                br,
+            amt, effective_cur = _entry_billable_amount_with_package(
+                e,
                 project_currency=project_currency,
-                time_entry_project_id=e.project_id,
+                rates_map=rates_map,
+                package_splits=package_splits,
             )
             bkt["amount"] += amt
             bkt["currency"] = effective_cur or project_currency
@@ -572,6 +651,57 @@ async def get_time_report(
         all_rows.append(row)
 
     totals_all = _totals_from_group_rows(all_rows)
+    package_fee_total = _ZERO
+    package_months_out: list[dict[str, Any]] = []
+    for pid, summaries in package_months_by_project.items():
+        p = projects_map.get(pid)
+        for s in summaries:
+            # Attach overage amounts from entry splits in range
+            oa = _ZERO
+            for e in entries:
+                if str(e.project_id) != pid:
+                    continue
+                if month_key(e.work_date) != (s.year, s.month):
+                    continue
+                sp = package_splits.get(str(e.id))
+                if not sp:
+                    continue
+                a, _ = _entry_billable_amount_with_package(
+                    e,
+                    project_currency=(getattr(p, "currency", None) or "USD") if p else "USD",
+                    rates_map=rates_map,
+                    package_splits=package_splits,
+                )
+                oa += a
+            enriched = MonthPackageSummary(
+                year=s.year,
+                month=s.month,
+                package_hours=s.package_hours,
+                package_fee=s.package_fee,
+                carried_in=s.carried_in,
+                capacity=s.capacity,
+                used_hours=s.used_hours,
+                used_from_current=s.used_from_current,
+                used_from_rollover=s.used_from_rollover,
+                covered_hours=s.covered_hours,
+                overage_hours=s.overage_hours,
+                expired_rollover=s.expired_rollover,
+                carry_out=s.carry_out,
+                overage_amount=oa,
+            )
+            package_fee_total += enriched.package_fee
+            d = enriched.as_dict()
+            d["projectId"] = pid
+            d["projectName"] = p.name if p else pid
+            package_months_out.append(d)
+    if package_months_out:
+        totals_all = {
+            **totals_all,
+            "package_fees": float(package_fee_total),
+            "amount_with_package_fees": float(
+                _d(totals_all.get("total_amount") or totals_all.get("amount") or 0) + package_fee_total
+            ),
+        }
     if group_by == "tasks":
         all_rows.sort(
             key=lambda r: (
@@ -618,6 +748,12 @@ async def get_time_report(
         **out["meta"],
         "totals_all_groups": totals_all,
     }
+    if package_months_out:
+        out["packageMonths"] = package_months_out
+        out["meta"] = {
+            **out["meta"],
+            "package_months_count": len(package_months_out),
+        }
     set_report(_cache_params, out)
     return out
 

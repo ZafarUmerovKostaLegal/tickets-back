@@ -397,6 +397,18 @@ async def apply_client_projects_billing_columns_patch(conn: AsyncConnection) -> 
     )
 
 
+async def apply_client_projects_hour_package_patch(conn: AsyncConnection) -> None:
+    """Monthly hour package (N hours for $X) + overage at employee rates."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_client_projects",
+        (
+            "package_hours_per_month NUMERIC(12, 2)",
+            "package_fee_amount NUMERIC(18, 4)",
+        ),
+    )
+
+
 async def apply_user_project_access_patch(conn: AsyncConnection) -> None:
 
     await conn.execute(
@@ -1110,6 +1122,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entries_manager_void", apply_time_entries_manager_void_patch),
     ("weekly_submissions", apply_weekly_submissions_schema_patch),
     ("client_projects_billable_amount", apply_client_projects_project_billable_amount_patch),
+    ("client_projects_hour_package", apply_client_projects_hour_package_patch),
     ("client_projects_records_language", apply_client_projects_records_language_patch),
     ("hourly_rates_applies_to_project", apply_hourly_rates_applies_to_project_patch),
     ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),

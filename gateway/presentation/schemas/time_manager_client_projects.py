@@ -7,7 +7,7 @@ from typing import Literal, Optional, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ReportVisibility = Literal["managers_only", "all_assigned"]
-ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable"]
+ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable", "hour_package"]
 ProjectCurrency = Literal["USD", "UZS", "EUR", "RUB", "GBP"]
 RecordsLanguage = Literal["RU", "ENG"]
 
@@ -74,6 +74,18 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело — задайте budgetAmount.",
+    )
+    package_hours_per_month: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageHoursPerMonth",
+        description="hour_package: N часов/месяц.",
+    )
+    package_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageFeeAmount",
+        description="hour_package: $X за пакет.",
     )
     records_language: RecordsLanguage = Field(
         "ENG",
@@ -174,6 +186,16 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="fixedFeeAmount",
         description="Устарело — используйте budgetAmount.",
+    )
+    package_hours_per_month: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageHoursPerMonth",
+    )
+    package_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="packageFeeAmount",
     )
     records_language: Optional[RecordsLanguage] = Field(
         None,

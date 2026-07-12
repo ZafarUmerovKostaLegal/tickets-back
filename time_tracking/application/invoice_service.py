@@ -14,6 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
+from application.package_billing import (
+    compute_entry_splits_for_project_entries,
+    is_hour_package_project,
+    month_key,
+    package_fee_description,
+    package_fee_x,
+    package_hours_n,
+)
 from application.partner_report_confirmation_service import (
     ensure_fully_confirmed_partner_period_or_403,
 )
@@ -243,10 +251,16 @@ async def create_invoice(
     await session.flush()
 
     sort_order = 0
+    package_months: set[tuple[str, int, int]] = set()
     if time_entry_ids:
         for tid in time_entry_ids:
-            await _append_time_line(session, repo, inv, tid, sort_order, actor_auth_user_id)
-            sort_order += 1
+            added, month_hit = await _append_time_line(
+                session, repo, inv, tid, sort_order, actor_auth_user_id
+            )
+            if added:
+                sort_order += 1
+            if month_hit:
+                package_months.add(month_hit)
         await session.flush()
     if expense_ids:
         pid_for_exp = project_id or inv.project_id
@@ -267,10 +281,93 @@ async def create_invoice(
             await _append_manual_line(session, repo, inv, spec, sort_order, actor_auth_user_id)
             sort_order += 1
 
+    if partner_billing_period_from and partner_billing_period_to and (project_id or inv.project_id):
+        pid = (project_id or inv.project_id or "").strip()
+        if pid:
+            y, m = partner_billing_period_from.year, partner_billing_period_from.month
+            ey, em = partner_billing_period_to.year, partner_billing_period_to.month
+            while (y, m) <= (ey, em):
+                package_months.add((pid, y, m))
+                if m == 12:
+                    y, m = y + 1, 1
+                else:
+                    m += 1
+
+    sort_order = await _ensure_package_fee_lines(
+        session, repo, inv, package_months, sort_order
+    )
+
     await session.flush()
     await _recalc_invoice_from_lines(session, inv)
     await _audit(session, repo, iid, "created", actor_auth_user_id, {"invoiceNumber": number})
     return inv
+
+
+def _package_fee_marker(project_id: str, year: int, month: int) -> str:
+    return f"[package_fee:{project_id}:{year:04d}-{month:02d}]"
+
+
+async def _load_project_billable_entries(
+    session: AsyncSession, project_id: str
+) -> list[TimeEntryModel]:
+    q = select(TimeEntryModel).where(
+        TimeEntryModel.project_id == project_id,
+        TimeEntryModel.voided_at.is_(None),
+        TimeEntryModel.is_billable.is_(True),
+    )
+    return list((await session.execute(q)).scalars().all())
+
+
+async def _ensure_package_fee_lines(
+    session: AsyncSession,
+    repo: InvoiceRepository,
+    inv: InvoiceModel,
+    package_months: set[tuple[str, int, int]],
+    sort_order: int,
+) -> int:
+    if not package_months:
+        return sort_order
+    existing = {
+        (li.description or "")
+        for li in (inv.line_items or [])
+        if (li.line_kind or "") == "package_fee"
+    }
+    # Also scan freshly added via session
+    cpr = ClientProjectRepository(session)
+    for pid, y, m in sorted(package_months):
+        proj = await cpr.get_by_id_global(pid)
+        if not proj or not is_hour_package_project(proj):
+            continue
+        fee = package_fee_x(proj)
+        n = package_hours_n(proj)
+        if fee <= 0:
+            continue
+        marker = _package_fee_marker(pid, y, m)
+        if any(marker in d for d in existing):
+            continue
+        # Check lines already on invoice from DB
+        for li in list(inv.line_items or []):
+            if marker in (li.description or ""):
+                break
+        else:
+            desc = f"{marker} {package_fee_description(proj.name or pid, y, m, n)}"
+            repo.add_line(
+                InvoiceLineItemModel(
+                    id=str(uuid.uuid4()),
+                    invoice_id=inv.id,
+                    sort_order=sort_order,
+                    line_kind="package_fee",
+                    description=desc[:2000],
+                    quantity=Decimal(1),
+                    unit_amount=_money4(fee),
+                    line_total=_money4(fee),
+                    time_entry_id=None,
+                    expense_request_id=None,
+                )
+            )
+            existing.add(desc)
+            sort_order += 1
+    return sort_order
 
 
 async def _append_time_line(
@@ -280,7 +377,8 @@ async def _append_time_line(
     time_entry_id: str,
     sort_order: int,
     actor_id: int,
-) -> None:
+) -> tuple[bool, tuple[str, int, int] | None]:
+    """Returns (line_added, optional (project_id, year, month) for package fee)."""
     other = await repo.time_entry_on_active_invoice(time_entry_id, exclude_invoice_id=inv.id)
     if other:
         raise HTTPException(
@@ -305,15 +403,36 @@ async def _append_time_line(
     proj = await cpr.get_by_id_global(entry.project_id) if entry.project_id else None
     pc = (getattr(proj, "currency", None) or "USD") if proj else "USD"
 
-    qty = dec(entry.hours)
-    amt, _cur = _billable_amount_for_entry(
-        qty,
-        entry.is_billable,
-        entry.work_date,
-        user_rates,
-        project_currency=pc,
-        time_entry_project_id=entry.project_id,
-    )
+    month_hit: tuple[str, int, int] | None = None
+    if entry.project_id and proj and is_hour_package_project(proj):
+        y, m = month_key(entry.work_date)
+        month_hit = (str(entry.project_id), y, m)
+        all_entries = await _load_project_billable_entries(session, str(entry.project_id))
+        _, splits = compute_entry_splits_for_project_entries(proj, all_entries)
+        split = splits.get(str(entry.id))
+        if not split or split.overage_hours <= 0:
+            # Covered by package — no time line; package fee still owed for the month.
+            return False, month_hit
+        qty = split.overage_hours
+        amt, _cur = _billable_amount_for_entry(
+            qty,
+            True,
+            entry.work_date,
+            user_rates,
+            project_currency=pc,
+            time_entry_project_id=entry.project_id,
+        )
+    else:
+        qty = dec(entry.hours)
+        amt, _cur = _billable_amount_for_entry(
+            qty,
+            entry.is_billable,
+            entry.work_date,
+            user_rates,
+            project_currency=pc,
+            time_entry_project_id=entry.project_id,
+        )
+
     line_total = _money4(amt)
     rate_amt, _rate_cur = _billable_rate_for_entry(
         entry.work_date,
@@ -326,6 +445,8 @@ async def _append_time_line(
     else:
         unit = _money4(line_total / qty) if qty > 0 else Decimal(0)
     desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
+    if month_hit:
+        desc = f"{desc} (overage)"
     repo.add_line(
         InvoiceLineItemModel(
             id=str(uuid.uuid4()),
@@ -340,6 +461,7 @@ async def _append_time_line(
             expense_request_id=None,
         )
     )
+    return True, month_hit
 
 
 async def _append_expense_line(
@@ -475,13 +597,21 @@ async def patch_invoice_draft(
     if replace_lines is not None:
         await repo.delete_lines(inv.id)
         await session.flush()
-        for idx, spec in enumerate(replace_lines):
+        package_months: set[tuple[str, int, int]] = set()
+        sort_idx = 0
+        for spec in replace_lines:
             kind = (spec.get("lineKind") or spec.get("line_kind") or "manual").lower()
             if kind == "time":
                 tid = spec.get("timeEntryId") or spec.get("time_entry_id")
                 if not tid:
                     raise HTTPException(status_code=400, detail="timeEntryId обязателен для строки time")
-                await _append_time_line(session, repo, inv, str(tid), idx, actor_auth_user_id)
+                added, month_hit = await _append_time_line(
+                    session, repo, inv, str(tid), sort_idx, actor_auth_user_id
+                )
+                if added:
+                    sort_idx += 1
+                if month_hit:
+                    package_months.add(month_hit)
             elif kind == "expense":
                 eid = spec.get("expenseRequestId") or spec.get("expense_request_id")
                 if not eid or not inv.project_id:
@@ -490,9 +620,15 @@ async def patch_invoice_draft(
                 row = rows.get(str(eid))
                 if not row:
                     raise HTTPException(status_code=400, detail="Расход не найден")
-                await _append_expense_line(session, repo, inv, row, idx, actor_auth_user_id)
+                await _append_expense_line(session, repo, inv, row, sort_idx, actor_auth_user_id)
+                sort_idx += 1
+            elif kind == "package_fee":
+                await _append_manual_line(session, repo, inv, {**spec, "lineKind": "manual"}, sort_idx, actor_auth_user_id)
+                sort_idx += 1
             else:
-                await _append_manual_line(session, repo, inv, spec, idx, actor_auth_user_id)
+                await _append_manual_line(session, repo, inv, spec, sort_idx, actor_auth_user_id)
+                sort_idx += 1
+        await _ensure_package_fee_lines(session, repo, inv, package_months, sort_idx)
         await session.flush()
 
     await _recalc_invoice_from_lines(session, inv)

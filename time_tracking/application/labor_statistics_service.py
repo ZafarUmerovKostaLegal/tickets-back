@@ -18,6 +18,7 @@ from application.labor_statistics_catalog import (
     project_status_for_row,
 )
 from application.entry_pricing import _billable_amount_for_entry
+from application.package_billing import build_package_splits_index
 from application.labor_statistics_scope import (
     LaborStatisticsScope,
     clamp_labor_filter_param,
@@ -488,6 +489,20 @@ async def build_labor_statistics(
     initials_map = await _load_initials_map(session)
     rates_map = await _load_user_rates(session, entry_user_ids)
 
+    package_splits, package_months_by_project = build_package_splits_index(
+        projects_map,
+        entries,
+        date_from=q.date_from,
+        date_to=q.date_to,
+    )
+    package_fees_total = 0.0
+    for pid, summaries in package_months_by_project.items():
+        p = projects_map.get(pid)
+        if not p:
+            continue
+        for s in summaries:
+            package_fees_total += float(s.package_fee)
+
     access_repo = UserProjectAccessRepository(session)
     partners_by_project: dict[str, list[int]] = {}
     for pid in project_ids:
@@ -539,14 +554,26 @@ async def build_labor_statistics(
         h = _d(e.hours)
         bh = h if e.is_billable else _ZERO
         pc = (p.currency or "USD").strip() or "USD"
-        amt, amt_cur = _billable_amount_for_entry(
-            h,
-            bool(e.is_billable),
-            e.work_date,
-            rates_map.get(e.auth_user_id),
-            project_currency=pc,
-            time_entry_project_id=e.project_id,
-        )
+        split = package_splits.get(str(e.id))
+        if split is not None:
+            oh = _d(split.overage_hours)
+            amt, amt_cur = _billable_amount_for_entry(
+                oh,
+                bool(e.is_billable) and oh > 0,
+                e.work_date,
+                rates_map.get(e.auth_user_id),
+                project_currency=pc,
+                time_entry_project_id=e.project_id,
+            )
+        else:
+            amt, amt_cur = _billable_amount_for_entry(
+                h,
+                bool(e.is_billable),
+                e.work_date,
+                rates_map.get(e.auth_user_id),
+                project_currency=pc,
+                time_entry_project_id=e.project_id,
+            )
         if slot is None:
             slot = {
                 "id": str(uuid.uuid4()),
@@ -613,6 +640,13 @@ async def build_labor_statistics(
 
     all_rows = list(buckets.values())
     kpi = _build_kpi(all_rows)
+    if package_fees_total:
+        kpi["package_fees"] = round(package_fees_total, 2)
+        kpi["billable_amount"] = round(float(kpi.get("billable_amount") or 0) + package_fees_total, 2)
+        if float(kpi.get("billable_hours") or 0) > 0:
+            kpi["accrued_rate_per_hour"] = round(
+                float(kpi["billable_amount"]) / float(kpi["billable_hours"]), 2
+            )
 
     daily = []
     for dkey in sorted(daily_acc.keys()):

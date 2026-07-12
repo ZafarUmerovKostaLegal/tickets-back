@@ -756,6 +756,8 @@ class ClientProjectRepository:
         send_budget_alerts: bool = False,
         budget_alert_threshold_percent: Decimal | None = None,
         fixed_fee_amount: Decimal | None = None,
+        package_hours_per_month: Decimal | None = None,
+        package_fee_amount: Decimal | None = None,
         is_archived: bool = False,
         records_language: str = "ENG",
     ) -> TimeManagerClientProjectModel:
@@ -787,6 +789,8 @@ class ClientProjectRepository:
             send_budget_alerts=send_budget_alerts,
             budget_alert_threshold_percent=budget_alert_threshold_percent,
             fixed_fee_amount=fixed_fee_amount,
+            package_hours_per_month=package_hours_per_month,
+            package_fee_amount=package_fee_amount,
             is_archived=bool(is_archived),
             records_language=rl,
             created_at=_now_utc(),
@@ -845,6 +849,10 @@ class ClientProjectRepository:
             row.currency = cur
         if "fixed_fee_amount" in patch:
             row.fixed_fee_amount = _decimal_none(patch["fixed_fee_amount"])
+        if "package_hours_per_month" in patch:
+            row.package_hours_per_month = _decimal_none(patch["package_hours_per_month"])
+        if "package_fee_amount" in patch:
+            row.package_fee_amount = _decimal_none(patch["package_fee_amount"])
         if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
         if "records_language" in patch and patch["records_language"] is not None:

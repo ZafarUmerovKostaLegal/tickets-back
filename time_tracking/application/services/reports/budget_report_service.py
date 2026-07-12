@@ -11,6 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.budget_mode import budget_limit_hours, budget_limit_money, budget_mode
 from application.entry_pricing import _billable_amount_for_entry
+from application.package_billing import (
+    build_package_splits_index,
+    is_hour_package_project,
+    package_fee_x,
+    package_hours_n,
+)
 from application.report_builder import (
     _base_entry_conditions,
     _load_clients_map,
@@ -115,6 +121,13 @@ async def get_budget_report(
     all_user_ids = list({e.auth_user_id for e in entries})
     rates_map = await _load_user_rates(session, all_user_ids or None)
 
+    package_splits, package_months_by_project = build_package_splits_index(
+        projects_map,
+        entries,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
     hours_by_project: dict[str, Decimal] = {}
     amount_by_project: dict[str, Decimal] = {}
     user_buckets_by_project: dict[str, dict[int, dict]] = {}
@@ -135,14 +148,26 @@ async def get_budget_report(
         if e.is_billable:
             p_ent = projects_map.get(pid)
             pc = (getattr(p_ent, "currency", None) or "USD") if p_ent else "USD"
-            amt, _ = _billable_amount_for_entry(
-                h,
-                e.is_billable,
-                e.work_date,
-                rates_map.get(uid),
-                project_currency=pc,
-                time_entry_project_id=pid,
-            )
+            split = package_splits.get(str(e.id))
+            if split is not None:
+                oh = _d(split.overage_hours)
+                amt, _ = _billable_amount_for_entry(
+                    oh,
+                    oh > 0,
+                    e.work_date,
+                    rates_map.get(uid),
+                    project_currency=pc,
+                    time_entry_project_id=pid,
+                )
+            else:
+                amt, _ = _billable_amount_for_entry(
+                    h,
+                    e.is_billable,
+                    e.work_date,
+                    rates_map.get(uid),
+                    project_currency=pc,
+                    time_entry_project_id=pid,
+                )
             amount_by_project[pid] = amount_by_project.get(pid, _ZERO) + amt
             ubkt["amount"] += amt
 
@@ -172,6 +197,29 @@ async def get_budget_report(
             "is_active": not p.is_archived,
             "users": users_list,
         }
+
+        if is_hour_package_project(p):
+            row["project_type"] = "hour_package"
+            row["package_hours_per_month"] = float(package_hours_n(p))
+            row["package_fee_amount"] = float(package_fee_x(p))
+            months = package_months_by_project.get(p.id, [])
+            row["package_months"] = [s.as_dict() for s in months]
+            if months:
+                last = months[-1]
+                row["budget_by"] = "hour_package"
+                row["has_budget"] = True
+                row["budget"] = float(last.capacity)
+                row["budget_spent"] = float(last.used_hours)
+                row["budget_remaining"] = float(max(_ZERO, last.capacity - last.used_hours))
+                _attach_budget_compat_fields(
+                    row,
+                    budget_value=row["budget"],
+                    spent_value=row["budget_spent"],
+                    remaining_value=row["budget_remaining"],
+                    progress_percent=_progress_percent(last.used_hours, last.capacity),
+                )
+                all_rows.append(row)
+                continue
 
         if mode == "none":
             row["has_budget"] = False
