@@ -393,17 +393,20 @@ async def upload_explanation_photo(
     if len(content) > max_bytes:
         raise HTTPException(status_code=400, detail=f"File too large. Max {settings.max_explanation_photo_size_mb} MB")
 
-    media_base = Path(settings.media_path).resolve()
-    rel_dir = Path("attendance") / "explanations" / day_val.isoformat() / emp_no
-    abs_dir = (media_base / rel_dir).resolve()
-    if not str(abs_dir).startswith(str(media_base)):
+    from backend_common.media_path import safe_media_path
+
+    rel_dir = f"attendance/explanations/{day_val.isoformat()}/{emp_no}"
+    abs_dir = safe_media_path(settings.media_path, rel_dir)
+    if abs_dir is None:
         raise HTTPException(status_code=400, detail="Invalid media path")
     abs_dir.mkdir(parents=True, exist_ok=True)
 
     fname = f"{uuid.uuid4().hex}{ext}"
-    abs_path = (abs_dir / fname).resolve()
+    abs_path = safe_media_path(settings.media_path, f"{rel_dir}/{fname}")
+    if abs_path is None:
+        raise HTTPException(status_code=400, detail="Invalid media path")
     abs_path.write_bytes(content)
-    rel_path = str((rel_dir / fname).as_posix())
+    rel_path = f"{rel_dir}/{fname}"
 
     stmt = select(AttendanceExplanationModel).where(
         AttendanceExplanationModel.day == day_val,

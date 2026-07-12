@@ -1,15 +1,37 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
 
 from backend_common.db_probe import probe_postgresql, probe_redis, redact_database_url
 from infrastructure.database_targets import DatabaseMonitorSettings, database_targets
-from presentation.routes.users import require_admin
+from presentation.routes.users import (
+    ADMIN_ROLE,
+    MAIN_ADMIN_ROLE,
+    _get_current_user_optional,
+)
+from fastapi import Header
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+async def require_ops_databases_admin(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    """Main Admin / Administrator only — Partner cannot see DB topology."""
+    user = await _get_current_user_optional(request, authorization)
+    role = (user.get("role") or "").strip()
+    if role not in {MAIN_ADMIN_ROLE, ADMIN_ROLE}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only Main Administrator or Administrator can view database ops",
+        )
+    return user
 
 
 def _overall_status(items: list[dict]) -> str:
@@ -22,15 +44,28 @@ def _overall_status(items: list[dict]) -> str:
     return "ok"
 
 
+def _scrub_probe_errors(items: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for item in items:
+        copy = dict(item)
+        if copy.get("status") == "error" and copy.get("error"):
+            copy["error"] = "connection failed"
+        out.append(copy)
+    return out
+
+
 @router.get("/databases", summary="Живая карта PostgreSQL и Redis (только администраторы)")
-async def databases_overview(_: dict = Depends(require_admin)):
+async def databases_overview(_: dict = Depends(require_ops_databases_admin)):
+    if os.getenv("OPS_DATABASES_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+        raise HTTPException(status_code=404, detail="Ops databases endpoint disabled")
+
     settings = DatabaseMonitorSettings()
     targets = database_targets(settings)
     probes = [probe_postgresql(name, url) for name, url in targets]
     if settings.redis_url.strip():
         probes.append(probe_redis(settings.redis_url.strip()))
     results = await asyncio.gather(*probes) if probes else []
-    items = list(results)
+    items = _scrub_probe_errors(list(results))
     return {
         "status": _overall_status(items),
         "timestamp": datetime.now(timezone.utc).isoformat(),

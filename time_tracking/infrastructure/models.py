@@ -110,7 +110,11 @@ class TimeEntryModel(Base):
 
     rounded_hours: Mapped[Decimal] = mapped_column(Numeric(16, 6), nullable=False)
     is_billable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("time_tracking_client_projects.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     task_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("time_tracking_client_tasks.id", ondelete="SET NULL"),

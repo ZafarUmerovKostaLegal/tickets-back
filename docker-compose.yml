@@ -43,6 +43,8 @@ services:
       - CORS_ALLOW_PRIVATE_NETWORK=${CORS_ALLOW_PRIVATE_NETWORK:-true}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
+      # Prod: unique *_DB_PASSWORD / REDIS_PASSWORD+REDIS_URL / WS_INTERNAL_SECRET — see .env.example (rotation ≠ wipe).
+      - OPS_DATABASES_ENABLED=${OPS_DATABASES_ENABLED:-true}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-1440}
       - AUTH_SET_SESSION_COOKIE=${AUTH_SET_SESSION_COOKIE:-true}

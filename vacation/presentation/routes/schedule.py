@@ -8,7 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from application.kind_legend import KIND_LEGEND_ENTRIES, KindLegendEntry
-from application.schedule_employee_sync import SyncScheduleEmployeesResult, sync_schedule_employees_for_year
+from application.schedule_employee_sync import (
+    audit_schedule_employees_for_year,
+    sync_schedule_employees_for_year,
+)
 from infrastructure.auth_lookup import list_staff_users
 from infrastructure.database import get_session
 from infrastructure.models import AbsenceDay, ScheduleEmployee
@@ -70,6 +73,18 @@ class SyncEmployeesResultOut(BaseModel):
     updated: int
     skipped_archived: int = Field(..., alias="skippedArchived")
     skipped_hidden: int = Field(..., alias="skippedHidden")
+
+    model_config = {"populate_by_name": True}
+
+
+class SyncEmployeesAuditOut(BaseModel):
+    year: int
+    total_rows: int = Field(..., alias="totalRows")
+    linked_to_auth: int = Field(..., alias="linkedToAuth")
+    unlinked_orphans: int = Field(..., alias="unlinkedOrphans")
+    duplicate_emails_among_orphans: int = Field(..., alias="duplicateEmailsAmongOrphans")
+    duplicate_names_among_orphans: int = Field(..., alias="duplicateNamesAmongOrphans")
+    note: str
 
     model_config = {"populate_by_name": True}
 
@@ -151,6 +166,24 @@ async def kind_codes() -> dict[str, str]:
 async def kind_legend() -> list[KindLegendEntry]:
 
     return list(KIND_LEGEND_ENTRIES)
+
+
+@router.get("/employees/sync-audit", response_model=SyncEmployeesAuditOut)
+async def sync_employees_audit(
+    year: int = Query(..., ge=2000, le=2100),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read-only: unlinked Excel orphans and duplicate email/name among them."""
+    result = await audit_schedule_employees_for_year(session, year=year)
+    return SyncEmployeesAuditOut(
+        year=result.year,
+        total_rows=result.totalRows,
+        linked_to_auth=result.linkedToAuth,
+        unlinked_orphans=result.unlinkedOrphans,
+        duplicate_emails_among_orphans=result.duplicateEmailsAmongOrphans,
+        duplicate_names_among_orphans=result.duplicateNamesAmongOrphans,
+        note=result.note,
+    )
 
 
 @router.post("/employees/sync", response_model=SyncEmployeesResultOut)

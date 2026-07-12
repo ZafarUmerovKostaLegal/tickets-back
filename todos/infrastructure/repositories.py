@@ -1259,9 +1259,10 @@ class KanbanRepository:
         row = r.scalars().one_or_none()
         if not row:
             return False
-        base = Path(get_settings().media_path).resolve()
-        p = (base / row.storage_key).resolve()
-        if str(p).startswith(str(base)) and p.is_file():
+        from backend_common.media_path import safe_media_path
+
+        p = safe_media_path(get_settings().media_path, row.storage_key)
+        if p is not None and p.is_file():
             try:
                 p.unlink()
             except OSError:

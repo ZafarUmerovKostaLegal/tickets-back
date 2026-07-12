@@ -2,6 +2,8 @@ import logging
 import os
 import sys
 
+from backend_common.db_password_warn import warn_if_database_url_uses_default_password
+
 
 def _configure_logging() -> None:
     raw = (os.getenv("LOG_LEVEL") or "").strip()
@@ -19,5 +21,6 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
+warn_if_database_url_uses_default_password(os.environ.get("DATABASE_URL"), service="correspondence")
 
-from presentation.api import app              
+from presentation.api import app

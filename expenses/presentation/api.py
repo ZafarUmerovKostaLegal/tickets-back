@@ -6,10 +6,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from backend_common.schema_patch_runner import apply_registered_schema_patches
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure.repositories import seed_reference_data
+from infrastructure.schema_patches import REGISTERED_EXPENSE_SCHEMA_PATCHES
 from presentation.routes import expense_email_action, expenses, health, reference
 
 _log = logging.getLogger("expenses.startup")
@@ -60,22 +62,15 @@ async def lifespan(app: FastAPI):
     for attempt in range(1, _STARTUP_RETRIES + 1):
         try:
             async with engine.begin() as conn:
+                # Destructive one-shot for ancient int-PK installs only — NOT in patch ledger.
                 await _drop_legacy_integer_expense_tables(conn)
                 await conn.run_sync(Base.metadata.create_all)
-
-                for ddl in (
-                    "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS payment_deadline DATE",
-                    "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS paid_by_user_id INTEGER",
-                    "ALTER TABLE expense_attachments ADD COLUMN IF NOT EXISTS attachment_kind VARCHAR(64)",
-                    "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS expense_category_id VARCHAR(64)",
-                    "ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS partner_user_id INTEGER",
-                    "CREATE INDEX IF NOT EXISTS ix_expense_requests_expense_category_id ON expense_requests (expense_category_id)",
-                    "CREATE INDEX IF NOT EXISTS ix_expense_requests_partner_user_id ON expense_requests (partner_user_id)",
-                ):
-                    try:
-                        await conn.execute(text(ddl))
-                    except Exception as ex:
-                        _log.debug("migration %s: %s", ddl, ex)
+                await apply_registered_schema_patches(
+                    conn,
+                    REGISTERED_EXPENSE_SCHEMA_PATCHES,
+                    table_name="expenses_schema_patch_log",
+                    log_prefix="expenses",
+                )
             async with async_session_factory() as session:
                 await seed_reference_data(session)
                 await session.commit()

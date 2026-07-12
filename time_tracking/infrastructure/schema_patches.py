@@ -1102,6 +1102,50 @@ async def apply_time_entry_archives_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_time_entries_project_id_fk_patch(conn: AsyncConnection) -> None:
+    """Hard FK entries.project_id → projects (RESTRICT). Safe only when orphans == 0.
+
+    If orphans exist, raises without modifying data — fix via /integrity/audit first.
+    """
+    orphan_r = await conn.execute(
+        text(
+            """
+            SELECT COUNT(*) FROM time_tracking_entries e
+            WHERE e.project_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM time_tracking_client_projects p
+                WHERE p.id = e.project_id
+              )
+            """
+        )
+    )
+    orphans = int(orphan_r.scalar_one() or 0)
+    if orphans > 0:
+        raise RuntimeError(
+            f"Refusing FK fk_tt_entries_project_id: {orphans} orphan entry.project_id "
+            "refs. Fix manually (no auto-delete); re-check GET /integrity/audit. "
+            "No schema change was applied."
+        )
+
+    await conn.execute(
+        text(
+            """
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'fk_tt_entries_project_id'
+                ) THEN
+                    ALTER TABLE time_tracking_entries
+                        ADD CONSTRAINT fk_tt_entries_project_id
+                        FOREIGN KEY (project_id)
+                        REFERENCES time_tracking_client_projects (id)
+                        ON DELETE RESTRICT;
+                END IF;
+            END $$
+            """
+        )
+    )
+
+
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
@@ -1129,5 +1173,6 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_tracking_teams", apply_time_tracking_teams_schema_patch),
     ("report_performance_indexes", apply_report_performance_indexes_patch),
     ("time_entry_archives", apply_time_entry_archives_patch),
+    ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
 )
 

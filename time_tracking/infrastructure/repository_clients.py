@@ -708,9 +708,27 @@ class ClientProjectRepository:
         return new_row
 
     async def time_entries_count(self, project_id: str) -> int:
+        """Active (non-voided) entries — for UI usage counters."""
         q = select(func.count()).select_from(TimeEntryModel).where(
             TimeEntryModel.project_id == project_id,
             TimeEntryModel.voided_at.is_(None),
+        )
+        n = (await self._session.execute(q)).scalar_one()
+        return int(n or 0)
+
+    async def time_entries_count_all(self, project_id: str) -> int:
+        """All entries including voided — gate for project delete (no silent history wipe)."""
+        q = select(func.count()).select_from(TimeEntryModel).where(
+            TimeEntryModel.project_id == project_id,
+        )
+        n = (await self._session.execute(q)).scalar_one()
+        return int(n or 0)
+
+    async def entry_archives_count(self, project_id: str) -> int:
+        from infrastructure.models import TimeEntryArchiveModel
+
+        q = select(func.count()).select_from(TimeEntryArchiveModel).where(
+            TimeEntryArchiveModel.project_id == project_id,
         )
         n = (await self._session.execute(q)).scalar_one()
         return int(n or 0)

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 # Default passwords from docker-compose / historical local setups.
 _DEFAULT_PG_PASSWORDS = frozenset(
     {
+        "gateway",
         "time_tracking",
         "auth",
         "tickets",
@@ -24,6 +25,7 @@ _DEFAULT_PG_PASSWORDS = frozenset(
         "postgres",
         "password",
         "changeme",
+        "user",
     }
 )
 

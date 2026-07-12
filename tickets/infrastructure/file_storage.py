@@ -2,12 +2,16 @@ import re
 import uuid
 from pathlib import Path
 
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 
 MAX_SIZE_BYTES = get_settings().max_attachment_size_mb * 1024 * 1024
 
+
 def get_tickets_upload_dir() -> Path:
-    path = Path(get_settings().media_path) / "tickets"
+    path = safe_media_path(get_settings().media_path, "tickets")
+    if path is None:
+        raise ValueError("Invalid media path")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -31,9 +35,9 @@ def _safe_base(filename: str) -> str:
 def save_attachment(filename: str, content: bytes) -> str:
     _validate_attachment(filename, content)
     upload_dir = get_tickets_upload_dir()
-                                                                           
-                                                                                  
     unique_name = f"{uuid.uuid4().hex}_{_safe_base(filename)}"
-    path = upload_dir / unique_name
+    path = safe_media_path(get_settings().media_path, f"tickets/{unique_name}")
+    if path is None:
+        raise ValueError("Invalid media path")
     path.write_bytes(content)
     return unique_name

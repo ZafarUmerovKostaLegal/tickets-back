@@ -67,11 +67,11 @@ def _storage_key_from_media_url(value: str | None) -> str | None:
 def _remove_media_file_if_local(storage_key: str | None) -> None:
     if not storage_key:
         return
+    from backend_common.media_path import safe_media_path
     from infrastructure.config import get_settings
 
-    media_base = Path(get_settings().media_path).resolve()
-    target = (media_base / storage_key).resolve()
-    if str(target).startswith(str(media_base)) and target.is_file():
+    target = safe_media_path(get_settings().media_path, storage_key)
+    if target is not None and target.is_file():
         target.unlink(missing_ok=True)
 
 

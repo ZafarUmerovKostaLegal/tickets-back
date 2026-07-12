@@ -499,6 +499,14 @@ async def proxy_integrity_audit(
     return await _tt_json("GET", "/integrity/audit", timeout=60.0)
 
 
+@router.get("/integrity/retention-dry-run")
+async def proxy_retention_dry_run(
+    _: dict = Depends(require_reports_view_role),
+):
+    """COUNT old archives/snapshots — never deletes."""
+    return await _tt_json("GET", "/integrity/retention-dry-run", timeout=60.0)
+
+
 @router.get("/statistics/labor")
 async def proxy_labor_statistics(
     request: Request,

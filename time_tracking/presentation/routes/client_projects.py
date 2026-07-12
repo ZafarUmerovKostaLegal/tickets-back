@@ -1057,11 +1057,17 @@ async def delete_client_project(
 ):
     await _require_client_mutable(session, client_id)
     repo = ClientProjectRepository(session)
-    usage = await repo.time_entries_count(project_id)
+    usage = await repo.time_entries_count_all(project_id)
     if usage > 0:
         raise HTTPException(
             status_code=409,
-            detail="Project has time entries and cannot be deleted",
+            detail="Project has time entries (including voided) and cannot be deleted",
+        )
+    archives = await repo.entry_archives_count(project_id)
+    if archives > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Project has archived time-entry snapshots and cannot be deleted",
         )
     ok = await repo.delete(client_id, project_id)
     if not ok:

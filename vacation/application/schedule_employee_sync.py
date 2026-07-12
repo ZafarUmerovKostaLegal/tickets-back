@@ -56,6 +56,61 @@ class SyncScheduleEmployeesResult:
     skipped_hidden: int
 
 
+@dataclass(frozen=True)
+class ScheduleEmployeesAuditResult:
+    """Read-only identity health for a schedule year — never mutates."""
+
+    year: int
+    totalRows: int
+    linkedToAuth: int
+    unlinkedOrphans: int
+    duplicateEmailsAmongOrphans: int
+    duplicateNamesAmongOrphans: int
+    note: str
+
+
+async def audit_schedule_employees_for_year(
+    session: AsyncSession,
+    *,
+    year: int,
+) -> ScheduleEmployeesAuditResult:
+    r = await session.execute(select(ScheduleEmployee).where(ScheduleEmployee.year == year))
+    rows = list(r.scalars().all())
+    linked = 0
+    orphans: list[ScheduleEmployee] = []
+    for row in rows:
+        if row.auth_user_id is not None:
+            linked += 1
+        else:
+            orphans.append(row)
+
+    email_counts: dict[str, int] = {}
+    name_counts: dict[str, int] = {}
+    for row in orphans:
+        ek = normalize_email(row.email)
+        if ek:
+            email_counts[ek] = email_counts.get(ek, 0) + 1
+        nk = normalize_full_name(row.full_name)
+        if nk:
+            name_counts[nk] = name_counts.get(nk, 0) + 1
+
+    dup_emails = sum(1 for n in email_counts.values() if n > 1)
+    dup_names = sum(1 for n in name_counts.values() if n > 1)
+
+    return ScheduleEmployeesAuditResult(
+        year=year,
+        totalRows=len(rows),
+        linkedToAuth=linked,
+        unlinkedOrphans=len(orphans),
+        duplicateEmailsAmongOrphans=dup_emails,
+        duplicateNamesAmongOrphans=dup_names,
+        note=(
+            "Read-only. Prefer linking by auth_user_id; name/email matching is for Excel orphans only. "
+            "Does not auto-unlink or wipe rows."
+        ),
+    )
+
+
 async def sync_schedule_employees_for_year(
     session: AsyncSession,
     *,

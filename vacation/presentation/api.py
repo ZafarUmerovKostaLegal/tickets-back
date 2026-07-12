@@ -10,7 +10,9 @@ from infrastructure.config import get_settings
 from infrastructure.database import Base, engine
 from infrastructure.email_send import email_action_missing, email_action_ready
 from infrastructure import models
+from infrastructure.schema_patches import REGISTERED_VACATION_SCHEMA_PATCHES
 from infrastructure.schema_readiness import mark_schema_ready
+from backend_common.schema_patch_runner import apply_registered_schema_patches
 from presentation.middleware.schema_readiness import SchemaReadinessMiddleware
 from presentation.routes.health import router as health_router
 from presentation.routes.schedule import router as schedule_router
@@ -29,41 +31,6 @@ def _is_database_missing_error(exc: BaseException) -> bool:
     return "does not exist" in s and "database" in s
 
 
-_UPGRADE_SQL = (
-                                              
-    "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS auth_user_id INTEGER",
-    "ALTER TABLE schedule_employees ADD COLUMN IF NOT EXISTS email VARCHAR(320)",
-    "ALTER TABLE schedule_employees ALTER COLUMN excel_row_no DROP NOT NULL",
-    "CREATE INDEX IF NOT EXISTS ix_schedule_employees_auth_user_id ON schedule_employees(auth_user_id)",
-    """DO $$ BEGIN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint WHERE conname = 'uq_schedule_employees_year_auth_user'
-        ) THEN
-            ALTER TABLE schedule_employees
-                ADD CONSTRAINT uq_schedule_employees_year_auth_user UNIQUE (year, auth_user_id);
-        END IF;
-    END $$""",
-    "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS leave_request_id INTEGER",
-    "CREATE INDEX IF NOT EXISTS ix_absence_days_leave_request_id ON absence_days(leave_request_id)",
-                                                                            
-    "ALTER TABLE absence_days ADD COLUMN IF NOT EXISTS manual_entry_id INTEGER",
-    "CREATE INDEX IF NOT EXISTS ix_absence_days_manual_entry_id ON absence_days(manual_entry_id)",
-)
-
-
-async def _apply_upgrade_sql() -> None:
-    if engine is None:
-        return
-    from sqlalchemy import text
-
-    async with engine.begin() as conn:
-        for stmt in _UPGRADE_SQL:
-            try:
-                await conn.execute(text(stmt))
-            except Exception as exc:                                
-                _log.warning("upgrade step failed (%s): %s", stmt[:80], exc)
-
-
 async def _ensure_schema_with_retries() -> None:
 
     last_exc: Exception | None = None
@@ -73,7 +40,12 @@ async def _ensure_schema_with_retries() -> None:
                 return
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            await _apply_upgrade_sql()
+                await apply_registered_schema_patches(
+                    conn,
+                    REGISTERED_VACATION_SCHEMA_PATCHES,
+                    table_name="vacation_schema_patch_log",
+                    log_prefix="vacation",
+                )
             mark_schema_ready()
             _log.info("Схема БД vacation готова")
             return
