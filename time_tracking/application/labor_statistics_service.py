@@ -17,6 +17,7 @@ from application.labor_statistics_catalog import (
     month_period_bounds,
     project_status_for_row,
 )
+from application.entry_pricing import _billable_amount_for_entry
 from application.labor_statistics_scope import (
     LaborStatisticsScope,
     clamp_labor_filter_param,
@@ -32,6 +33,7 @@ from application.report_builder import (
     _load_initials_map,
     _load_projects_map,
     _load_tasks_map,
+    _load_user_rates,
     _load_users_map,
     _money,
 )
@@ -54,6 +56,7 @@ _SORT_KEYS = frozenset({
     "period_label",
     "hours",
     "payment",
+    "billable_amount",
     "rate",
 })
 
@@ -113,6 +116,17 @@ async def _team_member_ids(session: AsyncSession, team_id: str) -> set[int]:
     return set(await repo.list_member_auth_user_ids(team_id))
 
 
+async def _team_led_member_ids(
+    session: AsyncSession,
+    scope: LaborStatisticsScope,
+) -> set[int] | None:
+    """For partner/team-leader scope: members of teams led by the viewer (incl. self)."""
+    if scope.mode != "partner" or scope.auth_user_id is None:
+        return None
+    repo = TeamRepository(session)
+    return set(await repo.list_member_auth_user_ids_for_partner(scope.auth_user_id))
+
+
 async def _load_project_payments(
     session: AsyncSession,
     date_from: date,
@@ -153,32 +167,10 @@ async def _load_project_payments(
     return out
 
 
-async def _resolve_scope_project_ids(
-    session: AsyncSession,
-    scope: LaborStatisticsScope,
-    *,
-    authorization: str | None,
-) -> set[str] | None:
-    if scope.mode != "partner" or scope.auth_user_id is None:
-        return None
-    access_repo = UserProjectAccessRepository(session)
-    vid = scope.auth_user_id
-    allowed: set[str] = set()
-    for pid in await access_repo.list_project_ids(vid):
-        partners = await list_partner_auth_user_ids_for_project(
-            session, access_repo, pid, authorization=authorization
-        )
-        if vid in partners:
-            allowed.add(pid)
-    return allowed
-
-
 async def _load_entries(
     session: AsyncSession,
     q: LaborStatisticsQuery,
     scope: LaborStatisticsScope,
-    *,
-    scope_project_ids: set[str] | None,
 ) -> list[TimeEntryModel]:
     user_ids: list[int] | None = None
     lawyer_filter = _parse_optional_int(q.lawyer_id)
@@ -187,11 +179,18 @@ async def _load_entries(
     elif lawyer_filter is not None:
         user_ids = [lawyer_filter]
 
+    led_members = await _team_led_member_ids(session, scope)
+    if led_members is not None:
+        if user_ids is None:
+            user_ids = sorted(led_members)
+        else:
+            user_ids = [u for u in user_ids if u in led_members]
+        if not user_ids:
+            return []
+
     project_ids: list[str] | None = None
     if q.project_id and q.project_id.strip():
         project_ids = [q.project_id.strip()]
-    elif scope_project_ids is not None:
-        project_ids = sorted(scope_project_ids)
 
     client_ids = [q.client_id.strip()] if q.client_id and q.client_id.strip() else None
 
@@ -232,7 +231,7 @@ def _sort_rows(rows: list[dict[str, Any]], sort: str, sort_dir: str) -> list[dic
     def sort_val(row: dict[str, Any]) -> Any:
         if key == "rate":
             return _row_rate(float(row.get("payment") or 0), float(row.get("billable_hours") or 0))
-        if key in ("hours", "payment"):
+        if key in ("hours", "payment", "billable_amount"):
             return float(row.get(key) or 0)
         if key == "period_label":
             return row.get("period_from") or ""
@@ -269,18 +268,33 @@ def _build_charts(
     rows: list[dict[str, Any]],
     daily: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    def stacked_by(key_name: str, label_key: str) -> list[dict[str, Any]]:
-        acc: dict[str, tuple[float, float]] = defaultdict(lambda: (0.0, 0.0))
+    def stacked_by(label_key: str, id_key: str | None = None) -> list[dict[str, Any]]:
+        acc: dict[str, dict[str, Any]] = {}
         for row in rows:
             label = str(row.get(label_key) or "—")
+            rid = str(row.get(id_key) or "") if id_key else ""
+            key = rid or label
+            slot = acc.get(key)
+            if slot is None:
+                slot = {"id": rid or label, "name": label, "billable_hours": 0.0, "non_billable_hours": 0.0}
+                acc[key] = slot
             h = float(row.get("hours") or 0)
             bh = float(row.get("billable_hours") or 0)
-            p, s = acc[label]
-            acc[label] = (p + bh, s + max(0.0, h - bh))
-        items = sorted(acc.items(), key=lambda x: x[1][0] + x[1][1], reverse=True)[:12]
+            slot["billable_hours"] += bh
+            slot["non_billable_hours"] += max(0.0, h - bh)
+        items = sorted(
+            acc.values(),
+            key=lambda x: float(x["billable_hours"]) + float(x["non_billable_hours"]),
+            reverse=True,
+        )[:12]
         return [
-            {"name": name, "billable_hours": round(p, 2), "non_billable_hours": round(s, 2)}
-            for name, (p, s) in items
+            {
+                "id": str(item["id"]),
+                "name": str(item["name"]),
+                "billable_hours": round(float(item["billable_hours"]), 2),
+                "non_billable_hours": round(float(item["non_billable_hours"]), 2),
+            }
+            for item in items
         ]
 
     def pie_by(label_key: str, hours_key: str = "hours") -> list[dict[str, Any]]:
@@ -306,17 +320,20 @@ def _build_charts(
                 "name": row.get("client_name") or "—",
                 "hours": 0.0,
                 "payment": 0.0,
+                "billable_amount": 0.0,
                 "currency": row.get("currency") or "USD",
             },
         )
         slot["hours"] += float(row.get("hours") or 0)
         slot["payment"] += float(row.get("payment") or 0)
+        slot["billable_amount"] += float(row.get("billable_amount") or 0)
 
     hours_vs_payment = [
         {
             "name": v["name"],
             "hours": round(v["hours"], 2),
             "payment": round(v["payment"], 2),
+            "billable_amount": round(v["billable_amount"], 2),
             "currency": v["currency"],
         }
         for v in sorted(client_pay.values(), key=lambda x: x["payment"], reverse=True)[:12]
@@ -332,6 +349,7 @@ def _build_charts(
             "name": v["name"],
             "hours": round(h, 2),
             "payment": round(pay, 2),
+            "billable_amount": round(float(v["billable_amount"] or 0), 2),
             "rate_per_hour": round(pay / h, 2),
             "currency": v["currency"],
         })
@@ -349,17 +367,54 @@ def _build_charts(
             "hours": round(hrs, 2),
         })
 
+    team_finance: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        tid = str(row.get("team_id") or "") or "_none"
+        slot = team_finance.setdefault(
+            tid,
+            {
+                "team_id": str(row.get("team_id") or ""),
+                "team_name": str(row.get("team_name") or "—") or "—",
+                "hours": 0.0,
+                "billable_hours": 0.0,
+                "billable_amount": 0.0,
+                "paid_amount": 0.0,
+                "currency": row.get("currency") or "USD",
+            },
+        )
+        slot["hours"] += float(row.get("hours") or 0)
+        slot["billable_hours"] += float(row.get("billable_hours") or 0)
+        slot["billable_amount"] += float(row.get("billable_amount") or 0)
+        slot["paid_amount"] += float(row.get("payment") or 0)
+        if float(row.get("payment") or 0) > 0 or float(row.get("billable_amount") or 0) > 0:
+            slot["currency"] = row.get("currency") or slot["currency"]
+
+    by_teams_finance = [
+        {
+            "team_id": v["team_id"],
+            "team_name": v["team_name"],
+            "hours": round(v["hours"], 2),
+            "billable_hours": round(v["billable_hours"], 2),
+            "billable_amount": round(v["billable_amount"], 2),
+            "paid_amount": round(v["paid_amount"], 2),
+            "currency": v["currency"],
+        }
+        for v in sorted(team_finance.values(), key=lambda x: x["billable_amount"], reverse=True)
+    ]
+
     return {
         "hours_by_day": daily,
-        "by_users": stacked_by("lawyer_id", "lawyer_name"),
-        "by_projects": stacked_by("project_id", "project_name"),
-        "by_clients": stacked_by("client_id", "client_name"),
-        "by_project_status": stacked_by("project_status_id", "project_status"),
+        "by_users": stacked_by("lawyer_name", "lawyer_id"),
+        "by_projects": stacked_by("project_name", "project_id"),
+        "by_clients": stacked_by("client_name", "client_id"),
+        "by_project_status": stacked_by("project_status", "project_status_id"),
+        "by_teams": stacked_by("team_name", "team_id"),
         "by_work_type": work_type_rows,
         "hours_by_project_ranking": pie_by("project_name"),
         "hours_by_task": pie_by("task_name"),
         "hours_vs_payment": hours_vs_payment,
         "payment_efficiency_ranking": efficiency[:12],
+        "by_teams_finance": by_teams_finance,
     }
 
 
@@ -367,9 +422,13 @@ def _build_kpi(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total_hours = sum(float(r.get("hours") or 0) for r in rows)
     billable_hours = sum(float(r.get("billable_hours") or 0) for r in rows)
     paid_amount = sum(float(r.get("payment") or 0) for r in rows)
+    billable_amount = sum(float(r.get("billable_amount") or 0) for r in rows)
     paid_currency = next(
         (str(r.get("currency") or "USD") for r in rows if float(r.get("payment") or 0) > 0),
-        "USD",
+        next(
+            (str(r.get("currency") or "USD") for r in rows if float(r.get("billable_amount") or 0) > 0),
+            "USD",
+        ),
     )
     return {
         "total_hours": round(total_hours, 2),
@@ -378,6 +437,9 @@ def _build_kpi(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "paid_amount": round(paid_amount, 2),
         "paid_currency": paid_currency,
         "rate_per_hour": round(paid_amount / billable_hours, 2) if billable_hours > 0 else 0.0,
+        "billable_amount": round(billable_amount, 2),
+        "billable_currency": paid_currency,
+        "accrued_rate_per_hour": round(billable_amount / billable_hours, 2) if billable_hours > 0 else 0.0,
     }
 
 
@@ -409,10 +471,7 @@ async def build_labor_statistics(
         }
     )
 
-    scope_project_ids = await _resolve_scope_project_ids(
-        session, scope, authorization=authorization
-    )
-    entries = await _load_entries(session, q, scope, scope_project_ids=scope_project_ids)
+    entries = await _load_entries(session, q, scope)
     if not entries:
         return {
             "kpi": _build_kpi([]),
@@ -421,11 +480,13 @@ async def build_labor_statistics(
         }
 
     project_ids = {str(e.project_id) for e in entries if e.project_id}
+    entry_user_ids = sorted({int(e.auth_user_id) for e in entries})
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     tasks_map = await _load_tasks_map(session)
     users_map = await _load_users_map(session)
     initials_map = await _load_initials_map(session)
+    rates_map = await _load_user_rates(session, entry_user_ids)
 
     access_repo = UserProjectAccessRepository(session)
     partners_by_project: dict[str, list[int]] = {}
@@ -470,9 +531,6 @@ async def build_labor_statistics(
         if q.partner_id and q.partner_id.strip():
             if str(partner_uid or "") != q.partner_id.strip():
                 continue
-        if scope.mode == "partner" and scope.auth_user_id is not None:
-            if partner_uid != scope.auth_user_id:
-                continue
 
         team_id, team_name, _ = lawyer_team.get(e.auth_user_id, ("", "", 0))
         period_from, period_to, period_label = month_period_bounds(e.work_date)
@@ -480,6 +538,15 @@ async def build_labor_statistics(
         slot = buckets.get(key)
         h = _d(e.hours)
         bh = h if e.is_billable else _ZERO
+        pc = (p.currency or "USD").strip() or "USD"
+        amt, amt_cur = _billable_amount_for_entry(
+            h,
+            bool(e.is_billable),
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=pc,
+            time_entry_project_id=e.project_id,
+        )
         if slot is None:
             slot = {
                 "id": str(uuid.uuid4()),
@@ -507,12 +574,16 @@ async def build_labor_statistics(
                 "period_label": period_label,
                 "hours": 0.0,
                 "billable_hours": 0.0,
+                "billable_amount": 0.0,
                 "payment": 0.0,
-                "currency": (p.currency or "USD").strip() or "USD",
+                "currency": pc,
             }
             buckets[key] = slot
         slot["hours"] = float(slot["hours"]) + _hours(h)
         slot["billable_hours"] = float(slot["billable_hours"]) + _hours(bh)
+        slot["billable_amount"] = float(slot["billable_amount"]) + float(_money(amt))
+        if amt > _ZERO:
+            slot["currency"] = (amt_cur or pc).strip() or pc
 
         dkey = e.work_date.isoformat()
         daily_acc[dkey]["total"] += _hours(h)
@@ -536,6 +607,9 @@ async def build_labor_statistics(
         share = float(slot.get("billable_hours") or 0) / denom
         slot["payment"] = round(float(_money(pay_amt)) * share, 2)
         slot["currency"] = pay_cur
+
+    for slot in buckets.values():
+        slot["billable_amount"] = round(float(slot.get("billable_amount") or 0), 2)
 
     all_rows = list(buckets.values())
     kpi = _build_kpi(all_rows)
@@ -584,7 +658,6 @@ async def build_labor_statistics_meta(
     hints = await fetch_auth_user_partner_hints_by_id(authorization or "")
 
     partners: list[dict[str, str]] = []
-    lawyers: list[dict[str, str]] = []
     for u in users:
         if u.is_archived or u.is_blocked:
             continue
@@ -593,26 +666,23 @@ async def build_labor_statistics_meta(
         initials = resolve_user_initials(u, initials_map=initials_map)
         if user_satisfies_partner_rule(u.position, hint.get("position"), hint.get("role")):
             partners.append({"id": str(u.auth_user_id), "name": label, "initials": initials})
-        if scope.mode == "lawyer" and scope.auth_user_id == u.auth_user_id:
-            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email, "initials": initials})
-        elif scope.mode != "lawyer":
-            lawyers.append({"id": str(u.auth_user_id), "name": label, "email": u.email, "initials": initials})
 
     teams_repo = TeamRepository(session)
     teams = await teams_repo.list_all(include_archived=False)
+    if scope.mode == "partner" and scope.auth_user_id is not None:
+        teams = [t for t in teams if int(t.partner_auth_user_id) == int(scope.auth_user_id)]
     team_rows = [{"id": t.id, "name": t.name} for t in teams]
+
+    led_member_ids: set[int] | None = None
+    if scope.mode == "partner" and scope.auth_user_id is not None:
+        led_member_ids = set(await teams_repo.list_member_auth_user_ids_for_partner(scope.auth_user_id))
 
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
-    scope_project_ids = await _resolve_scope_project_ids(
-        session, scope, authorization=authorization
-    )
 
     clients_out: list[dict[str, str]] = []
     projects_out: list[dict[str, str]] = []
     for p in projects_map.values():
-        if scope_project_ids is not None and p.id not in scope_project_ids:
-            continue
         if p.is_archived:
             continue
         c = clients_map.get(p.client_id)
@@ -622,6 +692,21 @@ async def build_labor_statistics_meta(
             "id": p.id,
             "name": p.name,
             "client_id": p.client_id or "",
+        })
+
+    lawyers: list[dict[str, str]] = []
+    for u in users:
+        if u.is_archived or u.is_blocked:
+            continue
+        if scope.mode == "lawyer" and scope.auth_user_id != u.auth_user_id:
+            continue
+        if scope.mode == "partner" and led_member_ids is not None and u.auth_user_id not in led_member_ids:
+            continue
+        lawyers.append({
+            "id": str(u.auth_user_id),
+            "name": _user_display(u),
+            "email": u.email,
+            "initials": resolve_user_initials(u, initials_map=initials_map),
         })
 
     clients_out.sort(key=lambda x: x["name"].casefold())
@@ -674,6 +759,7 @@ async def export_labor_statistics(
             "Тип работы": row.get("work_type"),
             "Период": row.get("period_label"),
             "Часы": row.get("hours"),
+            "Начислено": row.get("billable_amount"),
             "Оплата": row.get("payment"),
             "Оплата за час": _row_rate(float(row.get("payment") or 0), float(row.get("billable_hours") or 0)),
         })

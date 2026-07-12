@@ -218,7 +218,12 @@ def validate_annual_vacation_request(
     days_count: int,
     balances_by_year: dict[int, VacationBalance],
 ) -> None:
-    """Raise ValueError with a clear Russian message if rules are violated."""
+    """Raise ValueError with a clear Russian message if rules are violated.
+
+    Annual paid leave cannot exceed remaining entitlement. Days beyond the
+    remaining balance are not auto-converted to unpaid leave — the request
+    is rejected until the period is shortened.
+    """
     if days_count < 1:
         raise ValueError("Укажите корректный период отпуска (не меньше 1 календарного дня).")
 
@@ -229,11 +234,16 @@ def validate_annual_vacation_request(
         if days_in_year <= 0:
             continue
         if days_in_year > bal.remaining_days:
+            over = days_in_year - bal.remaining_days
             raise ValueError(
-                f"Недостаточно дней отпуска на {year} год: доступно {bal.remaining_days} "
+                f"Недостаточно дней оплачиваемого ежегодного отпуска на {year} год: "
+                f"доступно {bal.remaining_days} "
                 f"(положено {bal.entitled_days}, использовано {bal.used_days}"
                 + (f", в ожидании согласования {bal.pending_days}" if bal.pending_days else "")
-                + f"), в заявке на этот год — {days_in_year}."
+                + f"), в заявке на этот год — {days_in_year} "
+                f"(сверх остатка {over} дн.). "
+                "Дни сверх остатка не оформляются как ежегодный оплачиваемый отпуск "
+                "и автоматически в неоплачиваемый не переводятся — сократите период."
             )
 
     # Continuous portion rule applies to the whole continuous request period.
@@ -246,3 +256,32 @@ def validate_annual_vacation_request(
             f"продолжительностью не менее {bal0.min_continuous_days} календарных дней. "
             f"В заявке — {days_count}."
         )
+
+
+def simulate_balance_after_consume(
+    bal: VacationBalance,
+    *,
+    days: int,
+    as_approved: bool,
+) -> VacationBalance:
+    """Pure helper for tests / UI previews: apply a consume against a balance snapshot."""
+    days = max(0, int(days))
+    if as_approved:
+        used = bal.used_days + days
+        pending = bal.pending_days
+        continuous = bal.continuous_14_satisfied or days >= bal.min_continuous_days
+    else:
+        used = bal.used_days
+        pending = bal.pending_days + days
+        continuous = bal.continuous_14_satisfied
+    remaining = max(0, bal.entitled_days - used - pending)
+    return VacationBalance(
+        year=bal.year,
+        employee_user_id=bal.employee_user_id,
+        entitled_days=bal.entitled_days,
+        used_days=used,
+        pending_days=pending,
+        remaining_days=remaining,
+        continuous_14_satisfied=continuous,
+        min_continuous_days=bal.min_continuous_days,
+    )

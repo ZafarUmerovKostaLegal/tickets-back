@@ -101,7 +101,7 @@ def test_validate_rejects_over_remaining():
         continuous_14_satisfied=True,
         min_continuous_days=14,
     )
-    with pytest.raises(ValueError, match="Недостаточно дней отпуска"):
+    with pytest.raises(ValueError, match="Недостаточно дней оплачиваемого"):
         validate_annual_vacation_request(
             date_from=date(2026, 10, 1),
             date_to=date(2026, 10, 7),
