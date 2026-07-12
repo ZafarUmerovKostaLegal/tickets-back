@@ -5,6 +5,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.auth_user_pii import fetch_auth_pii_by_ids, hydrate_tt_user
 from application.manual_tt_users import MANUAL_TT_USER_EMAIL_DOMAIN
 from infrastructure.config import Settings, get_settings
 from infrastructure.project_access_mail import send_project_access_added_email
@@ -12,6 +13,7 @@ from infrastructure.repositories import ClientProjectRepository, ClientRepositor
 
 _log = logging.getLogger(__name__)
 _TIMEOUT_SEC = 60.0
+_TT_STUB_EMAIL_DOMAIN = "tt.local"
 
 
 def _is_deliverable_email(email: str | None) -> bool:
@@ -19,6 +21,8 @@ def _is_deliverable_email(email: str | None) -> bool:
     if not addr or "@" not in addr:
         return False
     if addr.endswith(f"@{MANUAL_TT_USER_EMAIL_DOMAIN}"):
+        return False
+    if addr.endswith(f"@{_TT_STUB_EMAIL_DOMAIN}"):
         return False
     return True
 
@@ -40,6 +44,8 @@ async def _notify_user_added_to_projects(
     if user is None:
         _log.warning("project access notify: пользователь TT не найден auth_user_id=%s", auth_user_id)
         return
+    pii = await fetch_auth_pii_by_ids([auth_user_id])
+    user = hydrate_tt_user(user, pii)
     if not _is_deliverable_email(user.email):
         _log.info(
             "project access notify: пропуск — нет рабочего email auth_user_id=%s email=%s",

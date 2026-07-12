@@ -191,28 +191,26 @@ async def ensure_time_tracking_user_from_auth(
         raise ValueError(
             "Нужен заголовок Authorization, чтобы добавить пользователя в учёт времени из auth."
         )
+    from application.auth_user_pii import stub_email_for_auth_user
+
     detail = await fetch_auth_user_for_tt_provision(authz, auth_user_id)
     if not detail:
         raise ValueError(
             f"Не удалось загрузить пользователя id={auth_user_id} из auth (проверьте токен и права на просмотр профиля)."
         )
-    email = (detail.get("email") or "").strip()
-    if not email:
-        raise ValueError(f"У пользователя id={auth_user_id} в auth нет email — запись в учёт времени невозможна.")
     tt_role = (
         (detail.get("time_tracking_role") or detail.get("timeTrackingRole") or "") or ""
     ).strip()
-    pos = detail.get("position")
-    pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
+    # Membership stub only — auth remains PII source of truth (hydrate on read).
     await tur.upsert_user(
         auth_user_id=auth_user_id,
-        email=email,
-        display_name=detail.get("display_name"),
-        picture=detail.get("picture"),
+        email=stub_email_for_auth_user(auth_user_id),
+        display_name=None,
+        picture=None,
         role=tt_role,
         is_blocked=bool(detail.get("is_blocked", False)),
         is_archived=bool(detail.get("is_archived", False)),
         weekly_capacity_hours=None,
-        position=pos_s,
-        update_position=True,
+        position=None,
+        update_position=False,
     )

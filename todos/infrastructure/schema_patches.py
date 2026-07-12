@@ -250,3 +250,10 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
             """
         )
     )
+
+
+REGISTERED_TODO_SCHEMA_PATCHES = (
+    ("todo_board_columns_collapsed", apply_todo_board_columns_collapsed_patch),
+    ("todo_kanban_extended", apply_todo_kanban_extended_patch),
+    ("todo_boards_multi_user", apply_todo_boards_multi_user_patch),
+)

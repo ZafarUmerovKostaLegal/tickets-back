@@ -228,18 +228,22 @@ async def upload_desktop_background(
         )
 
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
+    from backend_common.media_path import is_path_under_media, safe_media_path
 
     old_path = user.get("desktop_background")
     if old_path:
-        old_file = (base_dir / old_path).resolve()
-        if str(old_file).startswith(str(base_dir)) and old_file.exists() and old_file.is_file():
+        old_file = safe_media_path(settings.media_path, old_path)
+        if old_file is not None and old_file.exists() and old_file.is_file():
             old_file.unlink(missing_ok=True)
-    user_dir = base_dir / DESKTOP_BG_SUBDIR / str(user_id)
+    user_dir = safe_media_path(settings.media_path, f"{DESKTOP_BG_SUBDIR}/{user_id}")
+    if user_dir is None:
+        raise HTTPException(status_code=500, detail="Invalid media path")
     user_dir.mkdir(parents=True, exist_ok=True)
 
     unique_name = f"{uuid.uuid4().hex}{ext}"
     file_path = user_dir / unique_name
+    if not is_path_under_media(settings.media_path, file_path):
+        raise HTTPException(status_code=500, detail="Invalid media path")
     file_path.write_bytes(content)
 
     rel_path = f"{DESKTOP_BG_SUBDIR}/{user_id}/{unique_name}"
@@ -272,10 +276,11 @@ async def delete_desktop_background(
         raise HTTPException(status_code=401, detail="User not found")
 
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
+    from backend_common.media_path import safe_media_path
+
     if old_path:
-        target = (base_dir / old_path).resolve()
-        if str(target).startswith(str(base_dir)) and target.exists() and target.is_file():
+        target = safe_media_path(settings.media_path, old_path)
+        if target is not None and target.exists() and target.is_file():
             target.unlink(missing_ok=True)
 
     r = await auth_service_request(

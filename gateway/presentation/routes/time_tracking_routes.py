@@ -491,6 +491,14 @@ async def proxy_labor_statistics_meta(
     return await _tt_json("GET", "/statistics/labor/meta")
 
 
+@router.get("/integrity/audit")
+async def proxy_integrity_audit(
+    _: dict = Depends(require_reports_view_role),
+):
+    """Read-only orphan counts — never mutates TT data."""
+    return await _tt_json("GET", "/integrity/audit", timeout=60.0)
+
+
 @router.get("/statistics/labor")
 async def proxy_labor_statistics(
     request: Request,

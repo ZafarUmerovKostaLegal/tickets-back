@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.manual_tt_users import is_manual_tt_auth_user_id
 from infrastructure.models import TimeTrackingUserModel
 from infrastructure.repository_shared import _now_utc
 
@@ -62,17 +63,20 @@ class TimeTrackingUserRepository:
         row = await self.get_by_auth_user_id(auth_user_id)
         now = _now_utc()
         pos_norm = (position or "").strip() or None if update_position else None
+        manual = is_manual_tt_auth_user_id(int(auth_user_id))
         if row:
-            row.email = email
-            row.display_name = display_name
-            row.picture = picture
+            if manual:
+                row.email = email
+                row.display_name = display_name
+                row.picture = picture
+                if update_position:
+                    row.position = pos_norm
+            # Non-manual: membership hub only — do not dual-write auth PII.
             row.role = role
             row.is_blocked = is_blocked
             row.is_archived = is_archived
             if weekly_capacity_hours is not None:
                 row.weekly_capacity_hours = weekly_capacity_hours
-            if update_position:
-                row.position = pos_norm
             row.updated_at = now
             self._session.add(row)
             return row
@@ -81,9 +85,9 @@ class TimeTrackingUserRepository:
         row = TimeTrackingUserModel(
             auth_user_id=auth_user_id,
             email=email,
-            display_name=display_name,
-            picture=picture,
-            position=pos_norm if update_position else None,
+            display_name=display_name if manual else None,
+            picture=picture if manual else None,
+            position=pos_norm if update_position and manual else None,
             role=role,
             is_blocked=is_blocked,
             is_archived=is_archived,
@@ -153,14 +157,16 @@ class TimeTrackingUserRepository:
         row = await self.get_by_auth_user_id(auth_user_id)
         if not row:
             return None
-        row.email = email
-        row.display_name = display_name
-        row.picture = picture
+        # Real auth users: role + lifecycle only. Manual TT users keep local PII writes.
+        if is_manual_tt_auth_user_id(int(auth_user_id)):
+            row.email = email
+            row.display_name = display_name
+            row.picture = picture
+            if update_position:
+                row.position = (position or "").strip() or None
         row.role = role
         row.is_blocked = bool(is_blocked)
         row.is_archived = bool(is_archived)
-        if update_position:
-            row.position = (position or "").strip() or None
         row.updated_at = _now_utc()
         self._session.add(row)
         return row

@@ -151,14 +151,12 @@ async def get_tickets_ws_url():
 async def get_ticket_attachment(filename: str):
     import mimetypes
 
+    from backend_common.media_path import safe_media_path
+
     settings = get_settings()
-    base_dir = Path(settings.media_path) / "tickets"
-                                                    
     safe_name = Path(filename).name
-    path = (base_dir / safe_name).resolve()
-    if not str(path).startswith(str(base_dir.resolve())):
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    if not path.exists() or not path.is_file():
+    path = safe_media_path(settings.media_path, f"tickets/{safe_name}")
+    if path is None or not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment not found")
     media_type, _ = mimetypes.guess_type(path.name)
     return FileResponse(

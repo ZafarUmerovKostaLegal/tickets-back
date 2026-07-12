@@ -34,7 +34,10 @@ def _tt_role_from_record(record: dict, *, default_tt_role: str = "user") -> str:
     if role in _TT_ROLES:
         return role
     fallback = (default_tt_role or "").strip()
-    return fallback if fallback in _TT_ROLES else "user"
+    if fallback in _TT_ROLES:
+        return fallback
+    # Empty / unknown — no TT role (caller may soft-archive; never invent "user").
+    return ""
 
 
 def _bool_from_record(record: dict, snake: str, camel: str) -> bool:
@@ -56,31 +59,17 @@ def build_tt_upsert_payload_from_auth_record(
     auth_user_id: int | None = None,
     default_tt_role: str = "user",
 ) -> dict[str, Any] | None:
+    """Membership stub only — auth is PII source of truth (no dual-write)."""
     uid_raw = auth_user_id if auth_user_id is not None else record.get("id")
     if uid_raw is None:
         return None
     uid = int(uid_raw)
-    email = (str(record.get("email") or "").strip())
-    if not email:
-        return None
-
-    disp = record.get("display_name")
-    if disp is None:
-        disp = record.get("displayName")
-    display_name = str(disp).strip() if disp is not None and str(disp).strip() else None
-
-    pic = record.get("picture")
-    picture = str(pic).strip() if pic is not None and str(pic).strip() else None
-
-    pos = record.get("position")
-    position = str(pos).strip() if pos is not None and str(pos).strip() else None
-
     return {
         "auth_user_id": uid,
-        "email": email,
-        "display_name": display_name,
-        "picture": picture,
-        "position": position,
+        "email": f"auth-user-{uid}@tt.local",
+        "display_name": None,
+        "picture": None,
+        "position": None,
         "role": _tt_role_from_record(record, default_tt_role=default_tt_role),
         "is_blocked": _bool_from_record(record, "is_blocked", "isBlocked"),
         "is_archived": _bool_from_record(record, "is_archived", "isArchived"),
@@ -141,23 +130,18 @@ def build_auth_profile_sync_payload_from_auth_record(
     *,
     default_tt_role: str = "user",
 ) -> dict[str, Any] | None:
+    """Sync TT role + lifecycle only (no auth PII copy)."""
     payload = build_tt_upsert_payload_from_auth_record(record, default_tt_role=default_tt_role)
     if not payload:
         return None
-    pos = payload.get("position")
-    pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
-    out: dict[str, Any] = {
+    return {
         "email": payload["email"],
-        "displayName": payload.get("display_name"),
-        "picture": payload.get("picture"),
+        "displayName": None,
+        "picture": None,
         "role": payload.get("role") or default_tt_role,
         "isBlocked": payload.get("is_blocked", False),
         "isArchived": payload.get("is_archived", False),
     }
-    if pos_s:
-        out["position"] = pos_s
-        out["updatePosition"] = True
-    return out
 
 
 async def upsert_time_tracking_user_from_auth_record(
@@ -173,15 +157,11 @@ async def upsert_time_tracking_user_from_auth_record(
     if not base:
         return
     auth_headers = _auth_headers(authorization)
-    is_blocked = _bool_from_record(record, "is_blocked", "isBlocked")
-    is_archived = _bool_from_record(record, "is_archived", "isArchived")
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         if tt_role in _TT_ROLES:
             uid_int = int(uid)
             exists = await _tt_user_exists(uid_int, authorization)
-            pos = record.get("position")
-            pos_s = str(pos).strip() if pos is not None and str(pos).strip() else None
 
             if exists:
                 profile_payload = build_auth_profile_sync_payload_from_auth_record(
@@ -208,24 +188,6 @@ async def upsert_time_tracking_user_from_auth_record(
                     ),
                 )
 
-            if not pos_s:
-                r = await client.patch(
-                    f"{base}/users/{uid_int}/lifecycle-flags",
-                    json={"isBlocked": is_blocked, "isArchived": is_archived},
-                    headers=auth_headers,
-                )
-                if r.status_code in (200, 404):
-                    return
-                detail = (r.text or "").strip()
-                if len(detail) > 500:
-                    detail = detail[:500]
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        f"Не удалось синхронизировать флаги пользователя с Time Tracking: "
-                        f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
-                    ),
-                )
             payload = build_tt_upsert_payload_from_auth_record(record, default_tt_role=tt_role)
             if not payload:
                 return
@@ -243,18 +205,31 @@ async def upsert_time_tracking_user_from_auth_record(
                 )
             return
 
-        r = await client.delete(f"{base}/users/{int(uid)}", headers=auth_headers)
-        if r.status_code not in (200, 404):
-            detail = (r.text or "").strip()
-            if len(detail) > 500:
-                detail = detail[:500]
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"Не удалось удалить пользователя из Time Tracking: "
-                    f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
-                ),
-            )
+        # Soft-disable in TT instead of DELETE — preserves time entries, rates, access.
+        uid_int = int(uid)
+        exists = await _tt_user_exists(uid_int, authorization)
+        if not exists:
+            return
+        r = await client.patch(
+            f"{base}/users/{uid_int}/lifecycle-flags",
+            json={
+                "isBlocked": True,
+                "isArchived": True,
+            },
+            headers=auth_headers,
+        )
+        if r.status_code in (200, 404):
+            return
+        detail = (r.text or "").strip()
+        if len(detail) > 500:
+            detail = detail[:500]
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Не удалось архивировать пользователя в Time Tracking (без удаления данных): "
+                f"HTTP {r.status_code}. {detail or 'Пустой ответ upstream'}"
+            ),
+        )
 
 
 async def provision_time_tracking_user_from_auth(

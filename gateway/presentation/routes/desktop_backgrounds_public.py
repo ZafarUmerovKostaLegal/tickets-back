@@ -1,11 +1,9 @@
-
-
 import re
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 
 router = APIRouter(tags=["desktop_backgrounds"])
@@ -22,10 +20,7 @@ async def serve_desktop_background(user_id: int, filename: str):
     if not _SAFE_FILENAME.match(filename):
         raise HTTPException(status_code=404, detail="Not found")
     settings = get_settings()
-    base_dir = Path(settings.media_path).resolve()
-    target = (base_dir / "desktop_backgrounds" / str(user_id) / filename).resolve()
-    if not str(target).startswith(str(base_dir)):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    if not target.is_file():
+    target = safe_media_path(settings.media_path, f"desktop_backgrounds/{user_id}/{filename}")
+    if target is None or not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(target)

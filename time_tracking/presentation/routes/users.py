@@ -9,6 +9,7 @@ from application.auth_user_directory import (
     fetch_auth_user_position,
     fetch_auth_user_positions_by_id,
 )
+from application.auth_user_pii import fetch_auth_pii_by_ids, hydrate_tt_user
 from application.access_control import (
     ensure_can_list_all_tt_users,
     ensure_can_view_colleague_directory,
@@ -84,6 +85,20 @@ def _user_response_directory(
     )
 
 
+async def _hydrate_tt_rows(rows: list) -> list:
+    if not rows:
+        return rows
+    pii = await fetch_auth_pii_by_ids([int(r.auth_user_id) for r in rows])
+    return [hydrate_tt_user(r, pii) for r in rows]
+
+
+async def _hydrate_tt_row(row):
+    if row is None:
+        return None
+    pii = await fetch_auth_pii_by_ids([int(row.auth_user_id)])
+    return hydrate_tt_user(row, pii)
+
+
 @router.get("", response_model=list[UserResponse], summary="Список пользователей")
 async def list_users(
     session: AsyncSession = Depends(get_session),
@@ -93,7 +108,7 @@ async def list_users(
 
     await ensure_can_view_colleague_directory(viewer)
     repo = TimeTrackingUserRepository(session)
-    rows = await repo.list_users()
+    rows = await _hydrate_tt_rows(await repo.list_users())
     pos_map = await fetch_auth_user_positions_by_id(authorization or "")
     return [
         _user_response_directory(
@@ -117,7 +132,7 @@ async def list_partner_users(
 
     await ensure_can_list_all_tt_users(viewer)
     repo = TimeTrackingUserRepository(session)
-    rows = await repo.list_users()
+    rows = await _hydrate_tt_rows(await repo.list_users())
     hints = await fetch_auth_user_partner_hints_by_id(authorization or "")
     pos_map: dict[int, str | None] = {i: d.get("position") for i, d in hints.items()}
     return [
@@ -149,7 +164,7 @@ async def list_partner_users_in_manager_scope(
     par = UserProjectAccessRepository(session)
     ur = TimeTrackingUserRepository(session)
     scope_ids = set(await par.list_peer_auth_user_ids_for_manager(manager_auth_user_id))
-    rows = await ur.list_users()
+    rows = await _hydrate_tt_rows(await ur.list_users())
     hints = await fetch_auth_user_partner_hints_by_id(authorization or "")
     pos_map: dict[int, str | None] = {i: d.get("position") for i, d in hints.items()}
     out: list[UserResponse] = []
@@ -184,7 +199,7 @@ async def list_users_in_manager_scope(
     par = UserProjectAccessRepository(session)
     ur = TimeTrackingUserRepository(session)
     scope_ids = set(await par.list_peer_auth_user_ids_for_manager(manager_auth_user_id))
-    rows = await ur.list_users()
+    rows = await _hydrate_tt_rows(await ur.list_users())
     pos_map = await fetch_auth_user_positions_by_id(authorization or "")
     out: list[UserResponse] = []
     for row in rows:
@@ -251,6 +266,7 @@ async def get_user(
     row = await repo.get_by_auth_user_id(auth_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
+    row = await _hydrate_tt_row(row)
     ap = await fetch_auth_user_position(authorization or "", auth_user_id)
     pos = row.position
     if pos is not None and str(pos).strip():
@@ -280,6 +296,7 @@ async def patch_weekly_capacity(
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
     await session.commit()
+    row = await _hydrate_tt_row(row)
     ap = await fetch_auth_user_position(authorization or "", auth_user_id)
     pos = row.position
     if pos is not None and str(pos).strip():
@@ -312,6 +329,7 @@ async def patch_transfer_without_project_access(
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
     await session.commit()
+    row = await _hydrate_tt_row(row)
     ap = await fetch_auth_user_position(authorization or "", auth_user_id)
     pos = row.position
     if pos is not None and str(pos).strip():
@@ -326,7 +344,7 @@ async def patch_transfer_without_project_access(
 @router.patch(
     "/{auth_user_id}/auth-profile",
     response_model=UserResponse,
-    summary="Синхронизация профиля из auth (email, имя, роль, флаги; position — только если updatePosition)",
+    summary="Синхронизация роли/флагов TT из auth (PII не копируется; position не затирается)",
 )
 async def patch_auth_profile(
     auth_user_id: int,
@@ -351,6 +369,7 @@ async def patch_auth_profile(
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
     await session.commit()
+    row = await _hydrate_tt_row(row)
     ap = await fetch_auth_user_position(authorization or "", auth_user_id)
     pos = row.position
     if pos is not None and str(pos).strip():
@@ -384,6 +403,7 @@ async def patch_lifecycle_flags(
     if not row:
         raise HTTPException(status_code=404, detail="User not in time tracking")
     await session.commit()
+    row = await _hydrate_tt_row(row)
     ap = await fetch_auth_user_position(authorization or "", auth_user_id)
     pos = row.position
     if pos is not None and str(pos).strip():
@@ -468,34 +488,27 @@ async def upsert_user(
     return {"ok": True}
 
 
-@router.delete("/{auth_user_id}", status_code=200, summary="Удалить пользователя из списка")
+@router.delete(
+    "/{auth_user_id}",
+    status_code=200,
+    summary="Архивировать пользователя TT (без удаления записей времени)",
+)
 async def delete_user(
     auth_user_id: int,
     session: AsyncSession = Depends(get_session),
     viewer: dict = Depends(require_bearer_user),
-    authorization: str | None = Header(None, alias="Authorization"),
 ) -> dict:
+    """Soft-archive only. Never hard-deletes the TT user row (CASCADE would wipe entries)."""
 
     ensure_delete_tt_user_allowed(viewer)
-    par = UserProjectAccessRepository(session)
-    cpr = ClientProjectRepository(session)
-    affected_before = set(await par.list_project_ids(auth_user_id))
     repo = TimeTrackingUserRepository(session)
-    deleted = await repo.delete_by_auth_user_id(auth_user_id)
-    if not deleted:
+    row = await repo.patch_lifecycle_flags(
+        auth_user_id,
+        is_blocked=True,
+        is_archived=True,
+    )
+    if not row:
         await session.rollback()
-        return {"ok": True, "deleted": False}
-    await session.flush()
-    try:
-        await ensure_projects_have_partner_assignee(
-            session,
-            par,
-            affected_before,
-            projects=cpr,
-            authorization=authorization,
-        )
-    except ValueError as e:
-        await session.rollback()
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        return {"ok": True, "deleted": False, "archived": False}
     await session.commit()
-    return {"ok": True, "deleted": True}
+    return {"ok": True, "deleted": False, "archived": True}

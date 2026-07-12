@@ -22,11 +22,8 @@ from infrastructure.models import (
 from presentation.routes import board_routes, boards_multi_routes, calendar_routes, health
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure.repositories import OutlookCalendarTokenRepository
-from infrastructure.schema_patches import (
-    apply_todo_board_columns_collapsed_patch,
-    apply_todo_boards_multi_user_patch,
-    apply_todo_kanban_extended_patch,
-)
+from infrastructure.schema_patches import REGISTERED_TODO_SCHEMA_PATCHES
+from backend_common.schema_patch_runner import apply_registered_schema_patches
 
 _log = logging.getLogger(__name__)
 
@@ -36,9 +33,12 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await apply_todo_board_columns_collapsed_patch(conn)
-        await apply_todo_kanban_extended_patch(conn)
-        await apply_todo_boards_multi_user_patch(conn)
+        await apply_registered_schema_patches(
+            conn,
+            REGISTERED_TODO_SCHEMA_PATCHES,
+            table_name="todos_schema_patch_log",
+            log_prefix="todos",
+        )
     try:
         async with async_session_factory() as session:
             n = await OutlookCalendarTokenRepository(session).reencrypt_plaintext_tokens()

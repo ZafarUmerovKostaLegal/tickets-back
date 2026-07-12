@@ -2,6 +2,9 @@ import logging
 import os
 import sys
 
+from backend_common.db_password_warn import warn_if_database_url_uses_default_password
+from backend_common.ws_secret_warn import warn_if_ws_internal_secret_empty
+
 
 def _configure_logging() -> None:
 
@@ -20,5 +23,7 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
+warn_if_ws_internal_secret_empty(os.environ.get("WS_INTERNAL_SECRET"), service="expenses")
+warn_if_database_url_uses_default_password(os.environ.get("DATABASE_URL"), service="expenses")
 
 from presentation.api import app

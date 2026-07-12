@@ -19,6 +19,7 @@ from presentation.deps import require_bearer_user, require_tt_reports_viewer
 from presentation.exception_handlers import register_exception_handlers
 from presentation.routes import (
     labor_statistics,
+    integrity_audit,
     invoices,
     client_contacts,
     client_expense_categories,
@@ -75,6 +76,7 @@ _tt_auth = [Depends(require_bearer_user)]
 _tt_reports_auth = [Depends(require_bearer_user), Depends(require_tt_reports_viewer)]
 
 app.include_router(health.router)
+app.include_router(integrity_audit.router, dependencies=_tt_reports_auth)
 app.include_router(client_tasks.router, dependencies=_tt_auth)
 app.include_router(client_expense_categories.router, dependencies=_tt_auth)
 app.include_router(client_projects.router, dependencies=_tt_auth)

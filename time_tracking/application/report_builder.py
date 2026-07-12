@@ -367,12 +367,14 @@ def filter_expense_rows_to_tt_projects(
     return out
 
 
-async def _load_users_map(session: AsyncSession) -> dict[int, TimeTrackingUserModel]:
+async def _load_users_map(session: AsyncSession) -> dict[int, Any]:
     cached = get_dim("users_map")
     if cached is not None:
         return cached
+    from application.auth_user_pii import hydrate_users_map
+
     rows = (await session.execute(select(TimeTrackingUserModel))).scalars().all()
-    result = {u.auth_user_id: u for u in rows}
+    result = await hydrate_users_map({u.auth_user_id: u for u in rows})
     set_dim("users_map", result)
     return result
 
