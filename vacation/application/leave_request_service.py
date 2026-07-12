@@ -7,7 +7,12 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.kind_legend import REQUESTABLE_KIND_CODES
+from application.kind_legend import KIND_BY_KEY, REQUESTABLE_KIND_CODES
+from application.vacation_balance import (
+    count_calendar_days_inclusive,
+    get_vacation_balance,
+    validate_annual_vacation_request,
+)
 from backend_common.media_path import safe_media_path
 from infrastructure.auth_lookup import AuthUser
 from infrastructure.config import get_settings
@@ -21,15 +26,15 @@ from infrastructure.models import (
 )
 from infrastructure.pdf_generation import render_leave_request_pdf
 
+_ANNUAL_KIND = KIND_BY_KEY["annual_vacation"]
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _count_days_inclusive(d_from: date, d_to: date) -> int:
-    if d_to < d_from:
-        return 0
-    return (d_to - d_from).days + 1
+    return count_calendar_days_inclusive(d_from, d_to)
 
 
 async def _ensure_schedule_employee(
@@ -83,6 +88,26 @@ async def create_leave_request(
     if (partner.role or "").strip() not in ("Партнер", "Партнёр"):
         raise ValueError("Согласующий должен быть партнёром")
     days = _count_days_inclusive(date_from, date_to)
+    if days < 1:
+        raise ValueError("Укажите корректный период (не меньше 1 календарного дня).")
+
+    if int(kind_code) == _ANNUAL_KIND:
+        years = range(date_from.year, date_to.year + 1)
+        balances = {
+            y: await get_vacation_balance(
+                session,
+                employee_user_id=employee.id,
+                year=y,
+            )
+            for y in years
+        }
+        validate_annual_vacation_request(
+            date_from=date_from,
+            date_to=date_to,
+            days_count=days,
+            balances_by_year=balances,
+        )
+
     now = _utc_now()
     req = LeaveRequest(
         employee_user_id=employee.id,

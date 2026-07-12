@@ -73,7 +73,7 @@ class TeamRepository:
             )
             .order_by(TimeTrackingTeamMemberModel.auth_user_id.asc())
         )
-        return sorted({int(x) for x in r.scalars().all()})
+        return sorted({pid, *(int(x) for x in r.scalars().all())})
 
     async def has_active_name_conflict(self, name: str, *, exclude_id: str | None = None) -> bool:
         n = (name or "").strip()

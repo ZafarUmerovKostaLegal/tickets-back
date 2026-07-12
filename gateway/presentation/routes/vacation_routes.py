@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/v1/vacations", tags=["vacations"])
 _SELF_SERVICE_PREFIXES = (
     "leave-requests",
     "leave-kinds",
+    "leave-balance",
     "partners",
 )
 

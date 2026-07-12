@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     email_action_ttl_seconds: int = Field(default=14 * 24 * 3600, validation_alias="VACATION_EMAIL_ACTION_TTL_SECONDS")
     email_action_confirm_step: bool = Field(default=True, validation_alias="VACATION_EMAIL_ACTION_CONFIRM_STEP")
 
+    # Annual paid leave entitlement (calendar days) and mandatory continuous portion.
+    annual_entitled_days: int = Field(default=28, validation_alias="VACATION_ANNUAL_ENTITLED_DAYS")
+    min_continuous_vacation_days: int = Field(
+        default=14,
+        validation_alias="VACATION_MIN_CONTINUOUS_DAYS",
+    )
+
     @field_validator("vacation_db_password", "vacation_db_user", "vacation_db_name", mode="before")
     @classmethod
     def strip_bom_and_edges(cls, v: object) -> object:

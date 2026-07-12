@@ -21,6 +21,7 @@ from application.leave_request_service import (
     create_leave_request,
     render_and_attach_pdf,
 )
+from application.vacation_balance import get_vacation_balance
 from infrastructure.auth_lookup import AuthUser, get_me, get_user_public, list_partners
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
@@ -97,6 +98,19 @@ class LeaveRequestsListOut(BaseModel):
     items: list[LeaveRequestOut]
 
 
+class VacationBalanceOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    year: int
+    employee_user_id: int = Field(..., alias="employeeUserId")
+    entitled_days: int = Field(..., alias="entitledDays")
+    used_days: int = Field(..., alias="usedDays")
+    pending_days: int = Field(..., alias="pendingDays")
+    remaining_days: int = Field(..., alias="remainingDays")
+    continuous_14_satisfied: bool = Field(..., alias="continuous14Satisfied")
+    min_continuous_days: int = Field(..., alias="minContinuousDays")
+
+
 class CreateLeaveRequestBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -155,6 +169,27 @@ async def get_leave_kinds():
         for e in KIND_LEGEND_ENTRIES
         if e.kind_code in REQUESTABLE_KIND_CODES
     ]
+
+
+@router.get("/leave-balance", response_model=VacationBalanceOut)
+async def get_leave_balance(
+    year: int | None = Query(None, ge=2000, le=2100, description="Год учёта; по умолчанию текущий"),
+    employee: AuthUser = Depends(get_current_employee),
+    session: AsyncSession = Depends(get_session),
+):
+    """Положенные / использованные / остаток дней ежегодного отпуска и статус обязательных 14 дней."""
+    y = int(year) if year is not None else date.today().year
+    bal = await get_vacation_balance(session, employee_user_id=employee.id, year=y)
+    return VacationBalanceOut(
+        year=bal.year,
+        employee_user_id=bal.employee_user_id,
+        entitled_days=bal.entitled_days,
+        used_days=bal.used_days,
+        pending_days=bal.pending_days,
+        remaining_days=bal.remaining_days,
+        continuous_14_satisfied=bal.continuous_14_satisfied,
+        min_continuous_days=bal.min_continuous_days,
+    )
 
 
 @router.get("/partners", response_model=list[PartnerOut])
