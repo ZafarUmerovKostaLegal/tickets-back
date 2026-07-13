@@ -93,6 +93,7 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: bool = Field(False, alias="isArchived")
+    is_paused: bool = Field(False, alias="isPaused")
     initial_time_tracking_user_auth_ids: list[int] = Field(
         default_factory=list,
         alias="initialTimeTrackingUserAuthIds",
@@ -203,3 +204,4 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: Optional[bool] = Field(None, alias="isArchived")
+    is_paused: Optional[bool] = Field(None, alias="isPaused")
