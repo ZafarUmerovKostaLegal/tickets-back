@@ -17,7 +17,7 @@ from application.labor_statistics_catalog import (
     month_period_bounds,
     project_status_for_row,
 )
-from application.entry_pricing import _billable_amount_for_entry
+from application.entry_pricing import billable_amount_respecting_package
 from application.package_billing import build_package_splits_index
 from application.labor_statistics_scope import (
     LaborStatisticsScope,
@@ -494,6 +494,7 @@ async def build_labor_statistics(
         entries,
         date_from=q.date_from,
         date_to=q.date_to,
+        tasks_map=tasks_map,
     )
     package_fees_total = 0.0
     for pid, summaries in package_months_by_project.items():
@@ -555,25 +556,17 @@ async def build_labor_statistics(
         bh = h if e.is_billable else _ZERO
         pc = (p.currency or "USD").strip() or "USD"
         split = package_splits.get(str(e.id))
-        if split is not None:
-            oh = _d(split.overage_hours)
-            amt, amt_cur = _billable_amount_for_entry(
-                oh,
-                bool(e.is_billable) and oh > 0,
-                e.work_date,
-                rates_map.get(e.auth_user_id),
-                project_currency=pc,
-                time_entry_project_id=e.project_id,
-            )
-        else:
-            amt, amt_cur = _billable_amount_for_entry(
-                h,
-                bool(e.is_billable),
-                e.work_date,
-                rates_map.get(e.auth_user_id),
-                project_currency=pc,
-                time_entry_project_id=e.project_id,
-            )
+        task = tasks_map.get(e.task_id) if e.task_id else None
+        amt, amt_cur = billable_amount_respecting_package(
+            h,
+            bool(e.is_billable),
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=pc,
+            time_entry_project_id=e.project_id,
+            task=task,
+            package_split=split,
+        )
         if slot is None:
             slot = {
                 "id": str(uuid.uuid4()),

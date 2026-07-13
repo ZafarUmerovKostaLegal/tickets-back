@@ -13,6 +13,17 @@ from typing import Any, Sequence
 
 from application.entry_pricing import _billable_amount_for_entry
 from application.services.reports._base import _ZERO, _d
+from application.task_billing import is_flat_fee_task
+
+
+def entry_counts_toward_hour_package(entry: Any, tasks_map: dict[str, Any] | None = None) -> bool:
+    """Flat-fee tasks bill per entry and do not consume package hours."""
+    if not tasks_map:
+        return True
+    tid = (getattr(entry, "task_id", None) or "").strip()
+    if not tid:
+        return True
+    return not is_flat_fee_task(tasks_map.get(tid))
 
 PACKAGE_ROLLOVER_MAX_MONTHS = 1
 HOUR_PACKAGE_PROJECT_TYPE = "hour_package"
@@ -306,7 +317,19 @@ def overage_amount_for_split(
     user_rates: list[Any] | None,
     project_currency: str | None,
     time_entry_project_id: str | None,
+    task: Any | None = None,
 ) -> Decimal:
+    if is_flat_fee_task(task):
+        amt, _ = _billable_amount_for_entry(
+            _ZERO,
+            is_billable,
+            work_date,
+            user_rates,
+            project_currency=project_currency,
+            time_entry_project_id=time_entry_project_id,
+            task=task,
+        )
+        return _d(amt)
     if split.overage_hours <= 0 or not is_billable:
         return _ZERO
     amt, _ = _billable_amount_for_entry(
@@ -316,6 +339,7 @@ def overage_amount_for_split(
         user_rates,
         project_currency=project_currency,
         time_entry_project_id=time_entry_project_id,
+        task=task,
     )
     return _d(amt)
 
@@ -326,6 +350,7 @@ def compute_entry_splits_for_project_entries(
     *,
     date_from: date | None = None,
     date_to: date | None = None,
+    tasks_map: dict[str, Any] | None = None,
 ) -> tuple[list[MonthPackageSummary], dict[str, EntryPackageSplit]]:
     """Full chain for a project: include prior month before date_from for carry-in."""
     if not is_hour_package_project(project):
@@ -342,6 +367,7 @@ def compute_entry_splits_for_project_entries(
         and getattr(e, "voided_at", None) is None
         and _d(getattr(e, "hours", 0)) > 0
         and getattr(e, "work_date", None) is not None
+        and entry_counts_toward_hour_package(e, tasks_map)
     ]
     if not billable and date_from and date_to:
         months = months_inclusive(date_from, date_to)
@@ -415,6 +441,7 @@ def build_package_splits_index(
     *,
     date_from: date | None = None,
     date_to: date | None = None,
+    tasks_map: dict[str, Any] | None = None,
 ) -> tuple[dict[str, EntryPackageSplit], dict[str, list[MonthPackageSummary]]]:
     """Entry-id → split and project-id → month summaries for all hour_package projects."""
     by_project: dict[str, list[Any]] = {}
@@ -437,6 +464,7 @@ def build_package_splits_index(
             ents,
             date_from=date_from,
             date_to=date_to,
+            tasks_map=tasks_map,
         )
         splits.update(sp)
         months_by_project[pid] = summaries

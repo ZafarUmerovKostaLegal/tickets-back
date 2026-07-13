@@ -28,7 +28,7 @@ from application.project_dashboard import build_client_project_dashboard
 from application.project_partner_index import build_project_partner_participant_index
 from application.project_participants import list_project_participants_with_rates
 from application.project_partner_requirement import ensure_projects_have_partner_assignee
-from application.report_builder import _load_user_rates
+from application.report_builder import _load_tasks_map, _load_user_rates
 from application.services.reports._base import _ZERO, _d, _hours, _money
 from application.access_control import (
     _can_manage_tt,
@@ -370,6 +370,7 @@ async def _project_budget_metrics(
     entries = list((await session.execute(q)).scalars().all())
     user_ids = list({int(e.auth_user_id) for e in entries})
     rates_map = await _load_user_rates(session, user_ids or None)
+    tasks_map = await _load_tasks_map(session)
     spent_hours: dict[str, Decimal] = {}
     spent_money: dict[str, Decimal] = {}
     projects_by_id = {str(r.id): r for r in rows}
@@ -390,6 +391,7 @@ async def _project_budget_metrics(
             rates_map.get(e.auth_user_id),
             project_currency=cur,
             time_entry_project_id=pid,
+            task=tasks_map.get(e.task_id) if e.task_id else None,
         )
         spent_money[pid] = spent_money.get(pid, _ZERO) + amt
     out: dict[str, dict[str, float]] = {}

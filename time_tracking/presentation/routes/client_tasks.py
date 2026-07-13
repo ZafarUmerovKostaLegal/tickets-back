@@ -96,6 +96,9 @@ async def create_project_task(
         name=body.name,
         default_billable_rate=body.default_billable_rate,
         billable_by_default=body.billable_by_default,
+        billing_mode=body.billing_mode,
+        flat_fee_amount=body.flat_fee_amount,
+        flat_fee_currency=body.flat_fee_currency,
     )
     await session.commit()
     return _task_out(row)

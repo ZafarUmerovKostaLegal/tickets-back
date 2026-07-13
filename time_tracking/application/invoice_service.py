@@ -22,6 +22,7 @@ from application.package_billing import (
     package_fee_x,
     package_hours_n,
 )
+from application.task_billing import is_flat_fee_task
 from application.partner_report_confirmation_service import (
     ensure_fully_confirmed_partner_period_or_403,
 )
@@ -34,6 +35,7 @@ from infrastructure.models import (
     TimeEntryModel,
     TimeManagerClientModel,
     TimeManagerClientProjectModel,
+    TimeManagerClientTaskModel,
 )
 from infrastructure.models_invoices import (
     InvoiceAuditLogModel,
@@ -41,7 +43,7 @@ from infrastructure.models_invoices import (
     InvoiceModel,
     InvoicePaymentModel,
 )
-from infrastructure.repositories import ClientProjectRepository
+from infrastructure.repositories import ClientProjectRepository, ClientTaskRepository
 from infrastructure.repository_invoices import InvoiceRepository
 from infrastructure.repository_shared import _now_utc
 
@@ -403,12 +405,61 @@ async def _append_time_line(
     proj = await cpr.get_by_id_global(entry.project_id) if entry.project_id else None
     pc = (getattr(proj, "currency", None) or "USD") if proj else "USD"
 
+    task = None
+    if entry.task_id and entry.project_id:
+        task = await ClientTaskRepository(session).get_by_id(str(entry.project_id), str(entry.task_id))
+
     month_hit: tuple[str, int, int] | None = None
+    if is_flat_fee_task(task):
+        if entry.project_id and proj and is_hour_package_project(proj):
+            y, m = month_key(entry.work_date)
+            month_hit = (str(entry.project_id), y, m)
+        qty = Decimal(1)
+        amt, _cur = _billable_amount_for_entry(
+            dec(entry.hours),
+            entry.is_billable,
+            entry.work_date,
+            user_rates,
+            project_currency=pc,
+            time_entry_project_id=entry.project_id,
+            task=task,
+        )
+        unit = _money4(amt)
+        line_total = unit
+        desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
+        if task and (task.name or "").strip():
+            desc = f"{(task.name or '').strip()}: {desc}"
+        repo.add_line(
+            InvoiceLineItemModel(
+                id=str(uuid.uuid4()),
+                invoice_id=inv.id,
+                sort_order=sort_order,
+                line_kind="time",
+                description=desc[:2000],
+                quantity=qty,
+                unit_amount=unit,
+                line_total=line_total,
+                time_entry_id=time_entry_id,
+                expense_request_id=None,
+            )
+        )
+        return True, month_hit
+
     if entry.project_id and proj and is_hour_package_project(proj):
         y, m = month_key(entry.work_date)
         month_hit = (str(entry.project_id), y, m)
         all_entries = await _load_project_billable_entries(session, str(entry.project_id))
-        _, splits = compute_entry_splits_for_project_entries(proj, all_entries)
+        # Need all tasks for package exclusion of flat-fee entries on this project
+        task_ids = {str(e.task_id) for e in all_entries if e.task_id}
+        full_tasks: dict[str, Any] = {}
+        if task_ids:
+            rows = (
+                await session.execute(
+                    select(TimeManagerClientTaskModel).where(TimeManagerClientTaskModel.id.in_(list(task_ids)))
+                )
+            ).scalars().all()
+            full_tasks = {str(r.id): r for r in rows}
+        _, splits = compute_entry_splits_for_project_entries(proj, all_entries, tasks_map=full_tasks)
         split = splits.get(str(entry.id))
         if not split or split.overage_hours <= 0:
             # Covered by package — no time line; package fee still owed for the month.
@@ -421,6 +472,7 @@ async def _append_time_line(
             user_rates,
             project_currency=pc,
             time_entry_project_id=entry.project_id,
+            task=task,
         )
     else:
         qty = dec(entry.hours)
@@ -431,6 +483,7 @@ async def _append_time_line(
             user_rates,
             project_currency=pc,
             time_entry_project_id=entry.project_id,
+            task=task,
         )
 
     line_total = _money4(amt)
@@ -439,6 +492,7 @@ async def _append_time_line(
         user_rates,
         project_currency=pc,
         time_entry_project_id=entry.project_id,
+        task=task,
     )
     if rate_amt is not None:
         unit = _money4(rate_amt)
@@ -1044,11 +1098,21 @@ async def list_unbilled_time_entries(
     cpr = ClientProjectRepository(session)
     proj = await cpr.get_by_id_global(project_id)
     pc = (getattr(proj, "currency", None) or "USD") if proj else "USD"
+    task_ids = {str(e.task_id) for e in entries if e.task_id}
+    tasks_map: dict[str, Any] = {}
+    if task_ids:
+        rows = (
+            await session.execute(
+                select(TimeManagerClientTaskModel).where(TimeManagerClientTaskModel.id.in_(list(task_ids)))
+            )
+        ).scalars().all()
+        tasks_map = {str(r.id): r for r in rows}
     out: list[dict[str, Any]] = []
     for e in entries:
         if e.id in invoiced:
             continue
         h = dec(e.hours)
+        task = tasks_map.get(str(e.task_id)) if e.task_id else None
         amt, cur = _billable_amount_for_entry(
             h,
             e.is_billable,
@@ -1056,6 +1120,7 @@ async def list_unbilled_time_entries(
             rates.get(e.auth_user_id),
             project_currency=pc,
             time_entry_project_id=e.project_id,
+            task=task,
         )
         out.append(
             {

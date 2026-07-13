@@ -10,7 +10,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.budget_mode import budget_limit_hours, budget_limit_money, budget_mode
-from application.entry_pricing import _billable_amount_for_entry
+from application.entry_pricing import billable_amount_respecting_package
 from application.package_billing import (
     build_package_splits_index,
     is_hour_package_project,
@@ -22,6 +22,7 @@ from application.report_builder import (
     _load_clients_map,
     _load_initials_map,
     _load_projects_map,
+    _load_tasks_map,
     _load_user_rates,
     _load_users_map,
 )
@@ -120,12 +121,14 @@ async def get_budget_report(
 
     all_user_ids = list({e.auth_user_id for e in entries})
     rates_map = await _load_user_rates(session, all_user_ids or None)
+    tasks_map = await _load_tasks_map(session)
 
     package_splits, package_months_by_project = build_package_splits_index(
         projects_map,
         entries,
         date_from=date_from,
         date_to=date_to,
+        tasks_map=tasks_map,
     )
 
     hours_by_project: dict[str, Decimal] = {}
@@ -148,26 +151,16 @@ async def get_budget_report(
         if e.is_billable:
             p_ent = projects_map.get(pid)
             pc = (getattr(p_ent, "currency", None) or "USD") if p_ent else "USD"
-            split = package_splits.get(str(e.id))
-            if split is not None:
-                oh = _d(split.overage_hours)
-                amt, _ = _billable_amount_for_entry(
-                    oh,
-                    oh > 0,
-                    e.work_date,
-                    rates_map.get(uid),
-                    project_currency=pc,
-                    time_entry_project_id=pid,
-                )
-            else:
-                amt, _ = _billable_amount_for_entry(
-                    h,
-                    e.is_billable,
-                    e.work_date,
-                    rates_map.get(uid),
-                    project_currency=pc,
-                    time_entry_project_id=pid,
-                )
+            amt, _ = billable_amount_respecting_package(
+                h,
+                e.is_billable,
+                e.work_date,
+                rates_map.get(uid),
+                project_currency=pc,
+                time_entry_project_id=pid,
+                task=tasks_map.get(e.task_id) if e.task_id else None,
+                package_split=package_splits.get(str(e.id)),
+            )
             amount_by_project[pid] = amount_by_project.get(pid, _ZERO) + amt
             ubkt["amount"] += amt
 

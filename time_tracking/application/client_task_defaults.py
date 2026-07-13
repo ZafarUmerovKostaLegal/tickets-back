@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 from decimal import Decimal
@@ -7,30 +6,38 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.task_billing import (
+    BILLING_MODE_FLAT_FEE,
+    BILLING_MODE_HOURLY,
+    MEHNAT_FLAT_FEE_AMOUNT,
+    MEHNAT_FLAT_FEE_CURRENCY,
+    MEHNAT_TASK_NAME,
+)
 from infrastructure.models import TimeManagerClientProjectModel, TimeManagerClientTaskModel
 from infrastructure.repositories import ClientTaskRepository
 
 
-DEFAULT_PROJECT_TASK_SEED: tuple[tuple[str, bool], ...] = (
-    ("Court Hearing", True),
-    ("Court Hearing Preparation", True),
-    ("Document Review", True),
-    ("Document Submission", True),
-    ("Drafting", True),
-    ("Drafting Documents", True),
-    ("Emails", True),
-    ("Meetings", True),
-    ("My mehnat registration", True),
-    ("Research", True),
-    ("Telephone calls", True),
-    ("Kosta Legal Internal", False),
-    ("Accounting", False),
-    ("Business Development", False),
-    ("Lunch/Dinner", False),
-    ("Other research", False),
-    ("Proposals", False),
-    ("Publications", False),
-    ("Review new legislation", False),
+# (name, billable_by_default, billing_mode, flat_fee_amount, flat_fee_currency)
+DEFAULT_PROJECT_TASK_SEED: tuple[tuple[str, bool, str, Decimal | None, str | None], ...] = (
+    ("Court Hearing", True, BILLING_MODE_HOURLY, None, None),
+    ("Court Hearing Preparation", True, BILLING_MODE_HOURLY, None, None),
+    ("Document Review", True, BILLING_MODE_HOURLY, None, None),
+    ("Document Submission", True, BILLING_MODE_HOURLY, None, None),
+    ("Drafting", True, BILLING_MODE_HOURLY, None, None),
+    ("Drafting Documents", True, BILLING_MODE_HOURLY, None, None),
+    ("Emails", True, BILLING_MODE_HOURLY, None, None),
+    ("Meetings", True, BILLING_MODE_HOURLY, None, None),
+    (MEHNAT_TASK_NAME, True, BILLING_MODE_FLAT_FEE, MEHNAT_FLAT_FEE_AMOUNT, MEHNAT_FLAT_FEE_CURRENCY),
+    ("Research", True, BILLING_MODE_HOURLY, None, None),
+    ("Telephone calls", True, BILLING_MODE_HOURLY, None, None),
+    ("Kosta Legal Internal", False, BILLING_MODE_HOURLY, None, None),
+    ("Accounting", False, BILLING_MODE_HOURLY, None, None),
+    ("Business Development", False, BILLING_MODE_HOURLY, None, None),
+    ("Lunch/Dinner", False, BILLING_MODE_HOURLY, None, None),
+    ("Other research", False, BILLING_MODE_HOURLY, None, None),
+    ("Proposals", False, BILLING_MODE_HOURLY, None, None),
+    ("Publications", False, BILLING_MODE_HOURLY, None, None),
+    ("Review new legislation", False, BILLING_MODE_HOURLY, None, None),
 )
 
 _ZERO_RATE = Decimal("0")
@@ -42,7 +49,7 @@ async def seed_default_common_tasks_for_project(session: AsyncSession, project_i
     )
     existing = {str(x).strip().lower() for x in r.scalars().all()}
     repo = ClientTaskRepository(session)
-    for name, billable in DEFAULT_PROJECT_TASK_SEED:
+    for name, billable, billing_mode, flat_amt, flat_cur in DEFAULT_PROJECT_TASK_SEED:
         key = name.strip().lower()
         if key in existing:
             continue
@@ -51,6 +58,9 @@ async def seed_default_common_tasks_for_project(session: AsyncSession, project_i
             name=name.strip(),
             default_billable_rate=_ZERO_RATE,
             billable_by_default=billable,
+            billing_mode=billing_mode,
+            flat_fee_amount=flat_amt,
+            flat_fee_currency=flat_cur,
         )
         existing.add(key)
 

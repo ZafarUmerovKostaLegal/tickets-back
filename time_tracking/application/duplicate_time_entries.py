@@ -76,6 +76,7 @@ def build_duplicate_key_for_entry(
     *,
     project_currency: str,
     rates_map: dict[int, list],
+    task: Any | None = None,
 ) -> DuplicateKey:
     hrs = _d(e.rounded_hours if e.rounded_hours is not None else e.hours)
     amt, cur = _billable_amount_for_entry(
@@ -85,6 +86,7 @@ def build_duplicate_key_for_entry(
         rates_map.get(e.auth_user_id),
         project_currency=project_currency,
         time_entry_project_id=e.project_id,
+        task=task,
     )
     return DuplicateKey(
         auth_user_id=int(e.auth_user_id),
@@ -109,6 +111,7 @@ def deduplicate_entries_for_report(
     *,
     projects_map: dict[str, Any],
     rates_map: dict[int, list],
+    tasks_map: dict[str, Any] | None = None,
 ) -> tuple[list[TimeEntryModel], int]:
     """Убрать дубликаты из отчёта: в каждой группе оставить самую раннюю запись (как при архивации)."""
     if not entries:
@@ -118,7 +121,8 @@ def deduplicate_entries_for_report(
     for e in entries:
         p = projects_map.get(e.project_id) if e.project_id else None
         cur = (getattr(p, "currency", None) or "USD") if p else "USD"
-        dk = build_duplicate_key_for_entry(e, project_currency=cur, rates_map=rates_map)
+        task = tasks_map.get(e.task_id) if tasks_map and e.task_id else None
+        dk = build_duplicate_key_for_entry(e, project_currency=cur, rates_map=rates_map, task=task)
         pid = (e.project_id or "").strip()
         by_group[(pid, dk)].append(e)
 
@@ -151,11 +155,13 @@ def _entry_to_duplicate_row(
         rates_map.get(e.auth_user_id),
         project_currency=project_currency,
         time_entry_project_id=e.project_id,
+        task=t,
     )
     key = build_duplicate_key_for_entry(
         e,
         project_currency=project_currency,
         rates_map=rates_map,
+        task=t,
     )
     user_name = (u.display_name or u.email or str(e.auth_user_id)) if u else str(e.auth_user_id)
     row = {

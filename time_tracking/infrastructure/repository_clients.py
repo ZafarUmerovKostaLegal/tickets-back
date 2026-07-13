@@ -311,13 +311,27 @@ class ClientTaskRepository:
         name: str,
         default_billable_rate: Decimal | None,
         billable_by_default: bool,
+        billing_mode: str = "hourly",
+        flat_fee_amount: Decimal | None = None,
+        flat_fee_currency: str | None = None,
     ) -> TimeManagerClientTaskModel:
+        mode = str(billing_mode or "hourly").strip().lower() or "hourly"
+        if mode in {"flat", "fixed", "fixed_fee"}:
+            mode = "flat_fee"
+        if mode not in {"hourly", "flat_fee"}:
+            mode = "hourly"
+        cur = (flat_fee_currency or "").strip()[:10] or None
+        if mode == "flat_fee" and flat_fee_amount is not None and not cur:
+            cur = "UZS"
         row = TimeManagerClientTaskModel(
             id=str(uuid.uuid4()),
             project_id=project_id,
             name=name.strip(),
             default_billable_rate=default_billable_rate,
             billable_by_default=billable_by_default,
+            billing_mode=mode,
+            flat_fee_amount=None if flat_fee_amount is None else _decimal_none(flat_fee_amount),
+            flat_fee_currency=cur if mode == "flat_fee" else None,
             created_at=_now_utc(),
             updated_at=None,
         )
@@ -331,6 +345,9 @@ class ClientTaskRepository:
                 name=t.name,
                 default_billable_rate=t.default_billable_rate,
                 billable_by_default=t.billable_by_default,
+                billing_mode=getattr(t, "billing_mode", None) or "hourly",
+                flat_fee_amount=getattr(t, "flat_fee_amount", None),
+                flat_fee_currency=getattr(t, "flat_fee_currency", None),
             )
 
     async def update(self, project_id: str, task_id: str, patch: dict[str, Any]) -> TimeManagerClientTaskModel | None:
@@ -344,6 +361,25 @@ class ClientTaskRepository:
             row.default_billable_rate = None if v is None else _decimal_none(v)
         if "billable_by_default" in patch:
             row.billable_by_default = bool(patch["billable_by_default"])
+        if "billing_mode" in patch and patch["billing_mode"] is not None:
+            mode = str(patch["billing_mode"]).strip().lower() or "hourly"
+            if mode in {"flat", "fixed", "fixed_fee"}:
+                mode = "flat_fee"
+            if mode not in {"hourly", "flat_fee"}:
+                mode = "hourly"
+            row.billing_mode = mode
+        if "flat_fee_amount" in patch:
+            v = patch["flat_fee_amount"]
+            row.flat_fee_amount = None if v is None else _decimal_none(v)
+        if "flat_fee_currency" in patch:
+            v = patch["flat_fee_currency"]
+            row.flat_fee_currency = None if v is None else str(v).strip()[:10] or None
+        if (getattr(row, "billing_mode", None) or "hourly") == "flat_fee":
+            if row.flat_fee_amount is not None and not (row.flat_fee_currency or "").strip():
+                row.flat_fee_currency = "UZS"
+        else:
+            row.flat_fee_amount = None
+            row.flat_fee_currency = None
         row.updated_at = _now_utc()
         self._session.add(row)
         return row

@@ -93,6 +93,8 @@ async def build_client_project_dashboard(
     uids = sorted({e.auth_user_id for e in entries})
     rates_map = await _load_user_rates(session, uids or None)
     cost_rates_map = await _load_user_cost_rates(session, uids or None)
+    task_repo = ClientTaskRepository(session)
+    tasks_map = {str(t.id): t for t in await task_repo.list_for_project(project_id)}
 
     total_bill = Decimal(0)
     total_cost = Decimal(0)
@@ -127,6 +129,7 @@ async def build_client_project_dashboard(
                 rates_map.get(uid),
                 project_currency=project_currency,
                 time_entry_project_id=project_id,
+                task=tasks_map.get(str(e.task_id)) if e.task_id else None,
             )
             total_bill += amt
             user_bill[uid] += amt

@@ -8,6 +8,7 @@ from typing import Any
 
 from application.hourly_rate_logic import filter_rates_by_currency, pick_rate_for_date
 from application.money_amounts import money_product_hours_rate
+from application.task_billing import flat_fee_for_task, is_flat_fee_task
 
 
 def _d(v: Any) -> Decimal:
@@ -74,9 +75,14 @@ def _billable_rate_for_entry(
     *,
     project_currency: str | None = None,
     time_entry_project_id: str | None = None,
+    task: Any | None = None,
 ) -> tuple[Decimal | None, str]:
 
     base_cur = (project_currency or "USD").strip()[:10] or "USD"
+    ff = flat_fee_for_task(task)
+    if ff is not None:
+        amt, cur = ff
+        return amt, cur
     rate = pick_billable_rate_for_entry(
         work_date,
         user_rates,
@@ -96,9 +102,16 @@ def _billable_amount_for_entry(
     *,
     project_currency: str | None = None,
     time_entry_project_id: str | None = None,
+    task: Any | None = None,
 ) -> tuple[Decimal, str]:
 
     out_cur = (project_currency or "USD").strip()[:10] or "USD"
+    ff = flat_fee_for_task(task)
+    if ff is not None:
+        amt, cur = ff
+        if not is_billable:
+            return Decimal(0), cur
+        return amt, cur
     if not is_billable or not user_rates:
         return Decimal(0), out_cur
     rate = pick_billable_rate_for_entry(
@@ -110,6 +123,50 @@ def _billable_amount_for_entry(
     if not rate:
         return Decimal(0), out_cur
     return money_product_hours_rate(hours, _d(rate.amount)), (rate.currency or out_cur).strip()[:10] or out_cur
+
+
+def billable_amount_respecting_package(
+    hours: Decimal,
+    is_billable: bool,
+    work_date: date,
+    user_rates: list[Any] | None,
+    *,
+    project_currency: str | None = None,
+    time_entry_project_id: str | None = None,
+    task: Any | None = None,
+    package_split: Any | None = None,
+) -> tuple[Decimal, str]:
+    """Flat-fee tasks always bill the fixed amount; hour-package overage applies only to hourly tasks."""
+    if is_flat_fee_task(task):
+        return _billable_amount_for_entry(
+            hours,
+            is_billable,
+            work_date,
+            user_rates,
+            project_currency=project_currency,
+            time_entry_project_id=time_entry_project_id,
+            task=task,
+        )
+    if package_split is not None:
+        oh = _d(getattr(package_split, "overage_hours", 0))
+        return _billable_amount_for_entry(
+            oh,
+            bool(is_billable) and oh > 0,
+            work_date,
+            user_rates,
+            project_currency=project_currency,
+            time_entry_project_id=time_entry_project_id,
+            task=task,
+        )
+    return _billable_amount_for_entry(
+        hours,
+        is_billable,
+        work_date,
+        user_rates,
+        project_currency=project_currency,
+        time_entry_project_id=time_entry_project_id,
+        task=task,
+    )
 
 
 def _cost_amount_for_entry(

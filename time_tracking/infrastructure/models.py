@@ -223,6 +223,9 @@ class TimeManagerClientTaskModel(Base):
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     default_billable_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     billable_by_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    billing_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="hourly")
+    flat_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    flat_fee_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

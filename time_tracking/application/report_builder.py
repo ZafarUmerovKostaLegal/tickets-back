@@ -456,6 +456,7 @@ async def build_report_summary(
 
     rates_map = await _load_user_rates(session, user_ids)
     projects_map = await _load_projects_map(session)
+    tasks_map = await _load_tasks_map(session)
 
     total = _ZERO
     billable = _ZERO
@@ -477,6 +478,7 @@ async def build_report_summary(
                 rates_map.get(e.auth_user_id),
                 project_currency=pc,
                 time_entry_project_id=e.project_id,
+                task=tasks_map.get(e.task_id) if e.task_id else None,
             )
             billable_amount += amt
             if cur != "USD" or (pc and pc != "USD"):
@@ -607,6 +609,7 @@ async def _table_aggregated(
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     rates_map = await _load_user_rates(session, user_ids)
+    tasks_map = await _load_tasks_map(session)
 
     buckets: dict[Any, dict] = {}
     for e in entries:
@@ -636,6 +639,7 @@ async def _table_aggregated(
                 rates_map.get(e.auth_user_id),
                 project_currency=pc,
                 time_entry_project_id=e.project_id,
+                task=tasks_map.get(e.task_id) if e.task_id else None,
             )
             bkt["amount"] += amt
             if cur != "USD" or (pc and pc != "USD"):

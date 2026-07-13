@@ -9,13 +9,14 @@ from typing import Any
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.entry_pricing import _billable_amount_for_entry
+from application.entry_pricing import _billable_amount_for_entry, billable_amount_respecting_package
 from application.package_billing import build_package_splits_index
 from application.report_builder import (
     _base_entry_conditions,
     _load_clients_map,
     _load_initials_map,
     _load_projects_map,
+    _load_tasks_map,
     _load_user_rates,
     _load_users_map,
     _fetch_expense_report_data,
@@ -78,11 +79,13 @@ async def get_uninvoiced_report(
 
     all_uid_set = {e.auth_user_id for e in all_entries} | {e.auth_user_id for e in uninv_entries}
     rates_map = await _load_user_rates(session, list(all_uid_set) or None)
+    tasks_map = await _load_tasks_map(session)
     package_splits, package_months_by_project = build_package_splits_index(
         projects_map,
         uninv_entries,
         date_from=date_from,
         date_to=date_to,
+        tasks_map=tasks_map,
     )
 
     raw_expenses = await _fetch_expense_report_data(date_from, date_to, user_ids, project_ids)
@@ -112,26 +115,16 @@ async def get_uninvoiced_report(
         uninv_hours_by_project[pid] = uninv_hours_by_project.get(pid, _ZERO) + h
         p_ent = projects_map.get(pid) if pid else None
         pc = (getattr(p_ent, "currency", None) or "USD") if p_ent else "USD"
-        split = package_splits.get(str(e.id))
-        if split is not None:
-            oh = _d(split.overage_hours)
-            amt, cur = _billable_amount_for_entry(
-                oh,
-                oh > 0,
-                e.work_date,
-                rates_map.get(e.auth_user_id),
-                project_currency=pc,
-                time_entry_project_id=pid,
-            )
-        else:
-            amt, cur = _billable_amount_for_entry(
-                h,
-                e.is_billable,
-                e.work_date,
-                rates_map.get(e.auth_user_id),
-                project_currency=pc,
-                time_entry_project_id=pid,
-            )
+        amt, cur = billable_amount_respecting_package(
+            h,
+            e.is_billable,
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=pc,
+            time_entry_project_id=pid,
+            task=tasks_map.get(e.task_id) if e.task_id else None,
+            package_split=package_splits.get(str(e.id)),
+        )
         uninv_amount_by_project[pid] = uninv_amount_by_project.get(pid, _ZERO) + amt
         if cur != "USD":
             uninv_currency_by_project[pid] = cur
