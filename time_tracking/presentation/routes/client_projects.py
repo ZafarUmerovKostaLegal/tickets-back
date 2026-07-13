@@ -127,6 +127,7 @@ async def list_all_projects_for_expenses(
             continue
         if not include_archived and is_project_closed_for_time_entries(
             is_archived=bool(r.is_archived),
+            is_paused=bool(getattr(r, "is_paused", False)),
             end_date=r.end_date,
             as_of=today,
         ):
@@ -139,6 +140,7 @@ async def list_all_projects_for_expenses(
                 "clientId": r.client_id,
                 "clientName": clients[r.client_id].name if r.client_id in clients else None,
                 "isArchived": r.is_archived,
+                "isPaused": bool(getattr(r, "is_paused", False)),
                 "endDate": r.end_date.isoformat() if r.end_date else None,
                 "currency": getattr(r, "currency", None) or "USD",
                 "projectType": r.project_type,
@@ -342,6 +344,7 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         package_hours_per_month=getattr(row, "package_hours_per_month", None),
         package_fee_amount=getattr(row, "package_fee_amount", None),
         is_archived=row.is_archived,
+        is_paused=bool(getattr(row, "is_paused", False)),
         records_language=getattr(row, "records_language", "ENG") or "ENG",
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -783,6 +786,7 @@ async def create_client_project(
             package_hours_per_month=package_hours if body.project_type == ProjectType.hour_package else None,
             package_fee_amount=package_fee if body.project_type == ProjectType.hour_package else None,
             is_archived=body.is_archived,
+            is_paused=bool(getattr(body, "is_paused", False)),
             records_language=body.records_language.value,
         )
         await session.flush()
@@ -930,6 +934,20 @@ async def patch_client_project(
         patch["is_archived"] = bool(patch["is_archived"])
         if patch["is_archived"] is False and row.end_date is not None and row.end_date < date.today():
             patch["end_date"] = None
+        # Archive supersedes pause.
+        if patch["is_archived"] is True:
+            patch["is_paused"] = False
+    if "is_paused" in patch:
+        patch["is_paused"] = bool(patch["is_paused"])
+        # Cannot pause an archived project — resume archive first.
+        if patch["is_paused"] is True and (
+            ("is_archived" in patch and patch["is_archived"])
+            or (("is_archived" not in patch) and bool(row.is_archived))
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Нельзя поставить на паузу архивный проект. Сначала восстановите его из архива.",
+            )
 
     if any(
         k in patch

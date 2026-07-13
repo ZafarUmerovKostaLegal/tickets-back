@@ -813,6 +813,7 @@ class ClientProjectRepository:
         package_hours_per_month: Decimal | None = None,
         package_fee_amount: Decimal | None = None,
         is_archived: bool = False,
+        is_paused: bool = False,
         records_language: str = "ENG",
     ) -> TimeManagerClientProjectModel:
         rv = report_visibility if report_visibility in _REPORT_VISIBILITY else "managers_only"
@@ -846,6 +847,7 @@ class ClientProjectRepository:
             package_hours_per_month=package_hours_per_month,
             package_fee_amount=package_fee_amount,
             is_archived=bool(is_archived),
+            is_paused=bool(is_paused) and not bool(is_archived),
             records_language=rl,
             created_at=_now_utc(),
             updated_at=None,
@@ -909,6 +911,8 @@ class ClientProjectRepository:
             row.package_fee_amount = _decimal_none(patch["package_fee_amount"])
         if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
+        if "is_paused" in patch:
+            row.is_paused = bool(patch["is_paused"]) and not bool(row.is_archived)
         if "records_language" in patch and patch["records_language"] is not None:
             rl = str(patch["records_language"]).strip().upper()
             if rl in _RECORDS_LANGUAGES:

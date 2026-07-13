@@ -417,6 +417,15 @@ async def apply_client_projects_is_archived_patch(conn: AsyncConnection) -> None
     )
 
 
+async def apply_client_projects_is_paused_patch(conn: AsyncConnection) -> None:
+    """Temporary pause: blocks new time entries without archiving the project."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_client_projects",
+        ("is_paused BOOLEAN NOT NULL DEFAULT FALSE",),
+    )
+
+
 async def apply_client_projects_billing_columns_patch(conn: AsyncConnection) -> None:
 
     await add_columns_if_missing(
@@ -1198,6 +1207,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("client_projects_billable_amount", apply_client_projects_project_billable_amount_patch),
     ("client_projects_hour_package", apply_client_projects_hour_package_patch),
     ("client_projects_records_language", apply_client_projects_records_language_patch),
+    ("client_projects_is_paused", apply_client_projects_is_paused_patch),
     ("hourly_rates_applies_to_project", apply_hourly_rates_applies_to_project_patch),
     ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),
     ("time_tracking_teams", apply_time_tracking_teams_schema_patch),

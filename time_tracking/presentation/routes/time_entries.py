@@ -11,7 +11,10 @@ from application.access_control import (
     viewer_can_bypass_work_week_submission_lock,
     viewer_can_transfer_time_without_project_access,
 )
-from application.project_time_entry import is_project_closed_for_time_entries
+from application.project_time_entry import (
+    is_project_closed_for_time_entries,
+    project_time_entry_block_detail,
+)
 from application.time_entry_task import resolve_time_entry_task_for_project
 from application.weekly_submission_service import is_work_date_locked_for_user
 from infrastructure.database import get_session
@@ -64,10 +67,19 @@ async def _validate_project_if_set(
     as_of = work_date or date.today()
     if is_project_closed_for_time_entries(
         is_archived=bool(proj.is_archived),
+        is_paused=bool(getattr(proj, "is_paused", False)),
         end_date=proj.end_date,
         as_of=as_of,
     ):
-        raise HTTPException(status_code=400, detail="Проект в архиве, списание времени недоступно")
+        raise HTTPException(
+            status_code=400,
+            detail=project_time_entry_block_detail(
+                is_archived=bool(proj.is_archived),
+                is_paused=bool(getattr(proj, "is_paused", False)),
+                end_date=proj.end_date,
+                as_of=as_of,
+            ),
+        )
     return pid
 
 

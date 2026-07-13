@@ -292,6 +292,7 @@ class TimeManagerClientProjectModel(Base):
     package_hours_per_month: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     package_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     records_language: Mapped[str] = mapped_column(
         String(3), nullable=False, default="ENG", server_default=text("'ENG'")
     )

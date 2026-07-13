@@ -699,7 +699,8 @@ class TimeManagerClientProjectOut(BaseModel):
         alias="packageFeeAmount",
         description="Фиксированная плата за месячный пакет часов.",
     )
-    is_archived: bool = False
+    is_archived: bool = Field(False, alias="isArchived")
+    is_paused: bool = Field(False, alias="isPaused")
     records_language: str = Field("ENG", alias="recordsLanguage")
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -815,6 +816,7 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: bool = Field(False, alias="isArchived")
+    is_paused: bool = Field(False, alias="isPaused")
     initial_time_tracking_user_auth_ids: list[int] = Field(
         default_factory=list,
         alias="initialTimeTrackingUserAuthIds",
@@ -937,6 +939,7 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         description="Язык описаний в записях времени: RU или ENG.",
     )
     is_archived: Optional[bool] = Field(None, alias="isArchived")
+    is_paused: Optional[bool] = Field(None, alias="isPaused")
 
 
 class TimeManagerClientProjectCodeHintOut(BaseModel):
