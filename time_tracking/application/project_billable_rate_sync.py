@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.hourly_rate_logic import normalize_currency
+from application.hourly_rate_logic import normalize_currency, pick_rate_for_date
 from infrastructure.models import UserHourlyRateModel
 from infrastructure.report_cache import invalidate_all_reports
 from infrastructure.repositories import (
@@ -132,6 +132,12 @@ async def upsert_user_project_scoped_billable_rate(
     valid_from: date | None,
     valid_to: date | None,
 ) -> None:
+    """Upsert project-scoped billable rate without wiping dated history.
+
+    When the caller passes open dates (None/None) — typical for project settings —
+    update amount/currency on the *currently effective* project rate and keep its
+    valid_from/valid_to. Creating a brand-new open interval only when none exist.
+    """
 
     pid = (project_id or "").strip()
     if not pid or amount <= 0:
@@ -143,23 +149,52 @@ async def upsert_user_project_scoped_billable_rate(
         for r in await hr.list_by_user_and_kind(auth_user_id, "billable")
         if getattr(r, "applies_to_project_id", None) == pid
     ]
-    if len(existing) > 1:
-        keeper = min(existing, key=lambda r: r.id)
-        for dup in existing:
+
+    # Collapse only true open-interval duplicates (both ends null), not dated history.
+    open_dups = [r for r in existing if r.valid_from is None and r.valid_to is None]
+    if len(open_dups) > 1:
+        keeper = min(open_dups, key=lambda r: r.id)
+        for dup in open_dups:
             if dup.id != keeper.id:
                 await hr.delete(auth_user_id, dup.id)
-        existing = [keeper]
-    if existing:
-        row = min(existing, key=lambda r: r.id)
+        existing = [
+            r
+            for r in await hr.list_by_user_and_kind(auth_user_id, "billable")
+            if getattr(r, "applies_to_project_id", None) == pid
+        ]
+
+    today = date.today()
+    target = pick_rate_for_date(existing, today)
+    if target is None:
+        # Prefer an open-ended future/current row over inventing a second open interval.
+        open_ended = [r for r in existing if r.valid_to is None]
+        if open_ended:
+            target = max(
+                open_ended,
+                key=lambda r: (
+                    r.valid_from or date.min,
+                    r.id,
+                ),
+            )
+
+    if target is not None:
+        patch: dict[str, Any] = {"amount": amount, "currency": cur}
+        # Only rewrite interval bounds when the caller supplies at least one bound.
+        # Project-access saves pass None/None and must not clear "change from date" history.
+        if valid_from is not None or valid_to is not None:
+            patch["valid_from"] = valid_from
+            patch["valid_to"] = valid_to
         try:
             await hr.update(
                 auth_user_id=auth_user_id,
-                rate_id=row.id,
-                patch={"amount": amount, "currency": cur, "valid_from": valid_from, "valid_to": valid_to},
+                rate_id=target.id,
+                patch=patch,
             )
             return
         except ValueError:
-            await _delete_user_project_scoped_billable_rates(session, auth_user_id, pid)
+            # Fall through to create only if update failed due to overlap constraints.
+            pass
+
     try:
         await hr.create(
             auth_user_id=auth_user_id,
@@ -171,7 +206,10 @@ async def upsert_user_project_scoped_billable_rate(
             applies_to_project_id=pid,
         )
     except ValueError:
-        await _delete_user_project_scoped_billable_rates(session, auth_user_id, pid)
+        # Last resort: remove open-interval dups only, then recreate one open row.
+        for r in list(existing):
+            if r.valid_from is None and r.valid_to is None:
+                await hr.delete(auth_user_id, r.id)
         await hr.create(
             auth_user_id=auth_user_id,
             rate_kind="billable",
