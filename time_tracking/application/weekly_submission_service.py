@@ -22,30 +22,25 @@ _log = logging.getLogger(__name__)
 
 
 def _submit_tz() -> str:
-    return (os.environ.get("WEEKLY_SUBMIT_TZ", "UTC") or "UTC").strip() or "UTC"
+    return (os.environ.get("WEEKLY_SUBMIT_TZ", "Asia/Tashkent") or "Asia/Tashkent").strip() or "Asia/Tashkent"
 
 
 async def is_work_date_locked_for_user(
-    session: AsyncSession, auth_user_id: int, work_date: date
+    session: AsyncSession,
+    auth_user_id: int,
+    work_date: date,
 ) -> bool:
+    """Запись за work_date закрыта для правок сотрудником?
+
+    До понедельника 12:00 (WEEKLY_SUBMIT_TZ, по умолчанию Asia/Tashkent) правки
+    разрешены даже если неделя уже сдана. После дедлайна — закрыто
+    (кроме временного manager unlock).
+    """
     unlock_repo = TimeEntryEditUnlockRepository(session)
     if await unlock_repo.is_active_unlock(auth_user_id, work_date):
         return False
 
-    submit_tz = _submit_tz()
-    today = local_today(submit_tz)
-    work_w0, _work_w1 = work_week_start_end_inclusive(work_date)
-    current_w0, _current_w1 = work_week_start_end_inclusive(today)
-
-                                                                                          
-                                                               
-    if work_w0 == current_w0:
-        return is_work_week_edit_deadline_passed(work_date, submit_tz=submit_tz)
-
-    if is_work_week_edit_deadline_passed(work_date, submit_tz=submit_tz):
-        return True
-    repo = WeeklySubmissionRepository(session)
-    return await repo.is_work_date_locked(auth_user_id, work_date)
+    return is_work_week_edit_deadline_passed(work_date, submit_tz=_submit_tz())
 
 
 async def submit_reporting_week_for_user(

@@ -19,7 +19,7 @@ __all__ = [
 
 def now_in_submit_tz() -> datetime:
 
-    t = (os.environ.get("WEEKLY_SUBMIT_TZ", "UTC") or "UTC").strip() or "UTC"
+    t = (os.environ.get("WEEKLY_SUBMIT_TZ", "Asia/Tashkent") or "Asia/Tashkent").strip() or "Asia/Tashkent"
     if t.upper() in ("UTC", "GMT", "Z"):
         return datetime.now(timezone.utc)
     return datetime.now(ZoneInfo(t))
@@ -27,7 +27,7 @@ def now_in_submit_tz() -> datetime:
 
 def local_today(tz_name: str) -> date:
 
-    tz = (tz_name or "UTC").strip() or "UTC"
+    tz = (tz_name or "Asia/Tashkent").strip() or "Asia/Tashkent"
     if tz.upper() in ("UTC", "GMT", "Z"):
         return datetime.now(timezone.utc).date()
     return datetime.now(ZoneInfo(tz)).date()
@@ -52,7 +52,7 @@ def work_week_monday_twelve_closing_aware(week_start_saturday: date, *, tz_name:
     Понедельник, следующий за пятницей этой недели = week_start + 9 дней.
     """
 
-    t = (tz_name or "UTC").strip() or "UTC"
+    t = (tz_name or "Asia/Tashkent").strip() or "Asia/Tashkent"
     day = week_start_saturday + timedelta(days=9)
     clock = time(12, 0, 0)
     if t.upper() in ("UTC", "GMT", "Z"):
@@ -68,7 +68,11 @@ def is_work_week_edit_deadline_passed(
 ) -> bool:
 
     w0, _w1 = work_week_start_end_inclusive(work_date)
-    stz = (submit_tz or os.environ.get("WEEKLY_SUBMIT_TZ", "UTC") or "UTC").strip() or "UTC"
+    stz = (
+        submit_tz
+        or os.environ.get("WEEKLY_SUBMIT_TZ", "Asia/Tashkent")
+        or "Asia/Tashkent"
+    ).strip() or "Asia/Tashkent"
     n = now if now is not None else now_in_submit_tz()
     if n.tzinfo is None:
         raise ValueError("now must be timezone-aware when passed explicitly")

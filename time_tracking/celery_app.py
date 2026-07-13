@@ -20,7 +20,7 @@ app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone=os.environ.get("WEEKLY_SUBMIT_TZ", "UTC"),
+    timezone=os.environ.get("WEEKLY_SUBMIT_TZ", "Asia/Tashkent"),
     enable_utc=True,
 )
 

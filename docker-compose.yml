@@ -538,7 +538,7 @@ services:
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - TIME_TRACKING_DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
       - EXPENSES_SERVICE_URL=${EXPENSES_SERVICE_URL:-http://expenses:1242}
-      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
+      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-Asia/Tashkent}
       - TT_SMTP_HOST=${TT_SMTP_HOST:-${EXPENSE_SMTP_HOST:-}}
       - TT_SMTP_PORT=${TT_SMTP_PORT:-${EXPENSE_SMTP_PORT:-587}}
       - TT_SMTP_USER=${TT_SMTP_USER:-${EXPENSE_SMTP_USER:-}}
@@ -590,7 +590,7 @@ services:
     environment:
       - DATABASE_URL=${TIME_TRACKING_DATABASE_URL:-postgresql://time_tracking:time_tracking@time_tracking_db:5432/kosta_time_tracking}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
+      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-Asia/Tashkent}
     depends_on:
       redis:
         condition: service_healthy
@@ -608,7 +608,7 @@ services:
     working_dir: /app
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-UTC}
+      - WEEKLY_SUBMIT_TZ=${WEEKLY_SUBMIT_TZ:-Asia/Tashkent}
       - WEEKLY_SUBMIT_HOUR=${WEEKLY_SUBMIT_HOUR:-12}
       - WEEKLY_SUBMIT_MINUTE=${WEEKLY_SUBMIT_MINUTE:-0}
       - WEEKLY_SUBMIT_DOW=${WEEKLY_SUBMIT_DOW:-1}
