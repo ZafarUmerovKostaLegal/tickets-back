@@ -5,7 +5,7 @@ import json
 import uuid
 from datetime import date
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -338,7 +338,7 @@ class PartnerReportConfirmationRepository:
             )
         # Сортировка red → yellow → green, внутри — старше выше; точный порядок
         # после visibility-фильтра всё равно пересчитывается в сервисе.
-        priority_rank = func.case(
+        priority_rank = case(
             (ReportPartnerConfirmationRequestModel.review_priority == "red", 0),
             (ReportPartnerConfirmationRequestModel.review_priority == "yellow", 1),
             (ReportPartnerConfirmationRequestModel.review_priority == "green", 2),
