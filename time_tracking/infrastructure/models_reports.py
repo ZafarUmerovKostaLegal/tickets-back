@@ -108,6 +108,7 @@ class ReportPartnerConfirmationRequestModel(Base):
     date_to: Mapped[date] = mapped_column(Date, nullable=False)
     title: Mapped[str] = mapped_column(String(700), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_priority: Mapped[str] = mapped_column(String(16), nullable=False, default="yellow")
     submitted_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

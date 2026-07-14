@@ -19,6 +19,7 @@ from infrastructure.repository_shared import _now_utc
 
 _STATUS_PENDING = "pending_partners"
 _STATUS_CONFIRMED = "fully_confirmed"
+_DEFAULT_REVIEW_PRIORITY = "yellow"
 
 
 def project_id_from_snapshot_row(row: ReportSnapshotRowModel) -> str | None:
@@ -113,6 +114,7 @@ class PartnerReportConfirmationRepository:
                 )
             )
             row.status = _STATUS_PENDING
+            row.review_priority = _DEFAULT_REVIEW_PRIORITY
             row.title = title
             row.submitted_by_auth_user_id = submitted_by_auth_user_id
             row.updated_at = now
@@ -127,6 +129,7 @@ class PartnerReportConfirmationRepository:
             date_to=date_to,
             title=title,
             status=_STATUS_PENDING,
+            review_priority=_DEFAULT_REVIEW_PRIORITY,
             submitted_by_auth_user_id=submitted_by_auth_user_id,
             created_at=now,
             updated_at=now,
@@ -216,6 +219,15 @@ class PartnerReportConfirmationRepository:
         row.status = _STATUS_PENDING
         row.updated_at = _now_utc()
         self._s.add(row)
+
+    async def set_review_priority(self, request_id: str, review_priority: str) -> bool:
+        row = await self.get_request_by_id(request_id)
+        if not row:
+            return False
+        row.review_priority = review_priority
+        row.updated_at = _now_utc()
+        self._s.add(row)
+        return True
 
     async def mark_fully_confirmed(self, request_id: str) -> None:
         row = await self.get_request_by_id(request_id)
@@ -310,12 +322,32 @@ class PartnerReportConfirmationRepository:
             )
         return list((await self._s.execute(q)).scalars().all())
 
-    async def list_all_pending(self) -> list[ReportPartnerConfirmationRequestModel]:
+    async def list_all_pending(
+        self,
+        *,
+        review_priority: str | None = None,
+    ) -> list[ReportPartnerConfirmationRequestModel]:
         q = (
             select(ReportPartnerConfirmationRequestModel)
             .where(ReportPartnerConfirmationRequestModel.status != _STATUS_CONFIRMED)
             .options(selectinload(ReportPartnerConfirmationRequestModel.signatures))
-            .order_by(ReportPartnerConfirmationRequestModel.created_at.desc())
+        )
+        if review_priority:
+            q = q.where(
+                ReportPartnerConfirmationRequestModel.review_priority == review_priority
+            )
+        # Сортировка red → yellow → green, внутри — старше выше; точный порядок
+        # после visibility-фильтра всё равно пересчитывается в сервисе.
+        priority_rank = func.case(
+            (ReportPartnerConfirmationRequestModel.review_priority == "red", 0),
+            (ReportPartnerConfirmationRequestModel.review_priority == "yellow", 1),
+            (ReportPartnerConfirmationRequestModel.review_priority == "green", 2),
+            else_=1,
+        )
+        q = q.order_by(
+            priority_rank.asc(),
+            ReportPartnerConfirmationRequestModel.created_at.asc(),
+            ReportPartnerConfirmationRequestModel.id.asc(),
         )
         return list((await self._s.execute(q)).scalars().all())
 

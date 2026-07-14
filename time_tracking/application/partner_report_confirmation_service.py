@@ -20,6 +20,12 @@ from application.report_viewer_scope import (
     list_partner_project_ids_for_viewer,
     viewer_can_see_all_partner_confirmations,
 )
+from application.review_priority import (
+    DEFAULT_REVIEW_PRIORITY,
+    normalize_review_priority,
+    paginate_items,
+    sort_pending_by_review_priority,
+)
 from infrastructure.repository_access import UserProjectAccessRepository
 from infrastructure.repository_clients import ClientProjectRepository
 from infrastructure.repository_partner_report_confirmations import (
@@ -147,6 +153,9 @@ def _request_to_out(
     ]
     signed_ids = {s.partner_auth_user_id for s in (m.signatures or [])}
     pending_ids = [p for p in required_partners if p not in signed_ids]
+    priority = (getattr(m, "review_priority", None) or DEFAULT_REVIEW_PRIORITY).strip().lower()
+    if priority not in ("red", "yellow", "green"):
+        priority = DEFAULT_REVIEW_PRIORITY
     out = {
         "id": m.id,
         "snapshotId": m.snapshot_id,
@@ -155,6 +164,7 @@ def _request_to_out(
         "dateTo": m.date_to.isoformat(),
         "title": m.title,
         "status": m.status,
+        "reviewPriority": priority,
         "submittedByAuthUserId": m.submitted_by_auth_user_id,
         "requiredPartnerAuthUserIds": list(required_partners),
         "pendingPartnerAuthUserIds": pending_ids,
@@ -443,26 +453,74 @@ async def revoke_partner_report_confirmation_signature(
     return _request_to_out(req, partners)
 
 
+async def set_partner_confirmation_review_priority(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    review_priority: str,
+    *,
+    authorization: str | None,
+) -> dict:
+    """Меняет приоритет проверки. ACL как у удаления: отправитель или менеджер/админ."""
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    priority = normalize_review_priority(review_priority, required=True)
+    assert priority is not None
+    vid = _viewer_id(viewer)
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    is_submitter = int(req.submitted_by_auth_user_id) == vid
+    can_manage = (
+        viewer_can_view_all_pending_partner_confirmations(viewer)
+        or _viewer_can_see_all_confirmations(viewer)
+    )
+    if not is_submitter and not can_manage:
+        raise HTTPException(
+            status_code=403,
+            detail="Приоритет может менять только отправитель отчёта или администратор",
+        )
+    ok = await conf_repo.set_review_priority(rid, priority)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    await session.commit()
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=500, detail="internal")
+    access_repo = UserProjectAccessRepository(session)
+    partners = await list_partner_auth_user_ids_for_project(
+        session, access_repo, req.project_id, authorization=authorization
+    )
+    return _request_to_out(req, partners)
+
+
 async def list_pending_partner_confirmations(
     session: AsyncSession,
     viewer: dict,
     *,
     authorization: str | None,
     scope: str | None = None,
-) -> list[dict]:
+    priority: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
     vid = _viewer_id(viewer)
     mode = normalize_partner_pending_scope(scope)
+    priority_filter = normalize_review_priority(priority, required=False)
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
     await _reconcile_all_completable_pending(
         session, access_repo, authorization=authorization
     )
-    candidates = await conf_repo.list_all_pending()
+    candidates = await conf_repo.list_all_pending(review_priority=priority_filter)
 
     if mode == "all" and not viewer_can_view_all_pending_partner_confirmations(viewer):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    visible: list[tuple[object, list[int]]] = []
+    visible_rows: list = []
+    partners_by_id: dict[str, list[int]] = {}
     team_members_cache: dict[int, set[int]] = {}
     report_users_cache: dict[tuple[str, date, date], set[int]] = {}
     for m in candidates:
@@ -490,14 +548,28 @@ async def list_pending_partner_confirmations(
                 report_user_ids=report_users_cache[report_key],
             ):
                 continue
-        visible.append((m, partners))
-    entry_counts = await _entry_counts_for_request_rows(
-        session, [m for m, _ in visible]
+        visible_rows.append(m)
+        partners_by_id[m.id] = partners
+
+    sorted_rows = sort_pending_by_review_priority(visible_rows)
+    page_rows, safe_page, safe_size, total = paginate_items(
+        sorted_rows, page=page, page_size=page_size
     )
-    return [
-        _request_to_out(m, partners, entry_count=entry_counts.get(m.id, 0))
-        for m, partners in visible
+    entry_counts = await _entry_counts_for_request_rows(session, page_rows)
+    items = [
+        _request_to_out(
+            m,
+            partners_by_id.get(m.id, []),
+            entry_count=entry_counts.get(m.id, 0),
+        )
+        for m in page_rows
     ]
+    return {
+        "items": items,
+        "page": safe_page,
+        "pageSize": safe_size,
+        "total": total,
+    }
 
 
 async def list_confirmed_partner_confirmations(

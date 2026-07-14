@@ -583,12 +583,29 @@ async def apply_reports_schema_patch(conn: AsyncConnection) -> None:
                 date_to DATE NOT NULL,
                 title VARCHAR(700) NOT NULL,
                 status VARCHAR(32) NOT NULL,
+                review_priority VARCHAR(16) NOT NULL DEFAULT 'yellow',
                 submitted_by_auth_user_id INTEGER NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ,
                 CONSTRAINT uq_tt_report_partner_conf_snap_proj_period
                     UNIQUE (snapshot_id, project_id, date_from, date_to)
             )
+            """
+        )
+    )
+    await add_columns_if_missing(
+        conn,
+        "tt_report_partner_confirmation_requests",
+        [
+            "review_priority VARCHAR(16) NOT NULL DEFAULT 'yellow'",
+        ],
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE tt_report_partner_confirmation_requests
+            SET review_priority = 'yellow'
+            WHERE review_priority IS NULL OR TRIM(review_priority) = ''
             """
         )
     )
@@ -605,6 +622,14 @@ async def apply_reports_schema_patch(conn: AsyncConnection) -> None:
             """
             CREATE INDEX IF NOT EXISTS ix_tt_rpconf_project_status
                 ON tt_report_partner_confirmation_requests (project_id, status)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_status_priority_created
+                ON tt_report_partner_confirmation_requests (status, review_priority, created_at)
             """
         )
     )

@@ -16,6 +16,7 @@ from application.partner_report_confirmation_service import (
     list_partner_confirmation_comments,
     list_pending_partner_confirmations,
     revoke_partner_report_confirmation_signature,
+    set_partner_confirmation_review_priority,
     submit_partner_report_confirmation,
     submit_partner_report_confirmation_from_preview,
 )
@@ -47,6 +48,12 @@ class PartnerConfirmationCommentCreateBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     text: str = Field(..., min_length=1, max_length=4000)
+
+
+class PartnerConfirmationReviewPriorityBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    review_priority: str = Field(..., alias="reviewPriority")
 
 
 @router.post("/partner-confirmations/submit-from-preview")
@@ -147,6 +154,26 @@ async def partner_report_confirmation_revoke_signature(
     )
 
 
+@router.patch("/partner-confirmations/{request_id}")
+async def partner_report_confirmation_set_priority(
+    request_id: str,
+    body: PartnerConfirmationReviewPriorityBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await set_partner_confirmation_review_priority(
+        session,
+        viewer,
+        rid,
+        body.review_priority,
+        authorization=authorization,
+    )
+
+
 @router.get("/partner-confirmations/pending")
 async def partner_report_confirmation_pending(
     session: AsyncSession = Depends(get_session),
@@ -156,12 +183,21 @@ async def partner_report_confirmation_pending(
         None,
         description="mine (default) — только заявки пользователя; all — все незавершённые (менеджер/админ)",
     ),
+    priority: Optional[str] = Query(
+        None,
+        description="Фильтр приоритета: red | yellow | green",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200, alias="pageSize"),
 ):
     return await list_pending_partner_confirmations(
         session,
         viewer,
         authorization=authorization,
         scope=scope,
+        priority=priority,
+        page=page,
+        page_size=page_size,
     )
 
 

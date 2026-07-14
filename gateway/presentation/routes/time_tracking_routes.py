@@ -1399,6 +1399,20 @@ async def reports_partner_confirmation_revoke_signature(
     )
 
 
+@router.patch("/reports/partner-confirmations/{request_id}")
+async def reports_partner_confirmation_set_priority(
+    request_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "PATCH",
+        f"/reports/partner-confirmations/{request_id}",
+        json=body,
+        timeout=30.0,
+    )
+
+
 @router.get("/reports/partner-confirmations/pending")
 async def reports_partner_confirmation_pending(
     request: Request,
