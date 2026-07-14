@@ -406,7 +406,8 @@ async def revoke_partner_report_confirmation_signature(
 
     vid = _viewer_id(viewer)
     conf_repo = PartnerReportConfirmationRepository(session)
-    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    # Без selectinload(signatures): иначе ORM-delete подписи конфликтует с relationship.
+    req = await conf_repo.get_request_by_id(rid, load_signatures=False)
     if not req:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
 
@@ -425,7 +426,10 @@ async def revoke_partner_report_confirmation_signature(
     if not await conf_repo.partner_has_signed(rid, partner_id):
         raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
 
-    await conf_repo.remove_signature(rid, partner_id)
+    project_id = req.project_id
+    removed = await conf_repo.remove_signature(rid, partner_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
     await conf_repo.mark_pending_partners(rid)
     await session.commit()
 
@@ -434,7 +438,7 @@ async def revoke_partner_report_confirmation_signature(
         raise HTTPException(status_code=500, detail="internal")
     access_repo = UserProjectAccessRepository(session)
     partners = await list_partner_auth_user_ids_for_project(
-        session, access_repo, req.project_id, authorization=authorization
+        session, access_repo, project_id, authorization=authorization
     )
     return _request_to_out(req, partners)
 

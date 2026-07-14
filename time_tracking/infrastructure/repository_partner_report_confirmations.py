@@ -189,23 +189,25 @@ class PartnerReportConfirmationRepository:
         return (await self._s.execute(q)).scalar_one_or_none() is not None
 
     async def remove_signature(self, request_id: str, partner_auth_user_id: int) -> bool:
-        """Удаляет одну подпись партнёра. False, если подписи не было."""
+        """Удаляет одну подпись партнёра SQL DELETE (без ORM-состояния в relationship)."""
         rid = (request_id or "").strip()
         if not rid:
             return False
-        q = select(ReportPartnerConfirmationSignatureModel).where(
-            and_(
-                ReportPartnerConfirmationSignatureModel.request_id == rid,
-                ReportPartnerConfirmationSignatureModel.partner_auth_user_id
-                == int(partner_auth_user_id),
+        result = await self._s.execute(
+            delete(ReportPartnerConfirmationSignatureModel).where(
+                and_(
+                    ReportPartnerConfirmationSignatureModel.request_id == rid,
+                    ReportPartnerConfirmationSignatureModel.partner_auth_user_id
+                    == int(partner_auth_user_id),
+                )
             )
         )
-        row = (await self._s.execute(q)).scalar_one_or_none()
-        if not row:
-            return False
-        await self._s.delete(row)
         await self._s.flush()
-        return True
+        # Сбрасываем кэш relationship у заявки, если она уже была загружена с подписями.
+        req = await self.get_request_by_id(rid, load_signatures=False)
+        if req is not None:
+            self._s.expire(req, ["signatures", "status", "updated_at"])
+        return int(result.rowcount or 0) > 0
 
     async def mark_pending_partners(self, request_id: str) -> None:
         row = await self.get_request_by_id(request_id)
