@@ -381,6 +381,64 @@ async def delete_partner_report_confirmation(
     return {"ok": True, "id": rid}
 
 
+async def revoke_partner_report_confirmation_signature(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    partner_auth_user_id: int,
+    *,
+    authorization: str | None,
+) -> dict:
+    """Снимает одну подпись партнёра; заявка остаётся, статус → pending_partners.
+
+    Остальные подписи сохраняются. Разрешено: отправитель, администратор,
+    либо сам партнёр, чью подпись отзывают.
+    """
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    try:
+        partner_id = int(partner_auth_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="partner_auth_user_id required") from None
+    if partner_id <= 0:
+        raise HTTPException(status_code=400, detail="partner_auth_user_id required")
+
+    vid = _viewer_id(viewer)
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+
+    is_submitter = int(req.submitted_by_auth_user_id) == vid
+    can_manage = (
+        viewer_can_view_all_pending_partner_confirmations(viewer)
+        or _viewer_can_see_all_confirmations(viewer)
+    )
+    is_own_signature = vid == partner_id
+    if not is_submitter and not can_manage and not is_own_signature:
+        raise HTTPException(
+            status_code=403,
+            detail="Откатить подпись может отправитель отчёта, администратор или сам подписавший партнёр",
+        )
+
+    if not await conf_repo.partner_has_signed(rid, partner_id):
+        raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
+
+    await conf_repo.remove_signature(rid, partner_id)
+    await conf_repo.mark_pending_partners(rid)
+    await session.commit()
+
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=500, detail="internal")
+    access_repo = UserProjectAccessRepository(session)
+    partners = await list_partner_auth_user_ids_for_project(
+        session, access_repo, req.project_id, authorization=authorization
+    )
+    return _request_to_out(req, partners)
+
+
 async def list_pending_partner_confirmations(
     session: AsyncSession,
     viewer: dict,

@@ -15,6 +15,7 @@ from application.partner_report_confirmation_service import (
     list_confirmed_partner_confirmations,
     list_partner_confirmation_comments,
     list_pending_partner_confirmations,
+    revoke_partner_report_confirmation_signature,
     submit_partner_report_confirmation,
     submit_partner_report_confirmation_from_preview,
 )
@@ -123,6 +124,27 @@ async def partner_report_confirmation_delete(
     if not rid:
         raise HTTPException(status_code=400, detail="request_id required")
     return await delete_partner_report_confirmation(session, viewer, rid)
+
+
+@router.delete("/partner-confirmations/{request_id}/signatures/{partner_auth_user_id}")
+async def partner_report_confirmation_revoke_signature(
+    request_id: str,
+    partner_auth_user_id: int,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    """Откат одной подписи партнёра без удаления всего отчёта."""
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await revoke_partner_report_confirmation_signature(
+        session,
+        viewer,
+        rid,
+        partner_auth_user_id,
+        authorization=authorization,
+    )
 
 
 @router.get("/partner-confirmations/pending")

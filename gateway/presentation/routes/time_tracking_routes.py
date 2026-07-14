@@ -1386,6 +1386,19 @@ async def reports_partner_confirmation_delete(
     )
 
 
+@router.delete("/reports/partner-confirmations/{request_id}/signatures/{partner_auth_user_id}")
+async def reports_partner_confirmation_revoke_signature(
+    request_id: str,
+    partner_auth_user_id: int,
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "DELETE",
+        f"/reports/partner-confirmations/{request_id}/signatures/{partner_auth_user_id}",
+        timeout=30.0,
+    )
+
+
 @router.get("/reports/partner-confirmations/pending")
 async def reports_partner_confirmation_pending(
     request: Request,

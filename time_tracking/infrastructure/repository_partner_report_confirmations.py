@@ -188,6 +188,33 @@ class PartnerReportConfirmationRepository:
         )
         return (await self._s.execute(q)).scalar_one_or_none() is not None
 
+    async def remove_signature(self, request_id: str, partner_auth_user_id: int) -> bool:
+        """Удаляет одну подпись партнёра. False, если подписи не было."""
+        rid = (request_id or "").strip()
+        if not rid:
+            return False
+        q = select(ReportPartnerConfirmationSignatureModel).where(
+            and_(
+                ReportPartnerConfirmationSignatureModel.request_id == rid,
+                ReportPartnerConfirmationSignatureModel.partner_auth_user_id
+                == int(partner_auth_user_id),
+            )
+        )
+        row = (await self._s.execute(q)).scalar_one_or_none()
+        if not row:
+            return False
+        await self._s.delete(row)
+        await self._s.flush()
+        return True
+
+    async def mark_pending_partners(self, request_id: str) -> None:
+        row = await self.get_request_by_id(request_id)
+        if not row:
+            return
+        row.status = _STATUS_PENDING
+        row.updated_at = _now_utc()
+        self._s.add(row)
+
     async def mark_fully_confirmed(self, request_id: str) -> None:
         row = await self.get_request_by_id(request_id)
         if not row:
