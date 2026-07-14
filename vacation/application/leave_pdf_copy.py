@@ -57,3 +57,4 @@ DEFAULT_PDF_COPY = LeavePdfCopy(
 )
 
 FIRM_LINE = 'Адвокатской фирмы «Kosta Legal»'
+MANAGING_PARTNER_NAME = 'Azizbek Akhmadjonov'

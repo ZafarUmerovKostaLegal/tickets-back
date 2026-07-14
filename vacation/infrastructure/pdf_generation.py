@@ -10,7 +10,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from application.leave_pdf_copy import DEFAULT_PDF_COPY, FIRM_LINE, KIND_PDF_COPY
+from application.leave_pdf_copy import DEFAULT_PDF_COPY, FIRM_LINE, KIND_PDF_COPY, MANAGING_PARTNER_NAME
 from infrastructure.models import LeaveRequest
 
 _FONT_REG = "LeavePdfRegular"
@@ -77,9 +77,9 @@ def _date_phrase(d: date) -> str:
     return f"«{d.day}» {_MONTHS_GEN[d.month]} {d.year} год."
 
 
-def _partner_dative(req: LeaveRequest) -> str:
-    name = (req.partner_full_name or "").strip()
-    return name or f"User #{req.partner_user_id}"
+def _partner_dative(_req: LeaveRequest) -> str:
+    """В шапке заявления всегда управляющий партнёр фирмы."""
+    return MANAGING_PARTNER_NAME
 
 
 _ROLE_GENITIVE: dict[str, str] = {
@@ -131,10 +131,6 @@ def _draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, max_w: float,
     return y
 
 
-def _draw_underline(c: canvas.Canvas, x: float, y: float, width: float) -> None:
-    c.line(x, y - 1.2, x + width, y - 1.2)
-
-
 def _draw_centered_lines(c: canvas.Canvas, lines: list[str], y: float, page_w: float) -> float:
     cx = page_w / 2
     for line in lines:
@@ -177,16 +173,8 @@ def render_leave_request_pdf(req: LeaveRequest) -> bytes:
 
     y -= 10 * mm
     prefix = f"От {_employee_role_label(req)} "
-    c.drawString(left, y, prefix)
-    prefix_w = c.stringWidth(prefix, font, _FONT_SIZE)
-    name_x = left + prefix_w
     employee_name = (req.employee_full_name or "").strip()
-    if employee_name:
-        c.drawString(name_x, y, employee_name)
-        underline_w = max(55 * mm, c.stringWidth(employee_name, font, _FONT_SIZE) + 6 * mm)
-    else:
-        underline_w = 70 * mm
-    _draw_underline(c, name_x, y, underline_w)
+    c.drawString(left, y, f"{prefix}{employee_name}".rstrip())
 
     y -= 18 * mm
     c.drawCentredString(page_w / 2, y, "ЗАЯВЛЕНИЕ")
