@@ -1209,6 +1209,34 @@ async def apply_time_entries_project_id_fk_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_partner_confirmation_review_priority_patch(conn: AsyncConnection) -> None:
+    """Приоритет проверки отчётов (red/yellow/green) — additive column на существующую таблицу."""
+    await add_columns_if_missing(
+        conn,
+        "tt_report_partner_confirmation_requests",
+        [
+            "review_priority VARCHAR(16) NOT NULL DEFAULT 'yellow'",
+        ],
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE tt_report_partner_confirmation_requests
+            SET review_priority = 'yellow'
+            WHERE review_priority IS NULL OR TRIM(review_priority) = ''
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_status_priority_created
+                ON tt_report_partner_confirmation_requests (status, review_priority, created_at)
+            """
+        )
+    )
+
+
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
@@ -1223,6 +1251,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entries_project_date_index", apply_time_entries_project_date_index_patch),
     ("time_entries_hours_precision", apply_time_entries_hours_precision_patch),
     ("reports", apply_reports_schema_patch),
+    ("partner_confirmation_review_priority", apply_partner_confirmation_review_priority_patch),
     ("invoices", apply_invoices_schema_patch),
     ("project_currency", apply_project_currency_patch),
     ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
