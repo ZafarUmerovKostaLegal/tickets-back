@@ -28,6 +28,12 @@ class InvoiceCreateBody(BaseModel):
     project_id: Optional[str] = Field(None, alias="projectId")
     issue_date: date = Field(..., alias="issueDate")
     due_date: date = Field(..., alias="dueDate")
+    invoice_number: Optional[str] = Field(
+        None,
+        alias="invoiceNumber",
+        max_length=64,
+        description="Номер счёта; если не задан — автогенерация INV-{year}-{seq}",
+    )
     currency: Optional[str] = None
     tax_percent: Optional[Decimal] = Field(None, alias="taxPercent")
     tax2_percent: Optional[Decimal] = Field(None, alias="tax2Percent")
@@ -47,6 +53,14 @@ class InvoiceCreateBody(BaseModel):
         alias="partnerBillingPeriodTo",
         description="Конец периода биллинга; вместе с from — подмножество подтверждённых дат по проекту",
     )
+
+    @field_validator("invoice_number", mode="after")
+    @classmethod
+    def _strip_invoice_number(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
 
 
 class InvoicePatchBody(BaseModel):

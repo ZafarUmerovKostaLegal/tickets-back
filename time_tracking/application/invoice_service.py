@@ -174,6 +174,7 @@ async def create_invoice(
     expense_ids: list[str] | None,
     partner_billing_period_from: date | None = None,
     partner_billing_period_to: date | None = None,
+    invoice_number: str | None = None,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -221,9 +222,20 @@ async def create_invoice(
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
     dp = discount_percent if discount_percent is not None else client.discount_percent
 
-    year = issue_date.year
-    seq = await repo.allocate_next_seq(year)
-    number = f"INV-{year}-{seq:05d}"
+    manual_number = (invoice_number or "").strip()
+    if manual_number:
+        if len(manual_number) > 64:
+            raise HTTPException(status_code=400, detail="Номер счёта слишком длинный (макс. 64 символа)")
+        if await repo.exists_invoice_number(manual_number):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Счёт с номером «{manual_number}» уже существует",
+            )
+        number = manual_number
+    else:
+        year = issue_date.year
+        seq = await repo.allocate_next_seq(year)
+        number = f"INV-{year}-{seq:05d}"
     iid = str(uuid.uuid4())
     now = _now_utc()
     inv = InvoiceModel(
