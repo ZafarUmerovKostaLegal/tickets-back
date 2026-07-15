@@ -48,13 +48,13 @@ def _parse_limit(spec: str, default_count: int, default_window: int) -> tuple[in
 
 
 _DEFAULT_COUNT, _DEFAULT_WINDOW = _parse_limit(
-    os.getenv("RATE_LIMIT_DEFAULT", "120/minute"), 120, 60
+    os.getenv("RATE_LIMIT_DEFAULT", "600/minute"), 600, 60
 )
 _AUTH_COUNT, _AUTH_WINDOW = _parse_limit(
-    os.getenv("RATE_LIMIT_AUTH", "30/minute"), 30, 60
+    os.getenv("RATE_LIMIT_AUTH", "60/minute"), 60, 60
 )
 _REPORTS_COUNT, _REPORTS_WINDOW = _parse_limit(
-    os.getenv("RATE_LIMIT_REPORTS", "60/minute"), 60, 60
+    os.getenv("RATE_LIMIT_REPORTS", "300/minute"), 300, 60
 )
 
 

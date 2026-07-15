@@ -34,7 +34,10 @@ async def require_bearer_user(
     if r.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     if r.status_code >= 400:
-        raise HTTPException(status_code=503, detail="Auth service error")
+        detail = f"Auth service error (HTTP {r.status_code})"
+        if r.status_code == 429:
+            detail = "Auth service rate limited (HTTP 429)"
+        raise HTTPException(status_code=503, detail=detail)
     data = r.json()
     if not isinstance(data, dict) or data.get("id") is None:
         raise HTTPException(status_code=401, detail="Invalid user payload")

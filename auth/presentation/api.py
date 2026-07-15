@@ -6,7 +6,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
-from backend_common.rate_limit import RateLimitMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import engine, Base
 from infrastructure.config import get_settings, validate_production_secrets
@@ -74,7 +73,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SqlInjectionGuardMiddleware)
-app.add_middleware(RateLimitMiddleware, service_name="auth")
+# Rate limiting stays on gateway only — auth is called by every service via /users/me
+# from a few Docker IPs; per-IP limits there lock out the whole cluster.
 app.include_router(auth_routes.router)
 app.include_router(user_routes.router)
 app.include_router(role_routes.router)

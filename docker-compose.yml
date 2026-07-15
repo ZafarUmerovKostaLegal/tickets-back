@@ -41,6 +41,10 @@ services:
       - ATTENDANCE_HIKVISION_ALLOWED_IPS=${ATTENDANCE_HIKVISION_ALLOWED_IPS:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
       - CORS_ALLOW_PRIVATE_NETWORK=${CORS_ALLOW_PRIVATE_NETWORK:-true}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-600/minute}
+      - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-60/minute}
+      - RATE_LIMIT_REPORTS=${RATE_LIMIT_REPORTS:-300/minute}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
       # Prod: unique *_DB_PASSWORD / REDIS_PASSWORD+REDIS_URL / WS_INTERNAL_SECRET — see .env.example (rotation ≠ wipe).
