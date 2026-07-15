@@ -57,18 +57,9 @@ app = FastAPI(
 )
 
 
-def _auth_cors_origins() -> list[str]:
-    s = get_settings()
-    return resolve_cors_origins(
-        frontend_url=s.frontend_url,
-        environment=getattr(s, "environment", None) or "",
-        include_local_defaults=True,
-    )
-
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_auth_cors_origins(),
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

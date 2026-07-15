@@ -78,52 +78,21 @@ register_exception_handlers(app)
 
 
 def _cors_origins() -> list[str]:
-    settings = get_settings()
-    return resolve_cors_origins(
-        frontend_url=settings.frontend_url,
-        environment=settings.environment,
-        include_local_defaults=True,
-    )
-
-
-_CORS_PRIVATE_ORIGIN_REGEX = (
-    r"^https?://("
-    r"localhost|127\.0\.0\.1|"
-    r"192\.168\.\d{1,3}\.\d{1,3}|"
-    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
-    r"172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}"
-    r")(:\d+)?$"
-)
-
-_CORS_KOSTALEGAL_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*kostalegal\.com$"
+    return resolve_cors_origins()
 
 
 def _cors_origin_regex(settings) -> str | None:
-    env = (settings.environment or "").strip().lower()
-    parts: list[str] = []
-    if settings.cors_allow_private_network:
-        parts.append(_CORS_PRIVATE_ORIGIN_REGEX)
-    if env == "production":
-        parts.append(_CORS_KOSTALEGAL_ORIGIN_REGEX)
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return "|".join(f"(?:{p})" for p in parts)
-
-
-origins = _cors_origins()
-_settings = get_settings()
-_cors_regex = _cors_origin_regex(_settings)
+    """Kept for tests; wildcard origins do not need a regex."""
+    _ = settings
+    return None
 
 
 app.add_middleware(TimeTrackingClientsPathRewriteMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=_cors_regex,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Location"],
