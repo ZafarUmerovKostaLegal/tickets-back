@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -26,6 +27,7 @@ from infrastructure.models import (
 )
 from infrastructure.pdf_generation import render_leave_request_pdf
 
+_log = logging.getLogger("vacation.leave_request")
 _ANNUAL_KIND = KIND_BY_KEY["annual_vacation"]
 
 
@@ -140,10 +142,16 @@ def save_pdf_to_media(req: LeaveRequest, pdf_bytes: bytes) -> str:
     settings = get_settings()
     base = Path(settings.media_path).resolve()
     subdir = base / "vacation_leave_requests" / str(req.created_at.year) / str(req.id)
-    subdir.mkdir(parents=True, exist_ok=True)
-    name = f"leave_request_{req.id}_{uuid4().hex}.pdf"
-    target = subdir / name
-    target.write_bytes(pdf_bytes)
+    try:
+        subdir.mkdir(parents=True, exist_ok=True)
+        name = f"leave_request_{req.id}_{uuid4().hex}.pdf"
+        target = subdir / name
+        target.write_bytes(pdf_bytes)
+    except OSError as e:
+        raise OSError(
+            f"Не удалось записать PDF в MEDIA_PATH={base}: {e}. "
+            "Контейнер vacation должен иметь права записи на том media (uid 10001)."
+        ) from e
     return f"vacation_leave_requests/{req.created_at.year}/{req.id}/{name}"
 
 
@@ -152,11 +160,15 @@ async def render_and_attach_pdf(
     req: LeaveRequest,
 ) -> bytes:
     pdf_bytes = render_leave_request_pdf(req)
-    key = save_pdf_to_media(req, pdf_bytes)
-    req.pdf_storage_key = key
-    req.updated_at = _utc_now()
-    session.add(req)
-    await session.flush()
+    try:
+        key = save_pdf_to_media(req, pdf_bytes)
+        req.pdf_storage_key = key
+        req.updated_at = _utc_now()
+        session.add(req)
+        await session.flush()
+    except OSError as e:
+        # Keep the leave request; email can still attach in-memory PDF.
+        _log.exception("PDF leave request not stored on disk: %s", e)
     return pdf_bytes
 
 

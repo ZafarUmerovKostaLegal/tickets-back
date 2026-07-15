@@ -244,11 +244,19 @@ async def post_leave_request(
             date_to=body.date_to,
             reason=body.reason,
         )
+        pdf_bytes = await render_and_attach_pdf(session, req)
+        await session.commit()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    pdf_bytes = await render_and_attach_pdf(session, req)
-    await session.commit()
+    except OSError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось создать заявку на отпуск: {exc}",
+        ) from exc
 
     sent = await send_leave_request_to_partner(req, pdf_bytes)
     if sent:
