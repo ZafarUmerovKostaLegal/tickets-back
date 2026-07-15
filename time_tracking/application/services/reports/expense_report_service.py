@@ -18,6 +18,7 @@ from application.report_builder import (
 )
 from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeManagerClientExpenseCategoryModel
+from infrastructure.report_cache import get_report, set_report
 from application.services.reports._base import (
     _d,
     _money,
@@ -49,6 +50,21 @@ async def get_expense_report(
     page: int = 1,
     per_page: int = 100,
 ) -> dict:
+    _cache_params = {
+        "fn": "get_expense_report",
+        "group_by": group_by,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "client_ids": sorted(client_ids) if client_ids else None,
+        "project_ids": sorted(project_ids) if project_ids else None,
+        "user_ids": sorted(user_ids) if user_ids else None,
+        "page": page,
+        "per_page": per_page,
+    }
+    _cached = get_report(_cache_params)
+    if _cached is not None:
+        return _cached
+
     raw_expenses = await _fetch_expense_report_data(
         date_from, date_to, user_ids, project_ids,
     )
@@ -102,7 +118,7 @@ async def get_expense_report(
     start = (page - 1) * per_page
     results = all_rows[start: start + per_page]
 
-    return build_response(
+    out = build_response(
         results=results,
         total_entries=total_entries_count,
         page=page,
@@ -112,6 +128,8 @@ async def get_expense_report(
         date_from=date_from,
         date_to=date_to,
     )
+    set_report(_cache_params, out)
+    return out
 
 
 async def get_expense_report_all_rows(

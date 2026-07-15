@@ -2,9 +2,9 @@
 Simple in-process TTL cache for expensive report computations.
 
 Two separate caches:
-- `DIM_CACHE`    — dimension maps (users/projects/clients/tasks). TTL 60 s.
+- `DIM_CACHE`    — dimension maps (users/projects/clients/tasks). TTL 120 s.
   Invalidated explicitly when objects are created/updated/deleted.
-- `REPORT_CACHE` — full report responses keyed by query parameters. TTL 90 s.
+- `REPORT_CACHE` — full report responses keyed by query parameters. TTL 180 s.
   Evicted automatically on TTL expiry; also invalidated when
   time entries change (created / deleted / voided) or rate changes occur.
 
@@ -70,8 +70,8 @@ class _TTLStore:
                           
                                                                                
 
-DIM_CACHE   = _TTLStore("dim",    ttl=60.0)                                      
-REPORT_CACHE = _TTLStore("report", ttl=90.0)                        
+DIM_CACHE   = _TTLStore("dim",    ttl=120.0)
+REPORT_CACHE = _TTLStore("report", ttl=180.0)                        
 
 
                                                                                

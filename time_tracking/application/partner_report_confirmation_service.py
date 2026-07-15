@@ -6,10 +6,13 @@ from datetime import date
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.project_partner_users import list_partner_auth_user_ids_for_project
+from application.project_partner_users import (
+    list_partner_auth_user_ids_by_projects,
+    list_partner_auth_user_ids_for_project,
+)
 from application.partner_confirmation_team_scope import (
-    list_report_auth_user_ids_for_project_period,
     list_team_member_auth_user_ids_for_partner,
+    periods_overlapping_team_entries,
 )
 from application.reports.partner_scope import (
     normalize_partner_pending_scope,
@@ -25,6 +28,13 @@ from application.review_priority import (
     normalize_review_priority,
     paginate_items,
     sort_pending_by_review_priority,
+)
+from infrastructure.auth_directory_cache import (
+    BADGE_COUNT_CACHE,
+    CONFIRMED_LIST_CACHE,
+    PENDING_LIST_CACHE,
+    invalidate_partner_confirmation_read_caches,
+    should_run_pending_reconcile,
 )
 from infrastructure.repository_access import UserProjectAccessRepository
 from infrastructure.repository_clients import ClientProjectRepository
@@ -95,6 +105,22 @@ async def reconcile_confirmation_if_complete(
     return True
 
 
+async def _reconcile_pending_rows(
+    conf_repo: PartnerReportConfirmationRepository,
+    candidates: list,
+    partners_by_project: dict[str, list[int]],
+) -> bool:
+    """Помечает completable заявки как fully_confirmed. Без повторной загрузки списка."""
+    changed = False
+    for m in candidates:
+        if (getattr(m, "status", None) or "").strip() == "fully_confirmed":
+            continue
+        partners = partners_by_project.get(m.project_id, [])
+        if await reconcile_confirmation_if_complete(conf_repo, m, partners):
+            changed = True
+    return changed
+
+
 async def _reconcile_all_completable_pending(
     session: AsyncSession,
     access_repo: UserProjectAccessRepository,
@@ -103,14 +129,13 @@ async def _reconcile_all_completable_pending(
 ) -> None:
     conf_repo = PartnerReportConfirmationRepository(session)
     candidates = await conf_repo.list_all_pending()
-    changed = False
-    for m in candidates:
-        partners = await list_partner_auth_user_ids_for_project(
-            session, access_repo, m.project_id, authorization=authorization
-        )
-        if await reconcile_confirmation_if_complete(conf_repo, m, partners):
-            changed = True
-    if changed:
+    partners_by_project = await list_partner_auth_user_ids_by_projects(
+        session,
+        access_repo,
+        [m.project_id for m in candidates],
+        authorization=authorization,
+    )
+    if await _reconcile_pending_rows(conf_repo, candidates, partners_by_project):
         await session.commit()
 
 
@@ -245,6 +270,7 @@ async def submit_partner_report_confirmation(
         submitted_by_auth_user_id=vid,
     )
     await session.commit()
+    invalidate_partner_confirmation_read_caches()
     loaded = await conf_repo.get_request_by_id(row.id, load_signatures=True)
     if not loaded:
         raise HTTPException(status_code=500, detail="internal")
@@ -280,6 +306,7 @@ async def submit_partner_report_confirmation_from_preview(
             )
         if await reconcile_confirmation_if_complete(conf_repo, existing, partners):
             await session.commit()
+            invalidate_partner_confirmation_read_caches()
         return _request_to_out(existing, partners)
     vid = _viewer_id(viewer)
     projects = ClientProjectRepository(session)
@@ -347,6 +374,7 @@ async def confirm_partner_report_confirmation(
     if partners_confirmation_is_complete(partners, signed_ids):
         await conf_repo.mark_fully_confirmed(request_id)
     await session.commit()
+    invalidate_partner_confirmation_read_caches()
     req = await conf_repo.get_request_by_id(request_id, load_signatures=True)
     if not req:
         raise HTTPException(status_code=500, detail="internal")
@@ -388,6 +416,7 @@ async def delete_partner_report_confirmation(
     if not ok:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
     await session.commit()
+    invalidate_partner_confirmation_read_caches()
     return {"ok": True, "id": rid}
 
 
@@ -442,6 +471,7 @@ async def revoke_partner_report_confirmation_signature(
         raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
     await conf_repo.mark_pending_partners(rid)
     await session.commit()
+    invalidate_partner_confirmation_read_caches()
 
     req = await conf_repo.get_request_by_id(rid, load_signatures=True)
     if not req:
@@ -486,6 +516,7 @@ async def set_partner_confirmation_review_priority(
     if not ok:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
     await session.commit()
+    invalidate_partner_confirmation_read_caches()
     req = await conf_repo.get_request_by_id(rid, load_signatures=True)
     if not req:
         raise HTTPException(status_code=500, detail="internal")
@@ -505,71 +536,147 @@ async def list_pending_partner_confirmations(
     priority: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    include_entry_counts: bool = True,
 ) -> dict:
     vid = _viewer_id(viewer)
     mode = normalize_partner_pending_scope(scope)
     priority_filter = normalize_review_priority(priority, required=False)
-    conf_repo = PartnerReportConfirmationRepository(session)
-    access_repo = UserProjectAccessRepository(session)
-    await _reconcile_all_completable_pending(
-        session, access_repo, authorization=authorization
+    cache_key = (
+        f"pending|{vid}|{mode}|{priority_filter or ''}|{page}|{page_size}|"
+        f"{int(include_entry_counts)}"
     )
-    candidates = await conf_repo.list_all_pending(review_priority=priority_filter)
+    cached = PENDING_LIST_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
 
     if mode == "all" and not viewer_can_view_all_pending_partner_confirmations(viewer):
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    conf_repo = PartnerReportConfirmationRepository(session)
+    access_repo = UserProjectAccessRepository(session)
+
+    # Один полный список кандидатов; reconcile — не чаще раза в минуту (только UPDATE status).
+    candidates = await conf_repo.list_all_pending(review_priority=None)
+    partners_by_project = await list_partner_auth_user_ids_by_projects(
+        session,
+        access_repo,
+        [m.project_id for m in candidates],
+        authorization=authorization,
+    )
+    if should_run_pending_reconcile() and await _reconcile_pending_rows(
+        conf_repo, candidates, partners_by_project
+    ):
+        await session.commit()
+        # После reconcile отбрасываем уже fully_confirmed (строки не удаляются).
+        candidates = [
+            m for m in candidates
+            if (getattr(m, "status", None) or "").strip() != "fully_confirmed"
+        ]
+
     visible_rows: list = []
-    partners_by_id: dict[str, list[int]] = {}
-    team_members_cache: dict[int, set[int]] = {}
-    report_users_cache: dict[tuple[str, date, date], set[int]] = {}
+    partners_by_request: dict[str, list[int]] = {}
+    priority_counts = {"red": 0, "yellow": 0, "green": 0, "all": 0}
+
+    overlapping_periods: set[tuple[str, date, date]] = set()
+    team_member_ids: set[int] = set()
+    if mode == "mine":
+        team_member_ids = await list_team_member_auth_user_ids_for_partner(session, vid)
+        if team_member_ids:
+            period_keys = list(dict.fromkeys(
+                (m.project_id, m.date_from, m.date_to) for m in candidates
+            ))
+            overlapping_periods = await periods_overlapping_team_entries(
+                session, period_keys, team_member_ids
+            )
+
     for m in candidates:
-        partners = await list_partner_auth_user_ids_for_project(
-            session, access_repo, m.project_id, authorization=authorization
-        )
+        partners = partners_by_project.get(m.project_id, [])
         if mode == "mine":
-            if vid not in team_members_cache:
-                team_members_cache[vid] = await list_team_member_auth_user_ids_for_partner(
-                    session, vid
-                )
             report_key = (m.project_id, m.date_from, m.date_to)
-            if report_key not in report_users_cache:
-                report_users_cache[report_key] = await list_report_auth_user_ids_for_project_period(
-                    session,
-                    project_id=m.project_id,
-                    date_from=m.date_from,
-                    date_to=m.date_to,
-                )
+            # Synthetic set: only needed for intersect check with team_member_ids.
+            report_user_ids = team_member_ids if report_key in overlapping_periods else set()
             if not pending_confirmation_visible_for_user_mine(
                 m,
                 required_partners=partners,
                 viewer_id=vid,
-                team_member_ids=team_members_cache[vid],
-                report_user_ids=report_users_cache[report_key],
+                team_member_ids=team_member_ids,
+                report_user_ids=report_user_ids,
             ):
                 continue
+        prio = (getattr(m, "review_priority", None) or DEFAULT_REVIEW_PRIORITY).strip().lower()
+        if prio not in ("red", "yellow", "green"):
+            prio = DEFAULT_REVIEW_PRIORITY
+        priority_counts["all"] += 1
+        priority_counts[prio] += 1
+        if priority_filter and prio != priority_filter:
+            continue
         visible_rows.append(m)
-        partners_by_id[m.id] = partners
+        partners_by_request[m.id] = partners
 
     sorted_rows = sort_pending_by_review_priority(visible_rows)
     page_rows, safe_page, safe_size, total = paginate_items(
         sorted_rows, page=page, page_size=page_size
     )
-    entry_counts = await _entry_counts_for_request_rows(session, page_rows)
+    entry_counts: dict[str, int] = {}
+    if include_entry_counts:
+        entry_counts = await _entry_counts_for_request_rows(session, page_rows)
     items = [
         _request_to_out(
             m,
-            partners_by_id.get(m.id, []),
-            entry_count=entry_counts.get(m.id, 0),
+            partners_by_request.get(m.id, []),
+            entry_count=entry_counts.get(m.id) if include_entry_counts else None,
         )
         for m in page_rows
     ]
-    return {
+    signature_pending_count = 0
+    for m in visible_rows:
+        partners = partners_by_request.get(m.id, [])
+        signed_ids = {s.partner_auth_user_id for s in (m.signatures or [])}
+        if vid in partners and vid not in signed_ids:
+            signature_pending_count += 1
+    out = {
         "items": items,
         "page": safe_page,
         "pageSize": safe_size,
         "total": total,
+        "priorityCounts": priority_counts,
+        "signaturePendingCount": signature_pending_count,
     }
+    PENDING_LIST_CACHE.set(cache_key, out)
+    return out
+
+
+async def count_partner_pending_signatures_for_viewer(
+    session: AsyncSession,
+    viewer: dict,
+    *,
+    authorization: str | None,
+    scope: str | None = None,
+) -> dict:
+    """Лёгкий счётчик для badge: pageSize=1, без entry_counts."""
+    vid = _viewer_id(viewer)
+    mode = normalize_partner_pending_scope(scope)
+    cache_key = f"badge|{vid}|{mode}"
+    cached = BADGE_COUNT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    page = await list_pending_partner_confirmations(
+        session,
+        viewer,
+        authorization=authorization,
+        scope=mode,
+        priority=None,
+        page=1,
+        page_size=1,
+        include_entry_counts=False,
+    )
+    out = {
+        "count": int(page.get("signaturePendingCount") or 0),
+        "scope": mode,
+    }
+    BADGE_COUNT_CACHE.set(cache_key, out)
+    return out
 
 
 async def list_confirmed_partner_confirmations(
@@ -582,11 +689,17 @@ async def list_confirmed_partner_confirmations(
     before: date | None = None,
 ) -> list[dict]:
     vid = _viewer_id(viewer)
+    cache_key = (
+        f"confirmed|{vid}|{date_from}|{date_to}|{before}|"
+        f"{int(_viewer_can_see_all_confirmations(viewer))}"
+    )
+    cached = CONFIRMED_LIST_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
-    await _reconcile_all_completable_pending(
-        session, access_repo, authorization=authorization
-    )
+    # Без отдельного полного скана всех pending: reconcile только строк из выборки ниже.
     if _viewer_can_see_all_confirmations(viewer):
         rows = await conf_repo.list_all_fully_confirmed(
             date_from=date_from,
@@ -599,8 +712,6 @@ async def list_confirmed_partner_confirmations(
                 session, viewer, authorization=authorization
             )
         )
-                                                                          
-                                                                                 
         rows = await conf_repo.list_visible_for(
             vid,
             partner_project_ids=partner_projects,
@@ -609,13 +720,31 @@ async def list_confirmed_partner_confirmations(
             date_to=date_to,
             before=before,
         )
+
+    partners_by_project = await list_partner_auth_user_ids_by_projects(
+        session,
+        access_repo,
+        [m.project_id for m in rows],
+        authorization=authorization,
+    )
+    pending_in_list = [
+        m for m in rows
+        if (getattr(m, "status", None) or "").strip() == "pending_partners"
+    ]
+    if pending_in_list and should_run_pending_reconcile() and await _reconcile_pending_rows(
+        conf_repo, pending_in_list, partners_by_project
+    ):
+        await session.commit()
+        rows = [
+            m for m in rows
+            if (getattr(m, "status", None) or "").strip() in {"fully_confirmed", "pending_partners"}
+        ]
+
     summaries = await conf_repo.comments_summary_by_request_ids([m.id for m in rows])
     entry_counts = await _entry_counts_for_request_rows(session, rows)
     out: list[dict] = []
     for m in rows:
-        partners = await list_partner_auth_user_ids_for_project(
-            session, access_repo, m.project_id, authorization=authorization
-        )
+        partners = partners_by_project.get(m.project_id, [])
         count, last = summaries.get(m.id, (0, None))
         out.append(
             _request_to_out(
@@ -626,6 +755,7 @@ async def list_confirmed_partner_confirmations(
                 entry_count=entry_counts.get(m.id, 0),
             )
         )
+    CONFIRMED_LIST_CACHE.set(cache_key, out)
     return out
 
 

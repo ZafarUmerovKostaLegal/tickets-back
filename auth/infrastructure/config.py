@@ -16,15 +16,37 @@ class Settings(BaseSettings):
     auth_redirect_uri: str = Field(
         default="",
         validation_alias=AliasChoices("AUTH_REDIRECT_URI", "AZURE_REDIRECT_URI"),
+        description="Web OAuth callback (gateway /api/v1/auth/azure/callback).",
+    )
+    auth_mobile_redirect_uri: str = Field(
+        default="",
+        validation_alias=AliasChoices("AUTH_MOBILE_REDIRECT_URI", "AZURE_MOBILE_REDIRECT_URI"),
+        description="Android/iOS MSAL redirect (msauth://...), allow-listed for POST /auth/exchange.",
+    )
+    auth_redirect_uris_extra: str = Field(
+        default="",
+        validation_alias=AliasChoices("AUTH_REDIRECT_URIS_EXTRA"),
+        description="Comma-separated extra redirect URIs allowed on exchange.",
     )
 
-    @field_validator("auth_redirect_uri", mode="before")
+    @field_validator(
+        "auth_redirect_uri",
+        "auth_mobile_redirect_uri",
+        mode="before",
+    )
     @classmethod
     def _strip_auth_redirect_uri(cls, v: object) -> str:
         s = (str(v) if v is not None else "").strip().replace("\n", "").replace("\r", "")
         if not s:
             return ""
-        return s.rstrip("/")
+        if s.startswith(("http://", "https://")):
+            return s.rstrip("/")
+        return s
+
+    @field_validator("auth_redirect_uris_extra", mode="before")
+    @classmethod
+    def _strip_extra_uris(cls, v: object) -> str:
+        return (str(v) if v is not None else "").strip()
     jwt_secret: str = Field(
         default="",
         validation_alias=AliasChoices("JWT_SECRET", "jwt_secret"),

@@ -1237,6 +1237,36 @@ async def apply_partner_confirmation_review_priority_patch(conn: AsyncConnection
     )
 
 
+async def apply_time_entries_active_partial_indexes_patch(conn: AsyncConnection) -> None:
+    """Partial indexes for active (non-voided) entries — additive only, no row deletes."""
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entries_active_project_date
+                ON time_tracking_entries (project_id, work_date)
+                WHERE voided_at IS NULL
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_entries_active_work_date
+                ON time_tracking_entries (work_date)
+                WHERE voided_at IS NULL
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_rpconf_status_updated
+                ON tt_report_partner_confirmation_requests (status, updated_at DESC)
+            """
+        )
+    )
+
+
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
@@ -1268,5 +1298,6 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("report_performance_indexes", apply_report_performance_indexes_patch),
     ("time_entry_archives", apply_time_entry_archives_patch),
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
+    ("time_entries_active_partial_indexes", apply_time_entries_active_partial_indexes_patch),
 )
 

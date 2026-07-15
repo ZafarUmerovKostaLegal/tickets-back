@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.bot_runner import build_bot_application
 from infrastructure.config import get_settings
 from presentation.routes import health
@@ -45,7 +46,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

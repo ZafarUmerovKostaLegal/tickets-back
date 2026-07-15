@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.partner_report_confirmation_service import (
     confirm_partner_report_confirmation,
+    count_partner_pending_signatures_for_viewer,
     create_partner_confirmation_comment,
     delete_partner_report_confirmation,
     list_confirmed_partner_confirmations,
@@ -174,6 +175,21 @@ async def partner_report_confirmation_set_priority(
     )
 
 
+@router.get("/partner-confirmations/pending/badge")
+async def partner_report_confirmation_pending_badge(
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+    scope: Optional[str] = Query(None),
+):
+    return await count_partner_pending_signatures_for_viewer(
+        session,
+        viewer,
+        authorization=authorization,
+        scope=scope,
+    )
+
+
 @router.get("/partner-confirmations/pending")
 async def partner_report_confirmation_pending(
     session: AsyncSession = Depends(get_session),
@@ -189,6 +205,7 @@ async def partner_report_confirmation_pending(
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200, alias="pageSize"),
+    include_entry_counts: bool = Query(True, alias="includeEntryCounts"),
 ):
     return await list_pending_partner_confirmations(
         session,
@@ -198,6 +215,7 @@ async def partner_report_confirmation_pending(
         priority=priority,
         page=page,
         page_size=page_size,
+        include_entry_counts=include_entry_counts,
     )
 
 

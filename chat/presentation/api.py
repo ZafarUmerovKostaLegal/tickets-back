@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.schema_patch_runner import apply_registered_schema_patches
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import Base, engine
 from infrastructure.schema_patches import REGISTERED_CHAT_SCHEMA_PATCHES
 from presentation.routes import attachments_routes, health, messages_routes, polls_routes, retention_routes, rooms_routes
@@ -35,7 +36,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

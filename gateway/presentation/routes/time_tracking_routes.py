@@ -1413,6 +1413,19 @@ async def reports_partner_confirmation_set_priority(
     )
 
 
+@router.get("/reports/partner-confirmations/pending/badge")
+async def reports_partner_confirmation_pending_badge(
+    request: Request,
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "GET",
+        "/reports/partner-confirmations/pending/badge",
+        params=dict(request.query_params),
+        timeout=30.0,
+    )
+
+
 @router.get("/reports/partner-confirmations/pending")
 async def reports_partner_confirmation_pending(
     request: Request,

@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from application.entry_pricing import (
     _billable_amount_for_entry,
@@ -50,6 +51,19 @@ from application.services.reports._base import (
 )
 
 TIME_GROUP_OPTIONS = frozenset({"clients", "projects", "tasks", "team"})
+
+_TIME_ENTRY_REPORT_LOAD = load_only(
+    TimeEntryModel.id,
+    TimeEntryModel.auth_user_id,
+    TimeEntryModel.project_id,
+    TimeEntryModel.task_id,
+    TimeEntryModel.work_date,
+    TimeEntryModel.hours,
+    TimeEntryModel.is_billable,
+    TimeEntryModel.description,
+    TimeEntryModel.voided_at,
+    TimeEntryModel.voided_by_auth_user_id,
+)
 
 
 MAX_ENTRY_LOG_ROWS = 100_000
@@ -457,7 +471,7 @@ async def get_time_report(
     if task_ids:
         cond.append(TimeEntryModel.task_id.in_(task_ids))
 
-    entries_q = select(TimeEntryModel).where(and_(*cond))
+    entries_q = select(TimeEntryModel).options(_TIME_ENTRY_REPORT_LOAD).where(and_(*cond))
     entries = list((await session.execute(entries_q)).scalars().all())
 
     vcond = _voided_entry_conditions(
@@ -468,7 +482,11 @@ async def get_time_report(
     if task_ids:
         vcond.append(TimeEntryModel.task_id.in_(task_ids))
     voided_entries = list(
-        (await session.execute(select(TimeEntryModel).where(and_(*vcond)))).scalars().all()
+        (
+            await session.execute(
+                select(TimeEntryModel).options(_TIME_ENTRY_REPORT_LOAD).where(and_(*vcond))
+            )
+        ).scalars().all()
     )
 
     users_map = await _load_users_map(session)
@@ -785,7 +803,7 @@ async def get_time_report_flat_entries(
         cond.append(TimeEntryModel.is_billable.is_(is_billable))
     if task_ids:
         cond.append(TimeEntryModel.task_id.in_(task_ids))
-    entries_q = select(TimeEntryModel).where(and_(*cond))
+    entries_q = select(TimeEntryModel).options(_TIME_ENTRY_REPORT_LOAD).where(and_(*cond))
     entries = list((await session.execute(entries_q)).scalars().all())
 
     vcond = _voided_entry_conditions(
@@ -796,7 +814,11 @@ async def get_time_report_flat_entries(
     if task_ids:
         vcond.append(TimeEntryModel.task_id.in_(task_ids))
     voided_entries = list(
-        (await session.execute(select(TimeEntryModel).where(and_(*vcond)))).scalars().all()
+        (
+            await session.execute(
+                select(TimeEntryModel).options(_TIME_ENTRY_REPORT_LOAD).where(and_(*vcond))
+            )
+        ).scalars().all()
     )
 
     users_map = await _load_users_map(session)

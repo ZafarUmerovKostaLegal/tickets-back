@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN useradd -r -u 10001 -g root appuser
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -15,5 +17,8 @@ COPY backend_common ./backend_common
 COPY auth/ ./
 
 EXPOSE 1236
+
+RUN chown -R appuser:root /app
+USER appuser
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1236", "--no-access-log", "--log-level", "info"]

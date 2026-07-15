@@ -4,7 +4,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from infrastructure.config import get_settings
 from infrastructure.oauth_state_jwt import parse_oauth_state_token
@@ -15,26 +15,44 @@ router = APIRouter(prefix="/api/v1/auth/azure", tags=["auth"])
 
 
 class AzureExchangeBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     code: str
+    redirect_uri: Optional[str] = Field(
+        None,
+        alias="redirectUri",
+        description="Must match MSAL redirect (e.g. msauth://…) and AUTH_MOBILE_REDIRECT_URI / allow-list.",
+    )
+    code_verifier: Optional[str] = Field(
+        None,
+        alias="codeVerifier",
+        description="PKCE verifier from the native app authorize request.",
+    )
 
 
 @router.post(
     "/exchange",
     summary="Обмен Azure authorization code на JWT (мобильные и native-клиенты)",
     description=(
-        "После OAuth в Flutter/native передайте `code` из redirect URI. "
+        "После OAuth в Flutter/native передайте `code`, а также `redirectUri` и `codeVerifier` (PKCE) "
+        "из тела запроса — как в приложении. "
         "Ответ: `{ \"access_token\": \"...\", \"token_type\": \"bearer\" }`. "
-        "Redirect URI при обмене должен совпадать с `AUTH_REDIRECT_URI` на сервере и с тем, "
-        "что указан в запросе авторизации MSAL/AppAuth."
+        "Redirect URI должен совпадать с `AUTH_MOBILE_REDIRECT_URI` (msauth://…) на auth "
+        "и с URI платформы Android в Azure. Web callback URI не подставляйте сюда."
     ),
 )
 async def azure_exchange(body: AzureExchangeBody):
     settings = get_settings()
+    payload: dict = {"code": body.code}
+    if body.redirect_uri and str(body.redirect_uri).strip():
+        payload["redirect_uri"] = str(body.redirect_uri).strip()
+    if body.code_verifier and str(body.code_verifier).strip():
+        payload["code_verifier"] = str(body.code_verifier).strip()
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
                 f"{settings.auth_service_url.rstrip('/')}/auth/exchange",
-                json={"code": body.code},
+                json=payload,
             )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail="Auth service unavailable") from e

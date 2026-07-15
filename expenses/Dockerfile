@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN useradd -r -u 10001 -g root appuser
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -23,5 +25,8 @@ RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
 EXPOSE 1242
 
 ENV LOG_LEVEL=info
+
+RUN chown -R appuser:root /app
+USER appuser
 
 CMD ["./docker-entrypoint.sh"]

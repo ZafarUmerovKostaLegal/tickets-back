@@ -13,6 +13,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from backend_common.sql_injection_guard import validate_sql_identifier
+
 logger = logging.getLogger(__name__)
 
 PatchFn = Callable[[AsyncConnection], Awaitable[None]]
@@ -20,22 +22,26 @@ PatchFn = Callable[[AsyncConnection], Awaitable[None]]
 DEFAULT_PATCH_LOG_TABLE = "schema_patch_log"
 
 
+def _safe_table(table_name: str) -> str:
+    return validate_sql_identifier(table_name, kind="table")
+
+
 async def ensure_patch_log_table(
     conn: AsyncConnection,
     *,
     table_name: str = DEFAULT_PATCH_LOG_TABLE,
 ) -> None:
-    # table_name is internal constant only — never pass user input
-    await conn.execute(
-        text(
-            f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                patch_name VARCHAR(128) PRIMARY KEY,
-                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
+    tbl = _safe_table(table_name)
+    # Identifier validated; bind params cannot substitute table names in DDL.
+    ddl = (
+        "CREATE TABLE IF NOT EXISTS "
+        + tbl
+        + " ("
+        + "patch_name VARCHAR(128) PRIMARY KEY, "
+        + "applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
+        + ")"
     )
+    await conn.execute(text(ddl))
 
 
 async def _is_patch_applied(
@@ -44,10 +50,9 @@ async def _is_patch_applied(
     *,
     table_name: str = DEFAULT_PATCH_LOG_TABLE,
 ) -> bool:
-    r = await conn.execute(
-        text(f"SELECT 1 FROM {table_name} WHERE patch_name = :name LIMIT 1"),
-        {"name": patch_name},
-    )
+    tbl = _safe_table(table_name)
+    q = "SELECT 1 FROM " + tbl + " WHERE patch_name = :name LIMIT 1"
+    r = await conn.execute(text(q), {"name": patch_name})
     return r.scalar() is not None
 
 
@@ -57,16 +62,13 @@ async def _mark_patch_applied(
     *,
     table_name: str = DEFAULT_PATCH_LOG_TABLE,
 ) -> None:
-    await conn.execute(
-        text(
-            f"""
-            INSERT INTO {table_name} (patch_name)
-            VALUES (:name)
-            ON CONFLICT (patch_name) DO NOTHING
-            """
-        ),
-        {"name": patch_name},
+    tbl = _safe_table(table_name)
+    q = (
+        "INSERT INTO "
+        + tbl
+        + " (patch_name) VALUES (:name) ON CONFLICT (patch_name) DO NOTHING"
     )
+    await conn.execute(text(q), {"name": patch_name})
 
 
 async def apply_registered_schema_patches(

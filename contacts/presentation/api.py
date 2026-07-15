@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 
 from presentation.routes import client_contacts, colleagues, health
 
@@ -14,7 +15,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

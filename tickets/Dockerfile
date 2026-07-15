@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN useradd -r -u 10001 -g root appuser
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -17,5 +19,8 @@ COPY tickets/ ./
 #   python scripts/purge_all_tickets.py --execute --confirm WIPE_ALL_TICKETS
 
 EXPOSE 1235
+
+RUN chown -R appuser:root /app
+USER appuser
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1235", "--no-access-log", "--log-level", "info"]

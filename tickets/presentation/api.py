@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import engine, Base
 from infrastructure.models import TicketModel, CommentModel
 from presentation.routes import health, tickets_routes, ws_tickets
@@ -31,7 +32,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

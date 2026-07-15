@@ -3,6 +3,8 @@ source =
     backend_common
     gateway/application
     time_tracking/application
+    time_tracking/infrastructure/report_cache.py
+    time_tracking/infrastructure/auth_directory_cache.py
     auth/application
     correspondence/application
     expenses/application
@@ -14,10 +16,26 @@ omit =
     */tests/*
     time_tracking/application/invoice_service.py
     time_tracking/application/labor_statistics_service.py
-    time_tracking/application/services/*
-    time_tracking/application/partner_report_confirmation_service.py
-    time_tracking/application/team_workload_builder.py
-    time_tracking/application/auth_user_directory.py
+    time_tracking/application/report_builder.py
+    time_tracking/application/services/reports/time_report_service.py
+    time_tracking/application/services/reports/budget_report_service.py
+    time_tracking/application/services/reports/uninvoiced_report_service.py
+    time_tracking/application/services/reports/expense_report_service.py
+    time_tracking/application/project_dashboard.py
+    time_tracking/application/entry_archive_service.py
+    time_tracking/application/access_control.py
+    time_tracking/application/integrity_audit.py
+    time_tracking/application/demo_seed_budget.py
+    time_tracking/application/client_expense_category_defaults.py
+    time_tracking/application/project_access_notifications.py
+    time_tracking/application/project_access_rates.py
+    time_tracking/application/project_participants.py
+    time_tracking/application/project_partner_index.py
+    time_tracking/application/project_team_workload.py
+    time_tracking/application/settings_sync.py
+    time_tracking/application/time_entry_task.py
+    time_tracking/application/use_cases.py
+    time_tracking/application/weekly_submission_service.py
     auth/application/use_cases.py
     gateway/application/attendance_range_builder.py
     contacts/presentation/routes/*
@@ -25,6 +43,6 @@ omit =
     contacts/presentation/dependencies.py
 
 [report]
-fail_under = 40
+fail_under = 50
 show_missing = true
 skip_covered = true

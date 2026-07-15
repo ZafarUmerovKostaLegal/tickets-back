@@ -134,6 +134,12 @@ async def list_time_entries(
     await _ensure_user(session, auth_user_id)
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="Параметр to не может быть раньше from")
+    # Защита от неограниченных окон: иначе один запрос тянет слишком много строк.
+    if (date_to - date_from).days > 366:
+        raise HTTPException(
+            status_code=400,
+            detail="Диапазон time-entries не больше 366 дней — сузьте from/to",
+        )
     repo = TimeEntryRepository(session)
     rows = await repo.list_for_user(auth_user_id, date_from, date_to)
     return [TimeEntryOut.model_validate(r) for r in rows]

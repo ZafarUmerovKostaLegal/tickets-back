@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from application.client_expense_category_defaults import (
     seed_default_expense_categories_for_all_clients,
 )
@@ -65,7 +66,7 @@ app = FastAPI(
 register_exception_handlers(app)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

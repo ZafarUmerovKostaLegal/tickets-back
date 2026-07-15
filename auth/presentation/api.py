@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.rate_limit import RateLimitMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import engine, Base
 from infrastructure.config import get_settings, validate_production_secrets
 from presentation.routes import auth_routes, user_routes, role_routes, health, internal_routes
@@ -57,21 +59,11 @@ app = FastAPI(
 
 def _auth_cors_origins() -> list[str]:
     s = get_settings()
-    origins: list[str] = []
-    for url in (s.frontend_url or "").strip(),:
-        if url and url != "*":
-            origins.extend(u.strip() for u in url.split(",") if u.strip() and u.strip() != "*")
-    if not origins:
-        origins = [
-            "http://localhost:5173",
-            "http://localhost:8080",
-            "http://127.0.0.1:8080",
-            "http://localhost:8081",
-            "http://127.0.0.1:8081",
-            "http://localhost:5500",
-            "http://127.0.0.1:5500",
-        ]
-    return list(dict.fromkeys(origins))
+    return resolve_cors_origins(
+        frontend_url=s.frontend_url,
+        environment=getattr(s, "environment", None) or "",
+        include_local_defaults=True,
+    )
 
 
 app.add_middleware(
@@ -82,6 +74,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SqlInjectionGuardMiddleware)
+app.add_middleware(RateLimitMiddleware, service_name="auth")
 app.include_router(auth_routes.router)
 app.include_router(user_routes.router)
 app.include_router(role_routes.router)

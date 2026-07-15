@@ -199,7 +199,13 @@ async def exchange(
     code = body.get("code")
     if not code:
         raise HTTPException(status_code=400, detail="code required")
-    tokens = acquire_token_by_code(code)
+    redirect_uri = body.get("redirect_uri") or body.get("redirectUri")
+    code_verifier = body.get("code_verifier") or body.get("codeVerifier")
+    tokens = acquire_token_by_code(
+        code,
+        redirect_uri=str(redirect_uri).strip() if redirect_uri else None,
+        code_verifier=str(code_verifier).strip() if code_verifier else None,
+    )
     if not tokens or "id_token_claims" not in tokens:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     claims = tokens["id_token_claims"]

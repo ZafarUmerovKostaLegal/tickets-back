@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
+from backend_common.rate_limit import RateLimitMiddleware
+from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.upstream_auth_context import IncomingAuthorizationMiddleware
 from infrastructure.config import get_settings
 from presentation.exception_handlers import register_exception_handlers
@@ -74,39 +76,14 @@ app = FastAPI(
 )
 register_exception_handlers(app)
 
-_KNOWN_PRODUCTION_ORIGINS = (
-    "https://tickets.kostalegal.com",
-    "https://www.tickets.kostalegal.com",
-)
-
 
 def _cors_origins() -> list[str]:
     settings = get_settings()
-    origins: list[str] = []
-    for url in (settings.frontend_url or "").strip(),:
-        if url and url != "*":
-            origins.extend(u.strip() for u in url.split(",") if u.strip() and u.strip() != "*")
-    defaults = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-    ]
-    env = (settings.environment or "").strip().lower()
-    if env == "production":
-        defaults = list(_KNOWN_PRODUCTION_ORIGINS) + defaults
-    for o in defaults:
-        if o not in origins:
-            origins.append(o)
-    if not origins:
-        origins = defaults + ["null"]
-    return list(dict.fromkeys(origins))
+    return resolve_cors_origins(
+        frontend_url=settings.frontend_url,
+        environment=settings.environment,
+        include_local_defaults=True,
+    )
 
 
 _CORS_PRIVATE_ORIGIN_REGEX = (
@@ -155,6 +132,7 @@ app.add_middleware(SqlInjectionGuardMiddleware)
 app.add_middleware(IncomingAuthorizationMiddleware)
 
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(RateLimitMiddleware, service_name="gateway")
 app.include_router(spa_auth_callback.router)
 app.include_router(ops.router)
 app.include_router(ops_databases.router)

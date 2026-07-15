@@ -101,6 +101,12 @@ def _report_period(
             status_code=400,
             detail="Конец периода (to / dateTo) не может быть раньше начала (from / dateFrom).",
         )
+    # Отчёты грузят matching entries в память — ограничиваем окно, чтобы не положить сервис.
+    if (d1 - d0).days > 730:
+        raise HTTPException(
+            status_code=400,
+            detail="Период отчёта не больше 730 дней — сузьте from/to (dateFrom/dateTo)",
+        )
     return d0, d1
 
 
@@ -203,7 +209,7 @@ async def get_time_report_endpoint(
     include_fixed_fee: bool = Query(True, alias="include_fixed_fee"),
     partner_confirmed_only: Optional[str] = Query(None, alias="partnerConfirmedOnly"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(2000, ge=1, le=5000),
+    per_page: int = Query(2000, ge=1, le=2000),
     session: AsyncSession = Depends(get_session),
     viewer: dict = Depends(require_bearer_user),
     authorization: str | None = Header(None, alias="Authorization"),

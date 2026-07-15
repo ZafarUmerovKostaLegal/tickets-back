@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from application.entry_pricing import _billable_amount_for_entry, billable_amount_respecting_package
 from application.package_billing import build_package_splits_index
@@ -23,6 +24,7 @@ from application.report_builder import (
 )
 from application.user_initials import resolve_user_initials
 from infrastructure.models import TimeEntryModel
+from infrastructure.report_cache import get_report, set_report
 from application.services.reports._base import (
     _d,
     _hours,
@@ -46,6 +48,21 @@ async def get_uninvoiced_report(
     page: int = 1,
     per_page: int = 100,
 ) -> dict:
+    _cache_params = {
+        "fn": "get_uninvoiced_report",
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "client_ids": sorted(client_ids) if client_ids else None,
+        "project_ids": sorted(project_ids) if project_ids else None,
+        "user_ids": sorted(user_ids) if user_ids else None,
+        "include_fixed_fee": include_fixed_fee,
+        "page": page,
+        "per_page": per_page,
+    }
+    _cached = get_report(_cache_params)
+    if _cached is not None:
+        return _cached
+
     projects_map = await _load_projects_map(session)
     clients_map = await _load_clients_map(session)
     users_map = await _load_users_map(session)
@@ -74,7 +91,21 @@ async def get_uninvoiced_report(
     )
     uninv_cond.append(TimeEntryModel.is_billable.is_(True))
 
-    uninv_entries_q = select(TimeEntryModel).where(and_(*uninv_cond))
+    uninv_entries_q = (
+        select(TimeEntryModel)
+        .options(
+            load_only(
+                TimeEntryModel.id,
+                TimeEntryModel.auth_user_id,
+                TimeEntryModel.project_id,
+                TimeEntryModel.task_id,
+                TimeEntryModel.work_date,
+                TimeEntryModel.hours,
+                TimeEntryModel.is_billable,
+            )
+        )
+        .where(and_(*uninv_cond))
+    )
     uninv_entries = list((await session.execute(uninv_entries_q)).scalars().all())
 
     all_uid_set = {e.auth_user_id for e in all_entries} | {e.auth_user_id for e in uninv_entries}
@@ -194,7 +225,7 @@ async def get_uninvoiced_report(
     start = (page - 1) * per_page
     results = all_rows[start: start + per_page]
 
-    return build_response(
+    out = build_response(
         results=results,
         total_entries=total_entries_count,
         page=page,
@@ -204,6 +235,8 @@ async def get_uninvoiced_report(
         date_from=date_from,
         date_to=date_to,
     )
+    set_report(_cache_params, out)
+    return out
 
 
 async def get_uninvoiced_report_all_rows(

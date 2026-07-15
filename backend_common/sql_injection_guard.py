@@ -1,5 +1,11 @@
 
 
+"""HTTP regex filter for obvious SQLi patterns — defense-in-depth only.
+
+Primary control: SQLAlchemy / bind parameters (see docs/sql-safety.md).
+This middleware is not a substitute and cannot catch all payloads.
+"""
+
 from __future__ import annotations
 
 import json
