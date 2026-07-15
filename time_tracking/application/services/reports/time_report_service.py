@@ -61,6 +61,8 @@ _TIME_ENTRY_REPORT_LOAD = load_only(
     TimeEntryModel.hours,
     TimeEntryModel.is_billable,
     TimeEntryModel.description,
+    TimeEntryModel.external_reference_url,
+    TimeEntryModel.created_at,
     TimeEntryModel.voided_at,
     TimeEntryModel.voided_by_auth_user_id,
 )
