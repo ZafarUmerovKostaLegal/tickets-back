@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated
+from urllib.parse import quote, urlparse, parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -25,6 +26,37 @@ class OutlookMailDraftBody(BaseModel):
     bodyText: str | None = None
     pdfBase64: str | None = None
     pdfFileName: str | None = None
+
+
+def _outlook_compose_web_link(message_id: str | None, graph_web_link: str | None) -> str | None:
+    """
+    Graph webLink opens drafts in read mode (Reply/Forward, no Send).
+    Prefer the compose deeplink so the user can edit and send.
+    """
+    mid = (message_id or "").strip()
+    if mid:
+        q = quote(mid, safe="")
+        return f"https://outlook.office.com/mail/deeplink/compose/{q}?ItemID={q}&exvsurl=1"
+
+    link = (graph_web_link or "").strip()
+    if not link:
+        return None
+    # Convert read deeplink → compose when Graph only gave webLink.
+    if "/deeplink/read/" in link:
+        return link.replace("/deeplink/read/", "/deeplink/compose/", 1)
+    if "/deeplink/compose/" in link:
+        return link
+    # Try to extract ItemID from query and rebuild.
+    try:
+        parsed = urlparse(link)
+        qs = parse_qs(parsed.query)
+        item = (qs.get("ItemID") or qs.get("itemid") or [None])[0]
+        if item:
+            q = quote(str(item), safe="")
+            return f"https://outlook.office.com/mail/deeplink/compose/{q}?ItemID={q}&exvsurl=1"
+    except Exception:
+        pass
+    return link
 
 
 @router.post("/mail-draft", summary="Создать черновик письма в Outlook с опциональным PDF")
@@ -68,13 +100,12 @@ async def create_outlook_mail_draft(
         _log.exception("create_outlook_mail_draft failed for user_id=%s", user_id)
         raise HTTPException(status_code=502, detail=f"Outlook mail API error: {e!s}") from e
 
-    web_link = msg.get("webLink") if isinstance(msg, dict) else None
+    graph_web_link = msg.get("webLink") if isinstance(msg, dict) else None
     message_id = msg.get("id") if isinstance(msg, dict) else None
-    if not web_link and message_id:
-        # Fallback deep link when Graph omits webLink.
-        from urllib.parse import quote
-
-        web_link = f"https://outlook.office.com/mail/deeplink/read/{quote(str(message_id), safe='')}"
+    web_link = _outlook_compose_web_link(
+        str(message_id) if message_id is not None else None,
+        str(graph_web_link) if graph_web_link is not None else None,
+    )
     if not web_link:
         raise HTTPException(
             status_code=502,
