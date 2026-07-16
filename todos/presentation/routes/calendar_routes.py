@@ -77,6 +77,10 @@ async def _get_valid_token(
 @router.get("/connect", summary="Подключение календаря Outlook")
 async def calendar_connect(
     user_id: Annotated[int, Depends(get_current_user_id)],
+    force_consent: bool = Query(
+        False,
+        description="Запросить повторное согласие Microsoft (нужно после расширения scopes, напр. Mail.ReadWrite)",
+    ),
 ):
 
     settings = get_settings()
@@ -94,7 +98,7 @@ async def calendar_connect(
         )
     try:
         state = _encode_state(user_id)
-        url = get_authorize_url(state)
+        url = get_authorize_url(state, force_consent=force_consent)
     except ValueError as e:
         _log.warning("calendar connect: invalid OAuth settings: %s", e)
         raise HTTPException(
@@ -110,6 +114,17 @@ async def calendar_connect(
             detail=f"Could not build Microsoft sign-in URL: {e!s}",
         ) from e
     return JSONResponse(content={"url": url})
+
+
+@router.delete("/disconnect", summary="Отключить Outlook (удалить токены)")
+async def calendar_disconnect(
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = OutlookCalendarTokenRepository(session)
+    await repo.delete_by_user_id(user_id)
+    await session.commit()
+    return JSONResponse(content={"connected": False})
 
 
 @router.get("/callback", summary="OAuth callback от Microsoft")

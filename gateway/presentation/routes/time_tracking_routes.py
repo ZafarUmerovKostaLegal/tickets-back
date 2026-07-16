@@ -1705,6 +1705,48 @@ async def invoices_send(
     return await _tt_json("POST", f"/invoices/{invoice_id}/send", params=_invoice_actor_qs(user), timeout=30.0)
 
 
+@router.post("/invoices/{invoice_id}/outlook-draft")
+async def invoices_outlook_draft(
+    invoice_id: str,
+    request: Request,
+    user: dict = Depends(require_view_role),
+):
+    """Proxy to todos Outlook mail-draft (Graph) using the caller's Outlook OAuth token."""
+    _ = invoice_id  # reserved for future audit / invoice checks
+    _ = user
+    settings = get_settings()
+    todos_base = (settings.todos_service_url or "").rstrip("/")
+    if not todos_base:
+        raise HTTPException(status_code=503, detail="TODOS_SERVICE_URL not configured")
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    auth = get_incoming_authorization()
+    headers = merge_upstream_headers({"Authorization": auth} if auth else {})
+    url = f"{todos_base}/api/v1/todos/outlook/mail-draft"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(url, json=body, headers=headers)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail=f"Todos service unavailable: {e!s}") from e
+    if r.status_code >= 400:
+        detail: object = (r.text or "Outlook draft error")[:2000]
+        try:
+            j = r.json()
+            if isinstance(j, dict) and j.get("detail") is not None:
+                detail = j.get("detail")
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    try:
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Invalid JSON from todos outlook draft") from e
+
+
 @router.post("/invoices/{invoice_id}/mark-viewed")
 async def invoices_mark_viewed(
     invoice_id: str,

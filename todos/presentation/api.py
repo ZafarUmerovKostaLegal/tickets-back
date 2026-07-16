@@ -20,7 +20,7 @@ from infrastructure.models import (
     TodoCardParticipantModel,
     TodoColumnModel,
 )
-from presentation.routes import board_routes, boards_multi_routes, calendar_routes, health
+from presentation.routes import board_routes, boards_multi_routes, calendar_routes, health, outlook_mail_routes
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure.repositories import OutlookCalendarTokenRepository
 from infrastructure.schema_patches import REGISTERED_TODO_SCHEMA_PATCHES
@@ -68,6 +68,7 @@ app.add_middleware(
 app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(health.router)
 app.include_router(calendar_routes.router, prefix="/api/v1/todos")
+app.include_router(outlook_mail_routes.router, prefix="/api/v1/todos")
 app.include_router(board_routes.router, prefix="/api/v1/todos")
 app.include_router(boards_multi_routes.boards_router, prefix="/api/v1/todos")
 app.include_router(boards_multi_routes.invites_router, prefix="/api/v1/todos")

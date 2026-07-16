@@ -11,10 +11,10 @@ from infrastructure.config import get_settings
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 AUTHORIZE_URL_TEMPLATE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
 TOKEN_URL_TEMPLATE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-SCOPES = ["Calendars.ReadWrite", "User.Read", "offline_access"]
+SCOPES = ["Calendars.ReadWrite", "Mail.ReadWrite", "User.Read", "offline_access"]
 
 
-def get_authorize_url(state: str) -> str:
+def get_authorize_url(state: str, *, force_consent: bool = False) -> str:
 
     s = get_settings()
     client_id = (s.microsoft_client_id or "").strip()
@@ -31,6 +31,7 @@ def get_authorize_url(state: str) -> str:
         )
     scope_parts = [
         "https://graph.microsoft.com/Calendars.ReadWrite",
+        "https://graph.microsoft.com/Mail.ReadWrite",
         "https://graph.microsoft.com/User.Read",
         "offline_access",
     ]
@@ -42,6 +43,9 @@ def get_authorize_url(state: str) -> str:
         "response_mode": "query",
         "state": state,
     }
+    if force_consent:
+        # Re-consent so Mail.ReadWrite is granted after scope expansion.
+        params["prompt"] = "consent"
     base = AUTHORIZE_URL_TEMPLATE.format(tenant=(s.microsoft_tenant_id or "common").strip())
     return f"{base}?{urlencode(params)}"
 
@@ -176,6 +180,87 @@ async def create_calendar_event(
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
+        )
+    r.raise_for_status()
+    return r.json()
+
+
+async def create_mail_draft(
+    access_token: str,
+    *,
+    to_email: str,
+    subject: str,
+    body_html: str | None = None,
+    body_text: str | None = None,
+    to_name: str | None = None,
+    pdf_base64: str | None = None,
+    pdf_file_name: str | None = None,
+) -> dict[str, Any]:
+    """Create an Outlook draft via Graph (does not send). Returns message with webLink when available."""
+    to = (to_email or "").strip()
+    if not to or "@" not in to:
+        raise ValueError("toEmail is required")
+    subj = (subject or "").strip() or "(no subject)"
+    html = (body_html or "").strip()
+    text = (body_text or "").strip()
+    if html:
+        body = {"contentType": "HTML", "content": html}
+    else:
+        body = {"contentType": "Text", "content": text or ""}
+
+    recipient: dict[str, Any] = {"emailAddress": {"address": to}}
+    name = (to_name or "").strip()
+    if name:
+        recipient["emailAddress"]["name"] = name
+
+    payload: dict[str, Any] = {
+        "subject": subj,
+        "body": body,
+        "toRecipients": [recipient],
+    }
+
+    pdf_b64 = (pdf_base64 or "").strip()
+    if pdf_b64:
+        # Strip data-URL prefix if the client sent one.
+        if "," in pdf_b64 and pdf_b64.lower().startswith("data:"):
+            pdf_b64 = pdf_b64.split(",", 1)[1]
+        fname = (pdf_file_name or "invoice.pdf").strip() or "invoice.pdf"
+        if not fname.lower().endswith(".pdf"):
+            fname = f"{fname}.pdf"
+        # Simple attachments are limited (~3MB). Reject oversized payloads early.
+        approx_bytes = int(len(pdf_b64) * 3 / 4)
+        if approx_bytes > 3_000_000:
+            raise ValueError(
+                "PDF attachment is too large for Outlook draft upload (max ~3 MB). "
+                "Reduce the invoice PDF size or send without embedding."
+            )
+        payload["attachments"] = [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": fname,
+                "contentType": "application/pdf",
+                "contentBytes": pdf_b64,
+            }
+        ]
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.post(
+            f"{GRAPH_BASE}/me/messages",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+    if r.status_code in (401, 403):
+        detail = ""
+        try:
+            detail = str((r.json() or {}).get("error", {}).get("message") or "")
+        except Exception:
+            detail = (r.text or "")[:500]
+        raise PermissionError(
+            detail
+            or "Outlook mail permission missing. Reconnect Outlook calendar to grant Mail.ReadWrite."
         )
     r.raise_for_status()
     return r.json()

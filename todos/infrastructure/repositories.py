@@ -100,6 +100,12 @@ class OutlookCalendarTokenRepository:
                 )
             )
 
+    async def delete_by_user_id(self, user_id: int) -> bool:
+        r = await self._session.execute(
+            delete(OutlookCalendarTokenModel).where(OutlookCalendarTokenModel.user_id == user_id)
+        )
+        return bool(r.rowcount)
+
     async def reencrypt_plaintext_tokens(self) -> int:
         """Encrypt legacy plaintext rows when Fernet key is set. Idempotent; no data loss."""
         if not encryption_enabled():
