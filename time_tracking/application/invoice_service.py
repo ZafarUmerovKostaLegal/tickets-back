@@ -341,12 +341,14 @@ async def _ensure_package_fee_lines(
 ) -> int:
     if not package_months:
         return sort_order
+    # Must eager-load under AsyncSession — lazy inv.line_items → greenlet_spawn (xd2s).
+    await session.refresh(inv, ["line_items"])
+    line_items = list(inv.line_items or [])
     existing = {
         (li.description or "")
-        for li in (inv.line_items or [])
+        for li in line_items
         if (li.line_kind or "") == "package_fee"
     }
-    # Also scan freshly added via session
     cpr = ClientProjectRepository(session)
     for pid, y, m in sorted(package_months):
         proj = await cpr.get_by_id_global(pid)
@@ -359,28 +361,25 @@ async def _ensure_package_fee_lines(
         marker = _package_fee_marker(pid, y, m)
         if any(marker in d for d in existing):
             continue
-        # Check lines already on invoice from DB
-        for li in list(inv.line_items or []):
-            if marker in (li.description or ""):
-                break
-        else:
-            desc = f"{marker} {package_fee_description(proj.name or pid, y, m, n)}"
-            repo.add_line(
-                InvoiceLineItemModel(
-                    id=str(uuid.uuid4()),
-                    invoice_id=inv.id,
-                    sort_order=sort_order,
-                    line_kind="package_fee",
-                    description=desc[:2000],
-                    quantity=Decimal(1),
-                    unit_amount=_money4(fee),
-                    line_total=_money4(fee),
-                    time_entry_id=None,
-                    expense_request_id=None,
-                )
+        if any(marker in (li.description or "") for li in line_items):
+            continue
+        desc = f"{marker} {package_fee_description(proj.name or pid, y, m, n)}"
+        repo.add_line(
+            InvoiceLineItemModel(
+                id=str(uuid.uuid4()),
+                invoice_id=inv.id,
+                sort_order=sort_order,
+                line_kind="package_fee",
+                description=desc[:2000],
+                quantity=Decimal(1),
+                unit_amount=_money4(fee),
+                line_total=_money4(fee),
+                time_entry_id=None,
+                expense_request_id=None,
             )
-            existing.add(desc)
-            sort_order += 1
+        )
+        existing.add(desc)
+        sort_order += 1
     return sort_order
 
 
@@ -876,6 +875,14 @@ async def invoice_to_dict_async(
     include_payments: bool = False,
 ) -> dict[str, Any]:
     hints: dict[str, tuple[date, int]] = {}
+    to_load: list[str] = []
+    insp = orm_inspect(inv)
+    if include_lines and "line_items" in insp.unloaded:
+        to_load.append("line_items")
+    if include_payments and "payments" in insp.unloaded:
+        to_load.append("payments")
+    if to_load:
+        await session.refresh(inv, to_load)
     if include_lines and inv.line_items:
         hints = await load_time_entry_hints_for_invoice_lines(session, inv.line_items)
     return invoice_to_dict(
