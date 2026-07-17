@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -281,3 +281,101 @@ async def create_mail_draft(
         )
     r.raise_for_status()
     return r.json()
+
+
+def _odata_escape(value: str) -> str:
+    return (value or "").replace("'", "''")
+
+
+async def get_mail_draft_delivery_state(
+    access_token: str,
+    *,
+    message_id: str,
+    subject: str | None = None,
+    created_after_iso: str | None = None,
+) -> dict[str, Any]:
+    """
+    Track whether an Outlook draft was sent or discarded.
+
+    Returns ``state``: ``pending`` | ``sent`` | ``missing``.
+    ``missing`` means the draft id is gone; caller should keep polling briefly
+    then treat prolonged missing (no Sent Items hit) as discarded.
+    """
+    token = (access_token or "").strip()
+    mid = (message_id or "").strip()
+    if not token or not mid:
+        raise ValueError("messageId is required")
+
+    headers = {"Authorization": f"Bearer {token}"}
+    mid_q = quote(mid, safe="")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            f"{GRAPH_BASE}/me/messages/{mid_q}",
+            headers=headers,
+            params={"$select": "id,isDraft,sentDateTime,subject"},
+        )
+        if r.status_code == 200:
+            data = r.json() if r.content else {}
+            is_draft = bool(data.get("isDraft", True))
+            sent_at = data.get("sentDateTime")
+            if (not is_draft) or sent_at:
+                return {"state": "sent", "isDraft": False, "sentDateTime": sent_at}
+            return {"state": "pending", "isDraft": True, "sentDateTime": None}
+
+        if r.status_code not in (404, 410):
+            detail = ""
+            try:
+                detail = str((r.json() or {}).get("error", {}).get("message") or "")
+            except Exception:
+                detail = (r.text or "")[:500]
+            if r.status_code in (401, 403):
+                raise PermissionError(
+                    detail
+                    or "Outlook mail permission missing. Reconnect Outlook calendar to grant Mail.ReadWrite."
+                )
+            r.raise_for_status()
+
+        # Draft id gone: either sent (new id in Sent Items) or discarded.
+        subj = (subject or "").strip()
+        if not subj:
+            return {"state": "missing", "isDraft": None, "sentDateTime": None}
+
+        filt = f"subject eq '{_odata_escape(subj)}'"
+        created_after = (created_after_iso or "").strip()
+        if created_after:
+            filt = f"{filt} and sentDateTime ge {created_after}"
+
+        sr = await client.get(
+            f"{GRAPH_BASE}/me/mailFolders/sentitems/messages",
+            headers=headers,
+            params={
+                "$top": "5",
+                "$select": "id,sentDateTime,subject",
+                "$orderby": "sentDateTime desc",
+                "$filter": filt,
+            },
+        )
+        if sr.status_code in (401, 403):
+            detail = ""
+            try:
+                detail = str((sr.json() or {}).get("error", {}).get("message") or "")
+            except Exception:
+                detail = (sr.text or "")[:500]
+            raise PermissionError(
+                detail
+                or "Outlook mail permission missing. Reconnect Outlook calendar to grant Mail.ReadWrite."
+            )
+        if sr.status_code >= 400:
+            # Draft gone but Sent Items query failed — keep waiting, do not discard yet.
+            return {"state": "missing", "isDraft": None, "sentDateTime": None}
+
+        items = (sr.json() or {}).get("value") or []
+        if isinstance(items, list) and len(items) > 0:
+            first = items[0] if isinstance(items[0], dict) else {}
+            return {
+                "state": "sent",
+                "isDraft": False,
+                "sentDateTime": first.get("sentDateTime"),
+            }
+        # Draft deleted/moved; Sent Items not visible yet (or user discarded).
+        return {"state": "missing", "isDraft": None, "sentDateTime": None}

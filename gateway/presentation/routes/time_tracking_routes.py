@@ -1747,6 +1747,54 @@ async def invoices_outlook_draft(
         raise HTTPException(status_code=502, detail="Invalid JSON from todos outlook draft") from e
 
 
+@router.get("/invoices/{invoice_id}/outlook-draft-status")
+async def invoices_outlook_draft_status(
+    invoice_id: str,
+    messageId: str,
+    request: Request,
+    user: dict = Depends(require_view_role),
+    subject: str | None = None,
+    createdAfter: str | None = None,
+):
+    """Proxy to todos: whether the Outlook draft was sent or discarded."""
+    _ = invoice_id
+    _ = user
+    _ = request
+    settings = get_settings()
+    todos_base = (settings.todos_service_url or "").rstrip("/")
+    if not todos_base:
+        raise HTTPException(status_code=503, detail="TODOS_SERVICE_URL not configured")
+    mid = (messageId or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="messageId is required")
+    auth = get_incoming_authorization()
+    headers = merge_upstream_headers({"Authorization": auth} if auth else {})
+    params: dict[str, str] = {"messageId": mid}
+    if subject is not None and str(subject).strip() != "":
+        params["subject"] = str(subject).strip()
+    if createdAfter is not None and str(createdAfter).strip() != "":
+        params["createdAfter"] = str(createdAfter).strip()
+    url = f"{todos_base}/api/v1/todos/outlook/mail-draft-status"
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.get(url, params=params, headers=headers)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail=f"Todos service unavailable: {e!s}") from e
+    if r.status_code >= 400:
+        detail: object = (r.text or "Outlook draft status error")[:2000]
+        try:
+            j = r.json()
+            if isinstance(j, dict) and j.get("detail") is not None:
+                detail = j.get("detail")
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    try:
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Invalid JSON from todos outlook draft status") from e
+
+
 @router.post("/invoices/{invoice_id}/mark-viewed")
 async def invoices_mark_viewed(
     invoice_id: str,

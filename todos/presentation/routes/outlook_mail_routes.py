@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
-from infrastructure.microsoft_graph import create_mail_draft
+from infrastructure.microsoft_graph import create_mail_draft, get_mail_draft_delivery_state
 from infrastructure.repositories import OutlookCalendarTokenRepository
 from presentation.dependencies import get_current_user_id
 from presentation.routes.calendar_routes import _get_valid_token
@@ -115,3 +115,47 @@ async def create_outlook_mail_draft(
         "webLink": web_link,
         "messageId": message_id,
     }
+
+
+@router.get("/mail-draft-status", summary="Статус черновика Outlook: pending | sent | missing")
+async def outlook_mail_draft_status(
+    messageId: str,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+    subject: str | None = None,
+    createdAfter: str | None = None,
+):
+    mid = (messageId or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="messageId is required")
+    repo = OutlookCalendarTokenRepository(session)
+    row = await _get_valid_token(repo, user_id, session)
+    if not row:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Outlook не подключён. Подключите календарь Outlook "
+                "(раздел To-Do / расписание), затем повторите отправку счёта."
+            ),
+        )
+    try:
+        result = await get_mail_draft_delivery_state(
+            row.access_token,
+            message_id=mid,
+            subject=subject,
+            created_after_iso=createdAfter,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{e} "
+                "Отключите и снова подключите Outlook, чтобы выдать право Mail.ReadWrite."
+            ),
+        ) from e
+    except Exception as e:
+        _log.exception("outlook_mail_draft_status failed for user_id=%s", user_id)
+        raise HTTPException(status_code=502, detail=f"Outlook mail API error: {e!s}") from e
+    return result
