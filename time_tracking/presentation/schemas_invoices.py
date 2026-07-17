@@ -53,6 +53,11 @@ class InvoiceCreateBody(BaseModel):
         alias="partnerBillingPeriodTo",
         description="Конец периода биллинга; вместе с from — подмножество подтверждённых дат по проекту",
     )
+    partner_confirmation_request_id: Optional[str] = Field(
+        None,
+        alias="partnerConfirmationRequestId",
+        description="ID запроса подтверждения партнёров, из которого создан счёт",
+    )
 
     @field_validator("invoice_number", mode="after")
     @classmethod
@@ -61,6 +66,25 @@ class InvoiceCreateBody(BaseModel):
             return None
         s = v.strip()
         return s or None
+
+    @field_validator("partner_confirmation_request_id", mode="after")
+    @classmethod
+    def _strip_partner_confirmation_request_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+
+class PartnerInvoicePreviewQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    date_from: date = Field(..., alias="dateFrom")
+    date_to: date = Field(..., alias="dateTo")
+    currency: Optional[str] = None
+    issue_date: Optional[date] = Field(None, alias="issueDate")
+    client_id: Optional[str] = Field(None, alias="clientId")
 
 
 class InvoicePatchBody(BaseModel):

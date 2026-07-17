@@ -1209,6 +1209,50 @@ async def apply_time_entries_project_id_fk_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_invoice_partner_billing_and_fx_patch(conn: AsyncConnection) -> None:
+    """Partner billing period on invoices, FX audit on lines, FX rates table."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_invoices",
+        (
+            "partner_billing_period_from DATE",
+            "partner_billing_period_to DATE",
+            "partner_confirmation_request_id VARCHAR(36)",
+        ),
+    )
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_invoice_line_items",
+        (
+            "source_currency VARCHAR(10)",
+            "source_amount NUMERIC(18, 4)",
+            "fx_rate NUMERIC(18, 8)",
+        ),
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_fx_rates (
+                id VARCHAR(36) PRIMARY KEY,
+                from_currency VARCHAR(10) NOT NULL,
+                to_currency VARCHAR(10) NOT NULL,
+                rate_date DATE NOT NULL,
+                rate NUMERIC(18, 8) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_fx_pair_date
+                ON time_tracking_fx_rates (from_currency, to_currency, rate_date)
+            """
+        )
+    )
+
+
 async def apply_partner_confirmation_review_priority_patch(conn: AsyncConnection) -> None:
     """Приоритет проверки отчётов (red/yellow/green) — additive column на существующую таблицу."""
     await add_columns_if_missing(
@@ -1283,6 +1327,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("reports", apply_reports_schema_patch),
     ("partner_confirmation_review_priority", apply_partner_confirmation_review_priority_patch),
     ("invoices", apply_invoices_schema_patch),
+    ("invoice_partner_billing_and_fx", apply_invoice_partner_billing_and_fx_patch),
     ("project_currency", apply_project_currency_patch),
     ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
     ("time_entries_external_reference", apply_time_entries_external_reference_patch),

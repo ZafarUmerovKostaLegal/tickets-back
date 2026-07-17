@@ -71,6 +71,10 @@ class InvoiceModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    partner_billing_period_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    partner_billing_period_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    partner_confirmation_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     line_items: Mapped[list["InvoiceLineItemModel"]] = relationship(
         "InvoiceLineItemModel",
         back_populates="invoice",
@@ -110,8 +114,27 @@ class InvoiceLineItemModel(Base):
     line_total: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal(0))
     time_entry_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     expense_request_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    source_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
 
     invoice: Mapped["InvoiceModel"] = relationship("InvoiceModel", back_populates="line_items")
+
+
+class InvoiceFxRateModel(Base):
+    """1 from_currency = rate to_currency on rate_date (and earlier until next row)."""
+
+    __tablename__ = "time_tracking_fx_rates"
+    __table_args__ = (
+        Index("ix_tt_fx_pair_date", "from_currency", "to_currency", "rate_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    from_currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    to_currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    rate_date: Mapped[date] = mapped_column(Date, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class InvoicePaymentModel(Base):

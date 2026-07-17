@@ -1634,6 +1634,19 @@ async def invoices_unbilled_expenses(
     return await _tt_json("GET", "/invoices/unbilled-expenses", params=dict(request.query_params), timeout=30.0)
 
 
+@router.get("/invoices/from-partner-period/preview")
+async def invoices_partner_period_preview(
+    request: Request,
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json(
+        "GET",
+        "/invoices/from-partner-period/preview",
+        params=dict(request.query_params),
+        timeout=60.0,
+    )
+
+
 @router.get("/invoices/stats")
 async def invoices_stats(
     request: Request,

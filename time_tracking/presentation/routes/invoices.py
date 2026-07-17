@@ -26,7 +26,11 @@ from application.invoice_service import (
     record_payment_confirmation_document,
     send_invoice,
 )
+from application.partner_confirmed_invoice_preview import (
+    build_partner_confirmed_invoice_preview,
+)
 from infrastructure.database import get_session
+from infrastructure.models import TimeManagerClientModel, TimeManagerClientProjectModel
 from infrastructure.repository_invoices import InvoiceRepository
 from infrastructure.repository_partner_report_confirmations import (
     PartnerReportConfirmationRepository,
@@ -77,6 +81,47 @@ async def unbilled_expenses(
     return await list_unbilled_expenses(
         session, project_id=project_id, date_from=date_from, date_to=date_to,
     )
+
+
+@router.get("/from-partner-period/preview")
+async def partner_period_invoice_preview(
+    project_id: str = Query(..., alias="projectId"),
+    date_from: date = Query(..., alias="dateFrom"),
+    date_to: date = Query(..., alias="dateTo"),
+    currency: Optional[str] = Query(None),
+    issue_date: Optional[date] = Query(None, alias="issueDate"),
+    client_id: Optional[str] = Query(None, alias="clientId"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Invoice-ready subtotal for a partner-confirmed period (time + package + expenses, FX)."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="dateTo < dateFrom")
+    pid = project_id.strip()
+    inv_ccy = (currency or "").strip().upper()[:10] or None
+    if not inv_ccy and client_id:
+        client = await session.get(TimeManagerClientModel, client_id.strip())
+        if client:
+            inv_ccy = (client.currency or "USD").strip().upper()[:10] or "USD"
+    if not inv_ccy:
+        proj = await session.get(TimeManagerClientProjectModel, pid)
+        if proj:
+            client = await session.get(TimeManagerClientModel, proj.client_id)
+            if client:
+                inv_ccy = (client.currency or "USD").strip().upper()[:10] or "USD"
+            else:
+                inv_ccy = (getattr(proj, "currency", None) or "USD").strip().upper()[:10] or "USD"
+        else:
+            inv_ccy = "USD"
+    preview = await build_partner_confirmed_invoice_preview(
+        session,
+        project_id=pid,
+        date_from=date_from,
+        date_to=date_to,
+        invoice_currency=inv_ccy,
+        issue_date=issue_date or date_to,
+        exclude_invoiced=True,
+    )
+    return preview.as_dict()
 
 
 @router.get("/stats")
@@ -195,6 +240,7 @@ async def create_invoice_route(
         partner_billing_period_from=body.partner_billing_period_from,
         partner_billing_period_to=body.partner_billing_period_to,
         invoice_number=body.invoice_number,
+        partner_confirmation_request_id=body.partner_confirmation_request_id,
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(inv.id)

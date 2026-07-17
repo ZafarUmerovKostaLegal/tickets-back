@@ -13,7 +13,9 @@ from sqlalchemy import and_, inspect as orm_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from application.duplicate_time_entries import deduplicate_entries_for_report
 from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
+from application.invoice_fx import FxRateBook, convert_or_same, load_fx_rate_book
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
     is_hour_package_project,
@@ -21,6 +23,9 @@ from application.package_billing import (
     package_fee_description,
     package_fee_x,
     package_hours_n,
+)
+from application.partner_confirmed_invoice_preview import (
+    build_partner_confirmed_invoice_preview,
 )
 from application.task_billing import is_flat_fee_task
 from application.partner_report_confirmation_service import (
@@ -175,6 +180,7 @@ async def create_invoice(
     partner_billing_period_from: date | None = None,
     partner_billing_period_to: date | None = None,
     invoice_number: str | None = None,
+    partner_confirmation_request_id: str | None = None,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -184,13 +190,16 @@ async def create_invoice(
         proj = await session.get(TimeManagerClientProjectModel, project_id)
         if not proj or proj.client_id != client_id:
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
-    cur = (currency or client.currency or "USD").strip()[:10] or "USD"
+    cur = (currency or client.currency or "USD").strip().upper()[:10] or "USD"
+    fx_book = await load_fx_rate_book(session)
 
     needs_partner_confirmation = bool(time_entry_ids) or bool(expense_ids) or (
         bool(lines) and len(lines) > 0 and bool((project_id or "").strip())
+    ) or (
+        partner_billing_period_from is not None and partner_billing_period_to is not None
     )
+    eff_pid = (project_id or "").strip() or None
     if needs_partner_confirmation:
-        eff_pid = (project_id or "").strip() or None
         if not eff_pid and time_entry_ids:
             row = (
                 await session.execute(
@@ -217,6 +226,31 @@ async def create_invoice(
             date_from=partner_billing_period_from,
             date_to=partner_billing_period_to,
         )
+
+    partner_preview = None
+    if (
+        partner_billing_period_from is not None
+        and partner_billing_period_to is not None
+        and eff_pid
+    ):
+        partner_preview = await build_partner_confirmed_invoice_preview(
+            session,
+            project_id=eff_pid,
+            date_from=partner_billing_period_from,
+            date_to=partner_billing_period_to,
+            invoice_currency=cur,
+            issue_date=issue_date,
+            fx_book=fx_book,
+            exclude_invoiced=True,
+        )
+        # Source of truth for partner-confirmed invoices: preview entry sets (deduped + package rules).
+        time_entry_ids = list(partner_preview.time_entry_ids)
+        expense_ids = list(partner_preview.expense_ids)
+        if not time_entry_ids and not expense_ids and partner_preview.package_fee_subtotal <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Нет невыставленных строк по подтверждённому периоду для счёта",
+            )
 
     tp = tax_percent if tax_percent is not None else client.tax_percent
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
@@ -260,6 +294,9 @@ async def create_invoice(
         created_by_auth_user_id=actor_auth_user_id,
         created_at=now,
         updated_at=now,
+        partner_billing_period_from=partner_billing_period_from,
+        partner_billing_period_to=partner_billing_period_to,
+        partner_confirmation_request_id=(partner_confirmation_request_id or "").strip() or None,
     )
     repo.add(inv)
     await session.flush()
@@ -269,7 +306,7 @@ async def create_invoice(
     if time_entry_ids:
         for tid in time_entry_ids:
             added, month_hit = await _append_time_line(
-                session, repo, inv, tid, sort_order, actor_auth_user_id
+                session, repo, inv, tid, sort_order, actor_auth_user_id, fx_book=fx_book,
             )
             if added:
                 sort_order += 1
@@ -288,7 +325,9 @@ async def create_invoice(
             row = exp_rows.get(eid)
             if not row:
                 raise HTTPException(status_code=400, detail=f"Расход {eid} не найден или не проходит фильтр")
-            await _append_expense_line(session, repo, inv, row, sort_order, actor_auth_user_id)
+            await _append_expense_line(
+                session, repo, inv, row, sort_order, actor_auth_user_id, fx_book=fx_book,
+            )
             sort_order += 1
     if lines:
         for spec in lines:
@@ -308,11 +347,31 @@ async def create_invoice(
                     m += 1
 
     sort_order = await _ensure_package_fee_lines(
-        session, repo, inv, package_months, sort_order
+        session, repo, inv, package_months, sort_order, fx_book=fx_book,
     )
 
     await session.flush()
     await _recalc_invoice_from_lines(session, inv)
+
+    if partner_preview is not None:
+        expected = _money4(partner_preview.expected_subtotal)
+        actual = _money4(inv.subtotal)
+        if abs(actual - expected) > Decimal("0.01"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INVOICE_SUBTOTAL_MISMATCH",
+                    "message": (
+                        "Сумма счёта не совпала с подтверждённым отчётом "
+                        f"(ожидалось {float(expected)} {cur}, получилось {float(actual)} {cur})"
+                    ),
+                    "expectedSubtotal": float(expected),
+                    "actualSubtotal": float(actual),
+                    "currency": cur,
+                    "preview": partner_preview.as_dict(),
+                },
+            )
+
     await _audit(session, repo, iid, "created", actor_auth_user_id, {"invoiceNumber": number})
     return inv
 
@@ -338,6 +397,8 @@ async def _ensure_package_fee_lines(
     inv: InvoiceModel,
     package_months: set[tuple[str, int, int]],
     sort_order: int,
+    *,
+    fx_book: FxRateBook | None = None,
 ) -> int:
     if not package_months:
         return sort_order
@@ -349,6 +410,8 @@ async def _ensure_package_fee_lines(
         for li in line_items
         if (li.line_kind or "") == "package_fee"
     }
+    book = fx_book or await load_fx_rate_book(session)
+    inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     cpr = ClientProjectRepository(session)
     for pid, y, m in sorted(package_months):
         proj = await cpr.get_by_id_global(pid)
@@ -364,6 +427,8 @@ async def _ensure_package_fee_lines(
         if any(marker in (li.description or "") for li in line_items):
             continue
         desc = f"{marker} {package_fee_description(proj.name or pid, y, m, n)}"
+        project_ccy = (getattr(proj, "currency", None) or "USD").strip().upper()[:10] or "USD"
+        conv = convert_or_same(book, _money4(fee), project_ccy, inv_ccy, inv.issue_date)
         repo.add_line(
             InvoiceLineItemModel(
                 id=str(uuid.uuid4()),
@@ -372,10 +437,13 @@ async def _ensure_package_fee_lines(
                 line_kind="package_fee",
                 description=desc[:2000],
                 quantity=Decimal(1),
-                unit_amount=_money4(fee),
-                line_total=_money4(fee),
+                unit_amount=conv.converted_amount,
+                line_total=conv.converted_amount,
                 time_entry_id=None,
                 expense_request_id=None,
+                source_currency=conv.source_currency,
+                source_amount=conv.source_amount,
+                fx_rate=conv.fx_rate,
             )
         )
         existing.add(desc)
@@ -390,6 +458,8 @@ async def _append_time_line(
     time_entry_id: str,
     sort_order: int,
     actor_id: int,
+    *,
+    fx_book: FxRateBook | None = None,
 ) -> tuple[bool, tuple[str, int, int] | None]:
     """Returns (line_added, optional (project_id, year, month) for package fee)."""
     other = await repo.time_entry_on_active_invoice(time_entry_id, exclude_invoice_id=inv.id)
@@ -415,6 +485,8 @@ async def _append_time_line(
     cpr = ClientProjectRepository(session)
     proj = await cpr.get_by_id_global(entry.project_id) if entry.project_id else None
     pc = (getattr(proj, "currency", None) or "USD") if proj else "USD"
+    inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
+    book = fx_book or await load_fx_rate_book(session)
 
     task = None
     if entry.task_id and entry.project_id:
@@ -435,11 +507,13 @@ async def _append_time_line(
             time_entry_project_id=entry.project_id,
             task=task,
         )
-        unit = _money4(amt)
-        line_total = unit
+        src_total = _money4(amt)
+        unit_src = src_total
         desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
         if task and (task.name or "").strip():
             desc = f"{(task.name or '').strip()}: {desc}"
+        conv = convert_or_same(book, src_total, pc, inv_ccy, inv.issue_date)
+        unit_conv = convert_or_same(book, unit_src, pc, inv_ccy, inv.issue_date).converted_amount
         repo.add_line(
             InvoiceLineItemModel(
                 id=str(uuid.uuid4()),
@@ -448,10 +522,13 @@ async def _append_time_line(
                 line_kind="time",
                 description=desc[:2000],
                 quantity=qty,
-                unit_amount=unit,
-                line_total=line_total,
+                unit_amount=unit_conv,
+                line_total=conv.converted_amount,
                 time_entry_id=time_entry_id,
                 expense_request_id=None,
+                source_currency=conv.source_currency,
+                source_amount=conv.source_amount,
+                fx_rate=conv.fx_rate,
             )
         )
         return True, month_hit
@@ -497,7 +574,7 @@ async def _append_time_line(
             task=task,
         )
 
-    line_total = _money4(amt)
+    src_total = _money4(amt)
     rate_amt, _rate_cur = _billable_rate_for_entry(
         entry.work_date,
         user_rates,
@@ -506,12 +583,14 @@ async def _append_time_line(
         task=task,
     )
     if rate_amt is not None:
-        unit = _money4(rate_amt)
+        unit_src = _money4(rate_amt)
     else:
-        unit = _money4(line_total / qty) if qty > 0 else Decimal(0)
+        unit_src = _money4(src_total / qty) if qty > 0 else Decimal(0)
     desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
     if month_hit:
         desc = f"{desc} (overage)"
+    conv = convert_or_same(book, src_total, pc, inv_ccy, inv.issue_date)
+    unit_conv = convert_or_same(book, unit_src, pc, inv_ccy, inv.issue_date).converted_amount
     repo.add_line(
         InvoiceLineItemModel(
             id=str(uuid.uuid4()),
@@ -520,10 +599,13 @@ async def _append_time_line(
             line_kind="time",
             description=desc[:2000],
             quantity=qty,
-            unit_amount=unit,
-            line_total=line_total,
+            unit_amount=unit_conv,
+            line_total=conv.converted_amount,
             time_entry_id=time_entry_id,
             expense_request_id=None,
+            source_currency=conv.source_currency,
+            source_amount=conv.source_amount,
+            fx_rate=conv.fx_rate,
         )
     )
     return True, month_hit
@@ -536,6 +618,8 @@ async def _append_expense_line(
     row: dict[str, Any],
     sort_order: int,
     actor_id: int,
+    *,
+    fx_book: FxRateBook | None = None,
 ) -> None:
     eid = str(row["id"])
     other = await repo.expense_on_active_invoice(eid, exclude_invoice_id=inv.id)
@@ -557,7 +641,11 @@ async def _append_expense_line(
         await session.flush()
     if inv.project_id and pid and str(pid) != str(inv.project_id):
         raise HTTPException(status_code=400, detail="Расход привязан к другому проекту")
-    line_total = _money4(Decimal(str(row.get("equivalent_amount", 0))))
+    src_total = _money4(Decimal(str(row.get("equivalent_amount", 0))))
+    inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
+    book = fx_book or await load_fx_rate_book(session)
+    # Expense equivalent_amount is always USD
+    conv = convert_or_same(book, src_total, "USD", inv_ccy, inv.issue_date)
     desc = str(row.get("description") or "Расход")[:2000]
     repo.add_line(
         InvoiceLineItemModel(
@@ -567,10 +655,13 @@ async def _append_expense_line(
             line_kind="expense",
             description=desc,
             quantity=Decimal(1),
-            unit_amount=line_total,
-            line_total=line_total,
+            unit_amount=conv.converted_amount,
+            line_total=conv.converted_amount,
             time_entry_id=None,
             expense_request_id=eid,
+            source_currency=conv.source_currency,
+            source_amount=conv.source_amount,
+            fx_rate=conv.fx_rate,
         )
     )
 
@@ -839,7 +930,13 @@ async def cancel_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth
 async def delete_draft_invoice(
     session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int,
 ) -> None:
-    _require_draft(inv)
+    """Hard-delete draft or canceled invoice (no payments). Releases time/expense lines for re-billing."""
+    status = (inv.status or "").strip()
+    if status not in ("draft", "canceled"):
+        raise HTTPException(
+            status_code=400,
+            detail="Удалить можно только черновик или отменённый счёт. Сначала отмените счёт.",
+        )
     repo = InvoiceRepository(session)
     if await repo.sum_payments(inv.id) > 0:
         raise HTTPException(status_code=400, detail="Нельзя удалить счёт с платежами")
@@ -950,6 +1047,15 @@ def invoice_to_dict(
         "createdAt": inv.created_at.isoformat(),
         "updatedAt": inv.updated_at.isoformat() if inv.updated_at else None,
     }
+    pf = getattr(inv, "partner_billing_period_from", None)
+    pt = getattr(inv, "partner_billing_period_to", None)
+    pcr = getattr(inv, "partner_confirmation_request_id", None)
+    out["partnerBillingPeriodFrom"] = pf.isoformat() if pf else None
+    out["partnerBillingPeriodTo"] = pt.isoformat() if pt else None
+    out["partnerConfirmationRequestId"] = (str(pcr).strip() or None) if pcr else None
+    out["partner_billing_period_from"] = out["partnerBillingPeriodFrom"]
+    out["partner_billing_period_to"] = out["partnerBillingPeriodTo"]
+    out["partner_confirmation_request_id"] = out["partnerConfirmationRequestId"]
     doc_url_raw = getattr(inv, "payment_confirmation_document_url", None) or ""
     doc_url = doc_url_raw.strip() or None
     doc_at = getattr(inv, "payment_confirmation_recorded_at", None)
@@ -979,6 +1085,18 @@ def invoice_to_dict(
                 "timeEntryId": li.time_entry_id,
                 "expenseRequestId": li.expense_request_id,
             }
+            sc = getattr(li, "source_currency", None)
+            sa = getattr(li, "source_amount", None)
+            fr = getattr(li, "fx_rate", None)
+            if sc:
+                row["sourceCurrency"] = sc
+                row["source_currency"] = sc
+            if sa is not None:
+                row["sourceAmount"] = float(sa)
+                row["source_amount"] = float(sa)
+            if fr is not None:
+                row["fxRate"] = float(fr)
+                row["fx_rate"] = float(fr)
             row["sort_order"] = row["sortOrder"]
             row["line_kind"] = row["lineKind"]
             row["unit_amount"] = row["unitAmount"]
@@ -1111,13 +1229,13 @@ async def list_unbilled_time_entries(
         .order_by(TimeEntryModel.work_date, TimeEntryModel.id)
     )
     entries = list((await session.execute(q)).scalars().all())
-    ids = [e.id for e in entries]
-    invoiced = await repo.invoiced_time_entry_ids(ids)
     rates = await _load_user_rates(session, None)
     cpr = ClientProjectRepository(session)
     proj = await cpr.get_by_id_global(project_id)
     pc = (getattr(proj, "currency", None) or "USD") if proj else "USD"
-    task_ids = {str(e.task_id) for e in entries if e.task_id}
+    all_project_entries = await _load_project_billable_entries(session, project_id)
+    all_task_ids = {str(e.task_id) for e in all_project_entries if e.task_id}
+    task_ids = {str(e.task_id) for e in entries if e.task_id} | all_task_ids
     tasks_map: dict[str, Any] = {}
     if task_ids:
         rows = (
@@ -1126,33 +1244,79 @@ async def list_unbilled_time_entries(
             )
         ).scalars().all()
         tasks_map = {str(r.id): r for r in rows}
+
+    projects_map = {project_id: proj} if proj else {}
+    entries, _dropped = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates,
+        tasks_map=tasks_map,
+    )
+    ids = [e.id for e in entries]
+    invoiced = await repo.invoiced_time_entry_ids(ids)
+
+    package_splits: dict[str, Any] = {}
+    if proj and is_hour_package_project(proj):
+        _, package_splits = compute_entry_splits_for_project_entries(
+            proj,
+            all_project_entries,
+            date_from=date_from,
+            date_to=date_to,
+            tasks_map=tasks_map,
+        )
+
     out: list[dict[str, Any]] = []
     for e in entries:
         if e.id in invoiced:
             continue
         h = dec(e.hours)
         task = tasks_map.get(str(e.task_id)) if e.task_id else None
-        amt, cur = _billable_amount_for_entry(
-            h,
-            e.is_billable,
-            e.work_date,
-            rates.get(e.auth_user_id),
-            project_currency=pc,
-            time_entry_project_id=e.project_id,
-            task=task,
-        )
+        split = package_splits.get(str(e.id)) if package_splits else None
+        package_covered = False
+        billable_hours = h
+        if proj and is_hour_package_project(proj) and not is_flat_fee_task(task):
+            if not split or split.overage_hours <= 0:
+                package_covered = True
+                billable_hours = Decimal(0)
+                amt = Decimal(0)
+                cur = pc
+            else:
+                billable_hours = split.overage_hours
+                amt, cur = _billable_amount_for_entry(
+                    billable_hours,
+                    True,
+                    e.work_date,
+                    rates.get(e.auth_user_id),
+                    project_currency=pc,
+                    time_entry_project_id=e.project_id,
+                    task=task,
+                )
+        else:
+            amt, cur = _billable_amount_for_entry(
+                h,
+                e.is_billable,
+                e.work_date,
+                rates.get(e.auth_user_id),
+                project_currency=pc,
+                time_entry_project_id=e.project_id,
+                task=task,
+            )
         out.append(
             {
                 "id": e.id,
                 "authUserId": e.auth_user_id,
                 "workDate": e.work_date.isoformat(),
                 "hours": float(h),
-
+                "billableHours": float(billable_hours),
                 "roundedHours": float(h),
                 "durationSeconds": int(e.duration_seconds),
                 "description": e.description,
                 "billableAmount": float(_money4(amt)),
                 "currency": cur,
+                "sourceCurrency": (cur or pc),
+                "packageCovered": package_covered,
+                "coveredHours": float(split.covered_hours) if split else None,
+                "overageHours": float(split.overage_hours) if split else None,
             }
         )
     return out
