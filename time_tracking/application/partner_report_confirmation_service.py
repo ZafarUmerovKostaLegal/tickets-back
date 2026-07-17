@@ -874,3 +874,22 @@ async def invalidate_confirmations_after_row_edit(
     conf_repo = PartnerReportConfirmationRepository(session)
     await conf_repo.invalidate_all_for_snapshot_project(snapshot_id, project_id)
     await session.flush()
+    invalidate_partner_confirmation_read_caches()
+
+
+async def invalidate_confirmations_after_time_entry_change(
+    session: AsyncSession,
+    *,
+    project_id: str | None,
+    work_date: date | None,
+) -> int:
+    """After delete/void of a live time entry — drop partner confirmations covering that day."""
+    pid = (project_id or "").strip() if project_id else ""
+    if not pid or work_date is None:
+        return 0
+    conf_repo = PartnerReportConfirmationRepository(session)
+    n = await conf_repo.invalidate_for_project_covering_date(pid, work_date)
+    if n:
+        await session.flush()
+        invalidate_partner_confirmation_read_caches()
+    return n

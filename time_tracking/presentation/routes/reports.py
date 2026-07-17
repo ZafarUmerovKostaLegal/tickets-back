@@ -102,10 +102,10 @@ def _report_period(
             detail="Конец периода (to / dateTo) не может быть раньше начала (from / dateFrom).",
         )
     # Отчёты грузят matching entries в память — ограничиваем окно, чтобы не положить сервис.
-    if (d1 - d0).days > 730:
+    if (d1 - d0).days > 3650:
         raise HTTPException(
             status_code=400,
-            detail="Период отчёта не больше 730 дней — сузьте from/to (dateFrom/dateTo)",
+            detail="Период отчёта не больше 3650 дней (~10 лет) — сузьте from/to (dateFrom/dateTo)",
         )
     return d0, d1
 

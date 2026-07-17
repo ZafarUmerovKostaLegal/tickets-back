@@ -17,6 +17,9 @@ from application.project_time_entry import (
 )
 from application.time_entry_task import resolve_time_entry_task_for_project
 from application.weekly_submission_service import is_work_date_locked_for_user
+from application.partner_report_confirmation_service import (
+    invalidate_confirmations_after_time_entry_change,
+)
 from infrastructure.database import get_session
 from infrastructure.repositories import (
     ClientProjectRepository,
@@ -350,10 +353,15 @@ async def delete_time_entry(
         row.work_date,
         detail="Период уже сдан. Удаление запрещено (обратитесь к менеджеру).",
     )
+    project_id = row.project_id
+    work_date = row.work_date
     if is_self:
         ok = await repo.delete(auth_user_id, entry_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Запись не найдена")
+        await invalidate_confirmations_after_time_entry_change(
+            session, project_id=project_id, work_date=work_date
+        )
         await session.commit()
         invalidate_all_reports()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -370,6 +378,9 @@ async def delete_time_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except LookupError:
         raise HTTPException(status_code=404, detail="Запись не найдена") from None
+    await invalidate_confirmations_after_time_entry_change(
+        session, project_id=project_id, work_date=work_date
+    )
     await session.commit()
     await session.refresh(row2)
     invalidate_all_reports()

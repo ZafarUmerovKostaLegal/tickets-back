@@ -162,6 +162,44 @@ class PartnerReportConfirmationRepository:
                 self._s.add(row)
         return len(ids)
 
+    async def invalidate_for_project_covering_date(
+        self, project_id: str, work_date: date
+    ) -> int:
+        """Reset partner confirmations whose period covers work_date for the project.
+
+        Clears signatures and sets status to pending_partners for both fully_confirmed
+        and pending requests that include the date (so edits cannot leave stale confirmations).
+        """
+        pid = (project_id or "").strip()
+        if not pid or work_date is None:
+            return 0
+        q = select(ReportPartnerConfirmationRequestModel.id).where(
+            and_(
+                ReportPartnerConfirmationRequestModel.project_id == pid,
+                ReportPartnerConfirmationRequestModel.date_from <= work_date,
+                ReportPartnerConfirmationRequestModel.date_to >= work_date,
+                ReportPartnerConfirmationRequestModel.status.in_(
+                    (_STATUS_PENDING, _STATUS_CONFIRMED)
+                ),
+            )
+        )
+        ids = [str(x) for x in (await self._s.execute(q)).scalars().all()]
+        if not ids:
+            return 0
+        await self._s.execute(
+            delete(ReportPartnerConfirmationSignatureModel).where(
+                ReportPartnerConfirmationSignatureModel.request_id.in_(ids)
+            )
+        )
+        now = _now_utc()
+        for rid in ids:
+            row = await self.get_request_by_id(rid)
+            if row:
+                row.status = _STATUS_PENDING
+                row.updated_at = now
+                self._s.add(row)
+        return len(ids)
+
     async def add_signature(
         self, request_id: str, partner_auth_user_id: int
     ) -> ReportPartnerConfirmationSignatureModel:
