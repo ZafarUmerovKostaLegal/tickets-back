@@ -185,6 +185,23 @@ async def create_calendar_event(
     return r.json()
 
 
+async def probe_mail_read_write(access_token: str) -> bool:
+    """True if the token can access mail (Mail.ReadWrite)."""
+    token = (access_token or "").strip()
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"{GRAPH_BASE}/me/mailFolders/drafts",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"$top": "1", "$select": "id"},
+            )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 async def create_mail_draft(
     access_token: str,
     *,

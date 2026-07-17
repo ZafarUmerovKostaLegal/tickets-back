@@ -152,6 +152,42 @@ async def todos_calendar_connect(request: Request):
     return JSONResponse(content={"url": data["url"]})
 
 
+@router.delete("/calendar/disconnect", summary="Outlook: отключить и удалить токены")
+async def todos_calendar_disconnect(request: Request):
+    base = _todos_base()
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "TODOS_SERVICE_URL not configured",
+                "connected": False,
+            },
+        )
+    url = f"{base}/api/v1/todos/calendar/disconnect"
+    headers = merge_upstream_headers({}) or {}
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+            r = await client.delete(url, headers=headers)
+    except httpx.RequestError as e:
+        return _todos_upstream_503(base, e, extra={"connected": False})
+    except Exception:
+        return JSONResponse(status_code=502, content={"detail": "Bad gateway", "connected": False})
+    if r.status_code == 401:
+        return JSONResponse(status_code=401, content={"detail": "Authorization required"})
+    if r.status_code >= 400:
+        try:
+            body = r.json()
+            if isinstance(body, dict):
+                return JSONResponse(status_code=r.status_code, content=body)
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=r.status_code,
+            content={"detail": (r.text or "Todos error")[:2000], "connected": False},
+        )
+    return JSONResponse(content={"connected": False})
+
+
 @router.get("/calendar/status", summary="Outlook: статус подключения календаря (всегда JSON)")
 async def todos_calendar_status(request: Request):
 
@@ -222,9 +258,13 @@ async def todos_calendar_status(request: Request):
             content={"detail": "Некорректный JSON от todos", "connected": False},
         )
     connected = bool(data.get("connected"))
-    out = {"connected": connected}
+    out: dict = {"connected": connected}
+    if "mailReady" in data:
+        out["mailReady"] = bool(data.get("mailReady"))
     if "error" in data:
         out["error"] = data["error"]
+    if "detail" in data and isinstance(data.get("detail"), str):
+        out["detail"] = data["detail"]
     return JSONResponse(content=out)
 
 

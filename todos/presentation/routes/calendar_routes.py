@@ -17,6 +17,7 @@ from infrastructure.microsoft_graph import (
     get_authorize_url,
     list_calendars as graph_list_calendars,
     list_calendar_events as graph_list_events,
+    probe_mail_read_write,
     refresh_tokens,
 )
 from infrastructure.models import OutlookCalendarTokenModel
@@ -168,8 +169,11 @@ async def calendar_status(
 
     try:
         repo = OutlookCalendarTokenRepository(session)
-        row = await repo.get_by_user_id(user_id)
-        return JSONResponse(content={"connected": row is not None})
+        row = await _get_valid_token(repo, user_id, session)
+        if not row:
+            return JSONResponse(content={"connected": False, "mailReady": False})
+        mail_ready = await probe_mail_read_write(row.access_token)
+        return JSONResponse(content={"connected": True, "mailReady": mail_ready})
     except HTTPException:
         raise
     except Exception as e:
@@ -177,7 +181,7 @@ async def calendar_status(
 
         return JSONResponse(
             status_code=503,
-            content={"connected": False, "error": "unavailable", "detail": str(e)[:500]},
+            content={"connected": False, "mailReady": False, "error": "unavailable", "detail": str(e)[:500]},
         )
 
 
