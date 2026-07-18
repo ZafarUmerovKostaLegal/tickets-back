@@ -15,6 +15,7 @@ from application.project_time_entry import (
     is_project_closed_for_time_entries,
     project_time_entry_block_detail,
 )
+from application.time_entry_out import time_entry_to_out, time_entries_to_out
 from application.time_entry_task import resolve_time_entry_task_for_project
 from application.weekly_submission_service import is_work_date_locked_for_user
 from infrastructure.database import get_session
@@ -152,7 +153,7 @@ async def list_time_entries(
         )
     repo = TimeEntryRepository(session)
     rows = await repo.list_for_user(auth_user_id, date_from, date_to)
-    return [TimeEntryOut.model_validate(r) for r in rows]
+    return await time_entries_to_out(session, rows)
 
 
 @router.get("/{auth_user_id}/time-entries/{entry_id}", response_model=TimeEntryOut)
@@ -168,7 +169,7 @@ async def get_time_entry(
     row = await repo.get_by_id(auth_user_id, entry_id)
     if not row:
         raise HTTPException(status_code=404, detail="Запись не найдена")
-    return TimeEntryOut.model_validate(row)
+    return await time_entry_to_out(session, row)
 
 
 @router.post("/{auth_user_id}/time-entries", response_model=TimeEntryOut)
@@ -211,7 +212,7 @@ async def create_time_entry(
     await session.commit()
     await session.refresh(row)
     invalidate_all_reports()
-    return TimeEntryOut.model_validate(row)
+    return await time_entry_to_out(session, row)
 
 
 @router.patch("/{auth_user_id}/time-entries/{entry_id}", response_model=TimeEntryOut)
@@ -275,13 +276,9 @@ async def patch_time_entry(
         )
         if new_norm != row_norm_project_id and "task_id" not in patch:
             project_changed_clears_task = True
-    else:
-        eff_work = patch.get("work_date") or row.work_date
-        await _validate_project_if_set(
-            session,
-            row_norm_project_id,
-            work_date=eff_work,
-        )
+    # Do not re-check the existing project as "open": archiving/closing a project
+    # must not block edits to historical entries that already belong to it.
+    # Closed-project checks apply only when assigning/changing project_id (above).
 
     eff_proj = patch["project_id"] if "project_id" in patch else row.project_id
     if project_changed_clears_task:
@@ -306,7 +303,7 @@ async def patch_time_entry(
     await session.commit()
     await session.refresh(row)
     invalidate_all_reports()
-    return TimeEntryOut.model_validate(row)
+    return await time_entry_to_out(session, row)
 
 
 @router.delete(
@@ -385,4 +382,4 @@ async def delete_time_entry(
     await session.commit()
     await session.refresh(row2)
     invalidate_all_reports()
-    return TimeEntryOut.model_validate(row2)
+    return await time_entry_to_out(session, row2)

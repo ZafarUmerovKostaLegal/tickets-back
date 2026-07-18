@@ -270,6 +270,9 @@ class TimeEntryOut(BaseModel):
     rounded_hours: Decimal = Field(..., alias="roundedHours")
     is_billable: bool
     project_id: Optional[str] = None
+    project_name: Optional[str] = Field(None, alias="projectName")
+    client_id: Optional[str] = Field(None, alias="clientId")
+    client_name: Optional[str] = Field(None, alias="clientName")
     task_id: Optional[str] = None
     description: Optional[str] = None
     external_reference_url: Optional[str] = Field(None, alias="externalReferenceUrl")
