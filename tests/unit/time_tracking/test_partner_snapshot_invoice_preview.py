@@ -116,3 +116,49 @@ def test_within_period_filters_out_of_range():
     assert m._within_period("2026-07-01", df, dt) is False
     # без даты — включаем (нечем фильтровать)
     assert m._within_period("", df, dt) is True
+
+
+def test_duplicate_fingerprint_same_content_different_id_matches():
+    m = _mod()
+    # Две записи с разными timeEntryId, но одинаковым содержанием (как замороженный дубль).
+    d1 = {
+        "authUserId": 42,
+        "workDate": "2026-06-08",
+        "taskName": "Document Review",
+        "note": "Законодательство, документы и проект договора",
+        "timeEntryId": "te-1",
+    }
+    d2 = {**d1, "timeEntryId": "te-2"}
+    fp1 = m._row_duplicate_fingerprint(
+        d1, project_id="p1", work_date="2026-06-08",
+        hours=Decimal("2.633333"), amount=Decimal("395.00"), currency="EUR",
+    )
+    fp2 = m._row_duplicate_fingerprint(
+        d2, project_id="p1", work_date="2026-06-08",
+        hours=Decimal("2.633333"), amount=Decimal("395.00"), currency="EUR",
+    )
+    assert fp1 is not None
+    assert fp1 == fp2  # дубли схлопнутся
+
+
+def test_duplicate_fingerprint_differs_by_note():
+    m = _mod()
+    base = {"authUserId": 42, "workDate": "2026-06-08", "taskName": "Document Review"}
+    fp1 = m._row_duplicate_fingerprint(
+        {**base, "note": "Первая заметка"}, project_id="p1", work_date="2026-06-08",
+        hours=Decimal("2.63"), amount=Decimal("395.00"), currency="EUR",
+    )
+    fp2 = m._row_duplicate_fingerprint(
+        {**base, "note": "Другая заметка"}, project_id="p1", work_date="2026-06-08",
+        hours=Decimal("2.63"), amount=Decimal("395.00"), currency="EUR",
+    )
+    assert fp1 != fp2  # разные заметки — не дубли
+
+
+def test_duplicate_fingerprint_none_without_user():
+    m = _mod()
+    fp = m._row_duplicate_fingerprint(
+        {"workDate": "2026-06-08", "note": "x"}, project_id="p1", work_date="2026-06-08",
+        hours=Decimal("1"), amount=Decimal("100"), currency="EUR",
+    )
+    assert fp is None  # нет сотрудника — не рискуем схлопывать

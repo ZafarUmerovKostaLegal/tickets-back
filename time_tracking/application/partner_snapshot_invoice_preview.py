@@ -73,6 +73,53 @@ def _pick_str(d: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _norm_text(v: str | None) -> str:
+    return " ".join((v or "").strip().lower().split())
+
+
+def _row_duplicate_fingerprint(
+    d: dict[str, Any],
+    *,
+    project_id: str,
+    work_date: str,
+    hours: Decimal,
+    amount: Decimal,
+    currency: str,
+) -> str | None:
+    """Отпечаток строки — как во фронтовой дедупликации отчёта
+    (`deduplicateTimeExcelPreviewRows`): сотрудник + дата + задача + заметка +
+    часы(6 зн.) + сумма(2 зн.) + валюта. Нужен, чтобы счёт из снимка не показывал
+    дубли, которые отчёт схлопывает (снимок мог быть заморожен до правок)."""
+    uid = _pick_str(d, "authUserId", "auth_user_id")
+    if uid:
+        user_key = f"id:{uid}"
+    else:
+        name = _norm_text(_pick_str(d, "employeeName", "userName", "employee_name", "user_name"))
+        if not name:
+            return None
+        user_key = f"name:{name}"
+    wd = (work_date or "").strip()[:10]
+    if len(wd) != 10:
+        return None
+    tid = _pick_str(d, "taskId", "task_id")
+    task_key = tid if (tid and not tid.startswith("task:")) else _norm_text(_pick_str(d, "taskName", "task_name"))
+    note = _norm_text(_pick_str(d, "note", "notes", "description"))
+    hours_key = str(hours.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+    amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
+    return "\x1f".join(
+        (
+            (project_id or "").strip(),
+            user_key,
+            wd,
+            task_key,
+            note,
+            hours_key,
+            amount_key,
+            currency,
+        )
+    )
+
+
 def _pick_bool(d: dict[str, Any], *keys: str) -> bool:
     for k in keys:
         v = d.get(k)
@@ -265,9 +312,18 @@ async def build_invoice_preview_from_snapshot_rows(
             continue
         desc = _pick_str(d, "note", "notes", "description") or f"Время {wd}".strip()
         src_ccy = _norm_ccy(_pick_str(d, "currency") or project_ccy)
+        fingerprint = _row_duplicate_fingerprint(
+            d,
+            project_id=pid,
+            work_date=wd,
+            hours=hours,
+            amount=amount2,
+            currency=src_ccy,
+        )
         raw_time.append(
             {
                 "time_entry_id": _row_time_entry_id(sr, d),
+                "fingerprint": fingerprint,
                 "hours": hours,
                 "rate": rate2,
                 "amount": amount2,
@@ -291,6 +347,8 @@ async def build_invoice_preview_from_snapshot_rows(
     lines: list[PartnerInvoicePreviewLine] = []
     time_ids: list[str] = []
     seen_ids: set[str] = set()
+    seen_fp: set[str] = set()
+    dropped_dupes = 0
     time_sub = _ZERO
     for r in raw_time:
         te = r["time_entry_id"]
@@ -298,6 +356,14 @@ async def build_invoice_preview_from_snapshot_rows(
             if te in seen_ids or te in invoiced:
                 continue
             seen_ids.add(te)
+        # Схлопываем дубли по «отпечатку» (дата+сотрудник+задача+заметка+часы+сумма),
+        # как это делает просмотр отчёта. Иначе замороженные в снимке дубли попадают в счёт.
+        fp = r.get("fingerprint")
+        if fp:
+            if fp in seen_fp:
+                dropped_dupes += 1
+                continue
+            seen_fp.add(fp)
         conv = convert_or_same(book, r["amount"], r["currency"], inv_ccy, on_date)
         _record_fx(fx_used, conv)
         unit_conv = (
@@ -373,7 +439,7 @@ async def build_invoice_preview_from_snapshot_rows(
         lines=lines,
         fx_used=fx_used,
         project_currency=project_ccy,
-        dropped_duplicate_count=0,
+        dropped_duplicate_count=dropped_dupes,
     )
 
 
