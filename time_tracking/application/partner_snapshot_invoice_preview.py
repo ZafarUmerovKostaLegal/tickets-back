@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.note_normalize import normalize_note_for_duplicate_key, notes_are_near_duplicate
 from application.invoice_fx import FxConversion, FxRateBook, convert_or_same, load_fx_rate_book
 from application.partner_confirmed_invoice_preview import (
     PartnerInvoicePreview,
@@ -37,6 +38,7 @@ from application.partner_confirmed_invoice_preview import (
 )
 from application.report_builder import _fetch_expense_report_data
 from application.report_snapshot_overrides import merge_frozen_and_overrides
+from infrastructure.models import TimeEntryModel
 from infrastructure.models_reports import ReportSnapshotRowModel
 from infrastructure.repositories import ClientProjectRepository
 from infrastructure.repository_invoices import InvoiceRepository
@@ -104,7 +106,10 @@ def _row_duplicate_fingerprint(
     # Сравниваем задачу по ИМЕНИ (а не по task_id): ловим дубли с разными карточками
     # задачи, но одинаковым названием — их отчёт схлопывает.
     task_key = _norm_text(_pick_str(d, "taskName", "task_name"))
-    note = _norm_text(_pick_str(d, "note", "notes", "description"))
+    note = normalize_note_for_duplicate_key(
+        _pick_str(d, "note", "notes", "description"),
+        _pick_str(d, "taskName", "task_name") or None,
+    )
     hours_key = str(hours.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
     amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
     return "\x1f".join(
@@ -278,6 +283,7 @@ async def build_invoice_preview_from_snapshot_rows(
     # 1. Собираем строки времени строго из снимка (frozen + overrides).
     raw_time: list[dict[str, Any]] = []
     saw_entry_rows = False
+    linked_candidate_ids: list[str] = []
     for sr in sorted(snapshot_rows, key=lambda r: r.sort_order):
         d = _effective_row_data(sr)
         if not _is_included_billable_time_row(sr, d):
@@ -313,6 +319,9 @@ async def build_invoice_preview_from_snapshot_rows(
             continue
         desc = _pick_str(d, "note", "notes", "description") or f"Время {wd}".strip()
         src_ccy = _norm_ccy(_pick_str(d, "currency") or project_ccy)
+        te_id = _row_time_entry_id(sr, d)
+        if te_id:
+            linked_candidate_ids.append(te_id)
         fingerprint = _row_duplicate_fingerprint(
             d,
             project_id=pid,
@@ -323,7 +332,7 @@ async def build_invoice_preview_from_snapshot_rows(
         )
         raw_time.append(
             {
-                "time_entry_id": _row_time_entry_id(sr, d),
+                "time_entry_id": te_id,
                 "fingerprint": fingerprint,
                 "hours": hours,
                 "rate": rate2,
@@ -339,6 +348,33 @@ async def build_invoice_preview_from_snapshot_rows(
 
     repo = InvoiceRepository(session)
 
+    # Drop snapshot lines whose live time entry was deleted or voided after confirmation.
+    if linked_candidate_ids:
+        uniq_ids = list(dict.fromkeys(linked_candidate_ids))
+        live_status: dict[str, Any] = {}
+        for batch_start in range(0, len(uniq_ids), 400):
+            batch = uniq_ids[batch_start : batch_start + 400]
+            rows = (
+                await session.execute(
+                    select(TimeEntryModel.id, TimeEntryModel.voided_at).where(
+                        TimeEntryModel.id.in_(batch)
+                    )
+                )
+            ).all()
+            for rid, voided in rows:
+                live_status[str(rid)] = voided
+        missing_or_voided = {
+            tid
+            for tid in uniq_ids
+            if tid not in live_status or live_status[tid] is not None
+        }
+        if missing_or_voided:
+            raw_time = [
+                r
+                for r in raw_time
+                if not r["time_entry_id"] or r["time_entry_id"] not in missing_or_voided
+            ]
+
     # Дедуп по time_entry_id + исключение уже выставленных записей.
     linked_ids = [r["time_entry_id"] for r in raw_time if r["time_entry_id"]]
     invoiced: set[str] = set()
@@ -349,6 +385,8 @@ async def build_invoice_preview_from_snapshot_rows(
     time_ids: list[str] = []
     seen_ids: set[str] = set()
     seen_fp: set[str] = set()
+    # Near-dup fingerprints: keep canonical fp set and also check near-note match via stored list
+    seen_fp_meta: list[tuple[str, str]] = []  # (meta_without_note, note)
     dropped_dupes = 0
     time_sub = _ZERO
     for r in raw_time:
@@ -364,6 +402,20 @@ async def build_invoice_preview_from_snapshot_rows(
             if fp in seen_fp:
                 dropped_dupes += 1
                 continue
+            # Near-duplicate notes with same meta
+            parts = str(fp).split("\x1f")
+            if len(parts) >= 8:
+                note = parts[4]
+                meta = "\x1f".join(parts[:4] + parts[5:])
+                near = False
+                for prev_meta, prev_note in seen_fp_meta:
+                    if prev_meta == meta and notes_are_near_duplicate(note, prev_note):
+                        near = True
+                        break
+                if near:
+                    dropped_dupes += 1
+                    continue
+                seen_fp_meta.append((meta, note))
             seen_fp.add(fp)
         conv = convert_or_same(book, r["amount"], r["currency"], inv_ccy, on_date)
         _record_fx(fx_used, conv)

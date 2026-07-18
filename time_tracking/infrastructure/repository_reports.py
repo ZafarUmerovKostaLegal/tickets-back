@@ -214,6 +214,46 @@ class ReportSnapshotRepository:
         await self._s.flush()
         return snap
 
+    async def delete_rows_for_time_entry(self, time_entry_id: str) -> int:
+        """Remove snapshot rows linked to a live time entry (source_id or frozen timeEntryId)."""
+        tid = (time_entry_id or "").strip()
+        if not tid:
+            return 0
+        # Fast path: source_id matches entry id (typical for entry-level snapshots).
+        res = await self._s.execute(
+            delete(ReportSnapshotRowModel).where(ReportSnapshotRowModel.source_id == tid)
+        )
+        n = int(res.rowcount or 0)
+        # Also drop rows that store the id only inside frozen/overrides JSON.
+        like = f'%"{tid}"%'
+        q = select(ReportSnapshotRowModel).where(
+            ReportSnapshotRowModel.source_id != tid,
+            ReportSnapshotRowModel.frozen_data_json.like(like),
+        )
+        candidates = list((await self._s.execute(q)).scalars().all())
+        for row in candidates:
+            d = {}
+            try:
+                d = json.loads(row.frozen_data_json or "{}")
+            except (json.JSONDecodeError, TypeError):
+                d = {}
+            if not isinstance(d, dict):
+                d = {}
+            if row.overrides_json:
+                try:
+                    ovr = json.loads(row.overrides_json)
+                    if isinstance(ovr, dict):
+                        d = {**d, **ovr}
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            te = str(d.get("timeEntryId") or d.get("time_entry_id") or "").strip()
+            if te == tid:
+                await self._s.delete(row)
+                n += 1
+        if n:
+            await self._s.flush()
+        return n
+
     async def delete(self, snapshot_id: str) -> bool:
         snap = await self.get_by_id(snapshot_id)
         if not snap:

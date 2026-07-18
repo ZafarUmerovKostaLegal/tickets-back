@@ -20,6 +20,7 @@ from application.weekly_submission_service import is_work_date_locked_for_user
 from infrastructure.database import get_session
 from infrastructure.repositories import (
     ClientProjectRepository,
+    ReportSnapshotRepository,
     TimeEntryRepository,
     TimeTrackingUserRepository,
     UserProjectAccessRepository,
@@ -41,6 +42,15 @@ async def _ensure_user(session: AsyncSession, auth_user_id: int) -> None:
     ur = TimeTrackingUserRepository(session)
     if not await ur.get_by_auth_user_id(auth_user_id):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+
+async def _prune_snapshot_rows_for_removed_entry(
+    session: AsyncSession,
+    *,
+    entry_id: str,
+) -> None:
+    """Remove deleted/voided entry from confirmed-report snapshots (keep partner confirmation)."""
+    await ReportSnapshotRepository(session).delete_rows_for_time_entry(entry_id)
 
 
 def _normalize_project_id(project_id: str | None) -> str | None:
@@ -354,6 +364,7 @@ async def delete_time_entry(
         ok = await repo.delete(auth_user_id, entry_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Запись не найдена")
+        await _prune_snapshot_rows_for_removed_entry(session, entry_id=entry_id)
         await session.commit()
         invalidate_all_reports()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -370,6 +381,7 @@ async def delete_time_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except LookupError:
         raise HTTPException(status_code=404, detail="Запись не найдена") from None
+    await _prune_snapshot_rows_for_removed_entry(session, entry_id=entry_id)
     await session.commit()
     await session.refresh(row2)
     invalidate_all_reports()

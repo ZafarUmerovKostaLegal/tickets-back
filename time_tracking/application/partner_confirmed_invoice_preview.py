@@ -49,6 +49,8 @@ def _norm_ccy(v: str | None) -> str:
     return (v or "USD").strip().upper()[:10] or "USD"
 
 
+from application.note_normalize import normalize_note_for_duplicate_key
+
 def _norm_text(v: str | None) -> str:
     return " ".join((v or "").strip().lower().split())
 
@@ -71,7 +73,10 @@ def _entry_duplicate_fingerprint(
     if len(wd) != 10:
         return None
     task_name = _norm_text(getattr(task, "name", None))
-    note = _norm_text(getattr(e, "description", None))
+    note = normalize_note_for_duplicate_key(
+        getattr(e, "description", None),
+        getattr(task, "name", None),
+    )
     hours_key = str(dec(e.hours).quantize(_Q6, rounding=ROUND_HALF_UP))
     amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
     return "\x1f".join(

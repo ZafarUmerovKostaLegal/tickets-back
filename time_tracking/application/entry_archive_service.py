@@ -14,7 +14,7 @@ from application.entry_pricing import _billable_amount_for_entry
 from application.report_builder import _d as dec
 from application.report_builder import _load_user_rates
 from infrastructure.models import TimeEntryModel, TimeManagerClientTaskModel
-from infrastructure.repositories import ClientProjectRepository
+from infrastructure.repositories import ClientProjectRepository, ReportSnapshotRepository
 from infrastructure.repository_entry_archives import TimeEntryArchiveRepository
 from infrastructure.repository_entries import TimeEntryRepository
 from infrastructure.repository_invoices import InvoiceRepository
@@ -113,6 +113,7 @@ async def archive_duplicate_entries(
             voided_by_auth_user_id=viewer_id,
             void_kind=ARCHIVE_VOID_KIND,
         )
+        await ReportSnapshotRepository(session).delete_rows_for_time_entry(entry_id)
         archived.append(TimeEntryArchiveRepository.to_api(archive_row))
 
     await session.commit()
@@ -181,8 +182,9 @@ def _report_dup_fingerprint(
     Задача сравнивается по ИМЕНИ (а не `task_id`) — ловим дубли с разными карточками
     задачи, но одинаковым названием: именно их отчёт схлопывает на экране, а в БД они
     оставались живыми. Авто-архив гасит ровно то, что отчёт скрывает."""
-    task_name = _norm_note(getattr(task, "name", None))
-    note = _norm_note(getattr(entry, "description", None))
+    raw_task = (getattr(task, "name", None) or "").strip()
+    task_name = _norm_note(raw_task)
+    note = _norm_note(getattr(entry, "description", None), raw_task)
     hours_key = str(dec(entry.hours).quantize(_Q6, rounding=ROUND_HALF_UP))
     amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
     return "\x1f".join(
@@ -311,6 +313,7 @@ async def auto_archive_duplicates_for_project_period(
                 voided_by_auth_user_id=int(archived_by_auth_user_id),
                 void_kind=ARCHIVE_VOID_KIND,
             )
+            await ReportSnapshotRepository(session).delete_rows_for_time_entry(e.id)
             archived.append(TimeEntryArchiveRepository.to_api(archive_row))
 
     if commit and (archived or skipped):

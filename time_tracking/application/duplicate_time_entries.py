@@ -15,6 +15,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.entry_pricing import _billable_amount_for_entry
+from application.note_normalize import (
+    normalize_note_for_duplicate_key,
+    notes_are_near_duplicate,
+    task_name_from_row,
+)
 from application.report_builder import _load_user_rates
 from application.task_billing import is_flat_fee_task
 from application.time_rounding import round_decimal_hours_to_minute
@@ -30,8 +35,8 @@ _Q6 = Decimal("0.000001")
 _Q2 = Decimal("0.01")
 
 
-def _norm_note(value: str | None) -> str:
-    return " ".join((value or "").strip().lower().split())
+def _norm_note(value: str | None, task_name: str | None = None) -> str:
+    return normalize_note_for_duplicate_key(value, task_name)
 
 
 def _d(v: Any) -> Decimal:
@@ -110,7 +115,7 @@ def build_duplicate_key_for_entry(
         auth_user_id=int(e.auth_user_id),
         work_date=e.work_date,
         task_id=(e.task_id or "").strip(),
-        note_norm=_norm_note(e.description),
+        note_norm=_norm_note(e.description, task_name_from_row(task)),
         hours_key=_hours_key(hrs),
         amount_key="*" if ignore_amount else _money_key(_d(amt)),
         currency=(cur or project_currency or "USD").strip()[:10],
@@ -122,6 +127,45 @@ def _entry_sort_key_for_keeper(e: TimeEntryModel) -> tuple:
     if created is None:
         return (e.work_date, e.id)
     return (created, e.id)
+
+
+def _duplicate_meta_key(dk: DuplicateKey) -> tuple:
+    """All fingerprint fields except note — for near-duplicate note clustering."""
+    return (
+        dk.auth_user_id,
+        dk.work_date,
+        dk.task_id,
+        dk.hours_key,
+        dk.amount_key,
+        dk.currency,
+    )
+
+
+def _merge_near_duplicate_note_groups(
+    by_group: dict[tuple[str, DuplicateKey], list[TimeEntryModel]],
+) -> dict[tuple[str, DuplicateKey], list[TimeEntryModel]]:
+    """Merge groups that match on user/date/task/hours/amount but have near-equal notes."""
+    buckets: dict[tuple[str, tuple], list[tuple[DuplicateKey, list[TimeEntryModel]]]] = defaultdict(list)
+    for (pid, dk), group in by_group.items():
+        buckets[(pid, _duplicate_meta_key(dk))].append((dk, group))
+
+    out: dict[tuple[str, DuplicateKey], list[TimeEntryModel]] = {}
+    for (pid, _meta), items in buckets.items():
+        clusters: list[tuple[DuplicateKey, list[TimeEntryModel]]] = []
+        for dk, group in items:
+            placed = False
+            for i, (cdk, cgroup) in enumerate(clusters):
+                if notes_are_near_duplicate(dk.note_norm, cdk.note_norm):
+                    # Prefer longer note as cluster key label.
+                    key_dk = cdk if len(cdk.note_norm) >= len(dk.note_norm) else dk
+                    clusters[i] = (key_dk, cgroup + group)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append((dk, list(group)))
+        for dk, group in clusters:
+            out[(pid, dk)] = group
+    return out
 
 
 def deduplicate_entries_for_report(
@@ -153,6 +197,8 @@ def deduplicate_entries_for_report(
         )
         pid = (e.project_id or "").strip()
         by_group[(pid, dk)].append(e)
+
+    by_group = _merge_near_duplicate_note_groups(by_group)
 
     kept: list[TimeEntryModel] = []
     dropped = 0
@@ -315,6 +361,26 @@ async def find_duplicate_time_entries_for_project(
         )
         groups[key].append(row)
 
+    # Merge near-duplicate notes (glued task prefix vs clean note, truncated note, etc.)
+    meta_buckets: dict[tuple, list[tuple[DuplicateKey, list[dict[str, Any]]]]] = defaultdict(list)
+    for dk, rows in groups.items():
+        meta_buckets[_duplicate_meta_key(dk)].append((dk, rows))
+    groups = {}
+    for items in meta_buckets.values():
+        clusters: list[tuple[DuplicateKey, list[dict[str, Any]]]] = []
+        for dk, rows in items:
+            placed = False
+            for i, (cdk, crows) in enumerate(clusters):
+                if notes_are_near_duplicate(dk.note_norm, cdk.note_norm):
+                    key_dk = cdk if len(cdk.note_norm) >= len(dk.note_norm) else dk
+                    clusters[i] = (key_dk, crows + rows)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append((dk, list(rows)))
+        for dk, rows in clusters:
+            groups[dk] = rows
+
     dup_groups = [g for g in groups.values() if len(g) >= min_group_size]
     dup_groups.sort(
         key=lambda rows: (
@@ -331,7 +397,7 @@ async def find_duplicate_time_entries_for_project(
             auth_user_id=int(first["auth_user_id"]),
             work_date=date.fromisoformat(str(first["work_date"])),
             task_id=(first.get("task_id") or "").strip(),
-            note_norm=_norm_note(first.get("description")),
+            note_norm=_norm_note(first.get("description"), first.get("task_name")),
             hours_key=_hours_key(_d(first.get("rounded_hours"))),
             amount_key=_money_key(_d(first.get("billable_amount"))),
             currency=str(first.get("currency") or cur),
