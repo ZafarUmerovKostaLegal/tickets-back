@@ -316,6 +316,38 @@ class PartnerReportConfirmationRepository:
         n = int((await self._s.execute(q)).scalar_one() or 0)
         return n > 0
 
+    async def find_confirmed_covering_project_period(
+        self,
+        project_id: str,
+        date_from: date,
+        date_to: date,
+    ) -> ReportPartnerConfirmationRequestModel | None:
+        """Подтверждённая партнёрами заявка, период которой **целиком охватывает** [date_from, date_to].
+
+        Возвращает наиболее «узкую»/свежую заявку — её снимок используется как источник истины для счёта.
+        """
+        pid = (project_id or "").strip()
+        if not pid or date_to < date_from:
+            return None
+        q = (
+            select(ReportPartnerConfirmationRequestModel)
+            .where(
+                and_(
+                    ReportPartnerConfirmationRequestModel.project_id == pid,
+                    ReportPartnerConfirmationRequestModel.status == _STATUS_CONFIRMED,
+                    ReportPartnerConfirmationRequestModel.date_from <= date_from,
+                    ReportPartnerConfirmationRequestModel.date_to >= date_to,
+                )
+            )
+            .order_by(
+                ReportPartnerConfirmationRequestModel.date_from.desc(),
+                ReportPartnerConfirmationRequestModel.date_to.asc(),
+                ReportPartnerConfirmationRequestModel.created_at.desc(),
+            )
+            .limit(1)
+        )
+        return (await self._s.execute(q)).scalars().one_or_none()
+
     def _confirmed_period_filters(
         self,
         q,

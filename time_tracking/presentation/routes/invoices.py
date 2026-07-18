@@ -26,8 +26,8 @@ from application.invoice_service import (
     record_payment_confirmation_document,
     send_invoice,
 )
-from application.partner_confirmed_invoice_preview import (
-    build_partner_confirmed_invoice_preview,
+from application.partner_snapshot_invoice_preview import (
+    resolve_partner_invoice_preview,
 )
 from infrastructure.database import get_session
 from infrastructure.models import TimeManagerClientModel, TimeManagerClientProjectModel
@@ -112,7 +112,7 @@ async def partner_period_invoice_preview(
                 inv_ccy = (getattr(proj, "currency", None) or "USD").strip().upper()[:10] or "USD"
         else:
             inv_ccy = "USD"
-    preview = await build_partner_confirmed_invoice_preview(
+    preview = await resolve_partner_invoice_preview(
         session,
         project_id=pid,
         date_from=date_from,

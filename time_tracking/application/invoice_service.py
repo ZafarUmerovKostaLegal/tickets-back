@@ -24,8 +24,8 @@ from application.package_billing import (
     package_fee_x,
     package_hours_n,
 )
-from application.partner_confirmed_invoice_preview import (
-    build_partner_confirmed_invoice_preview,
+from application.partner_snapshot_invoice_preview import (
+    resolve_partner_invoice_preview,
 )
 from application.money_amounts import money_product_hours_rate
 from application.time_rounding import invoice_hours_for_billing, invoice_rate_for_billing
@@ -235,7 +235,7 @@ async def create_invoice(
         and partner_billing_period_to is not None
         and eff_pid
     ):
-        partner_preview = await build_partner_confirmed_invoice_preview(
+        partner_preview = await resolve_partner_invoice_preview(
             session,
             project_id=eff_pid,
             date_from=partner_billing_period_from,
@@ -244,11 +244,12 @@ async def create_invoice(
             issue_date=issue_date,
             fx_book=fx_book,
             exclude_invoiced=True,
+            partner_confirmation_request_id=partner_confirmation_request_id,
         )
-        # Source of truth for partner-confirmed invoices: preview entry sets (deduped + package rules).
+        # Source of truth for partner-confirmed invoices: the confirmed report snapshot lines.
         time_entry_ids = list(partner_preview.time_entry_ids)
         expense_ids = list(partner_preview.expense_ids)
-        if not time_entry_ids and not expense_ids and partner_preview.package_fee_subtotal <= 0:
+        if not partner_preview.lines and partner_preview.package_fee_subtotal <= 0:
             raise HTTPException(
                 status_code=400,
                 detail="Нет невыставленных строк по подтверждённому периоду для счёта",
