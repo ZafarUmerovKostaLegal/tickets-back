@@ -188,17 +188,6 @@ async def build_partner_confirmed_invoice_preview(
         tasks_map = {str(r.id): r for r in rows}
 
     projects_map: dict[str, Any] = {pid: proj}
-    entries, dropped = deduplicate_entries_for_report(
-        entries,
-        projects_map=projects_map,
-        rates_map=rates,
-        tasks_map=tasks_map,
-    )
-
-    invoiced: set[str] = set()
-    if exclude_invoiced and entries:
-        invoiced = await repo.invoiced_time_entry_ids([e.id for e in entries])
-
     package_splits: dict[str, Any] = {}
     package_months: set[tuple[int, int]] = set()
     if is_hour_package_project(proj):
@@ -217,6 +206,27 @@ async def build_partner_confirmed_invoice_preview(
                 y, m = y + 1, 1
             else:
                 m += 1
+
+    # Match report preview: minute-rounded hours + package-aware amount, then identity collapse.
+    entries, dropped = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates,
+        tasks_map=tasks_map,
+        package_splits=package_splits or None,
+    )
+    entries, dropped_id = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates,
+        tasks_map=tasks_map,
+        ignore_amount=True,
+    )
+    dropped += dropped_id
+
+    invoiced: set[str] = set()
+    if exclude_invoiced and entries:
+        invoiced = await repo.invoiced_time_entry_ids([e.id for e in entries])
 
     lines: list[PartnerInvoicePreviewLine] = []
     time_ids: list[str] = []

@@ -44,3 +44,12 @@ def quantize_seconds_to_minute(seconds: int) -> int:
         return 0
     minutes = (Decimal(s) / Decimal(60)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return int(minutes) * 60
+
+
+def round_decimal_hours_to_minute(hours: Decimal | float | int | str) -> Decimal:
+    """Match FE `roundDecimalHoursToMinute`: Math.round(h * 60) / 60."""
+    h = hours if isinstance(hours, Decimal) else Decimal(str(hours or 0))
+    if h <= 0:
+        return Decimal(0)
+    minutes = (h * Decimal(60)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return (minutes / Decimal(60)).quantize(_HOURS_QUANT, rounding=ROUND_HALF_UP)

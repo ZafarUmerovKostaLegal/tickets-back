@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.entry_pricing import _billable_amount_for_entry
 from application.report_builder import _load_user_rates
+from application.task_billing import is_flat_fee_task
+from application.time_rounding import round_decimal_hours_to_minute
 from application.user_initials import resolve_user_initials
 from infrastructure.models import (
     TimeEntryModel,
@@ -77,24 +79,40 @@ def build_duplicate_key_for_entry(
     project_currency: str,
     rates_map: dict[int, list],
     task: Any | None = None,
+    package_split: Any | None = None,
+    ignore_amount: bool = False,
 ) -> DuplicateKey:
-    hrs = _d(e.rounded_hours if e.rounded_hours is not None else e.hours)
-    amt, cur = _billable_amount_for_entry(
-        hrs,
-        e.is_billable,
-        e.work_date,
-        rates_map.get(e.auth_user_id),
-        project_currency=project_currency,
-        time_entry_project_id=e.project_id,
-        task=task,
-    )
+    raw_hrs = _d(e.rounded_hours if e.rounded_hours is not None else e.hours)
+    # Align with report preview FE (`roundDecimalHoursToMinute`).
+    hrs = round_decimal_hours_to_minute(raw_hrs)
+    if package_split is not None and not is_flat_fee_task(task):
+        bill_hrs = round_decimal_hours_to_minute(_d(getattr(package_split, "overage_hours", 0)))
+        amt, cur = _billable_amount_for_entry(
+            bill_hrs,
+            bool(e.is_billable) and bill_hrs > 0,
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=project_currency,
+            time_entry_project_id=e.project_id,
+            task=task,
+        )
+    else:
+        amt, cur = _billable_amount_for_entry(
+            hrs,
+            e.is_billable,
+            e.work_date,
+            rates_map.get(e.auth_user_id),
+            project_currency=project_currency,
+            time_entry_project_id=e.project_id,
+            task=task,
+        )
     return DuplicateKey(
         auth_user_id=int(e.auth_user_id),
         work_date=e.work_date,
         task_id=(e.task_id or "").strip(),
         note_norm=_norm_note(e.description),
         hours_key=_hours_key(hrs),
-        amount_key=_money_key(_d(amt)),
+        amount_key="*" if ignore_amount else _money_key(_d(amt)),
         currency=(cur or project_currency or "USD").strip()[:10],
     )
 
@@ -112,6 +130,8 @@ def deduplicate_entries_for_report(
     projects_map: dict[str, Any],
     rates_map: dict[int, list],
     tasks_map: dict[str, Any] | None = None,
+    package_splits: dict[str, Any] | None = None,
+    ignore_amount: bool = False,
 ) -> tuple[list[TimeEntryModel], int]:
     """Убрать дубликаты из отчёта: в каждой группе оставить самую раннюю запись (как при архивации)."""
     if not entries:
@@ -122,7 +142,15 @@ def deduplicate_entries_for_report(
         p = projects_map.get(e.project_id) if e.project_id else None
         cur = (getattr(p, "currency", None) or "USD") if p else "USD"
         task = tasks_map.get(e.task_id) if tasks_map and e.task_id else None
-        dk = build_duplicate_key_for_entry(e, project_currency=cur, rates_map=rates_map, task=task)
+        split = (package_splits or {}).get(str(e.id)) if package_splits else None
+        dk = build_duplicate_key_for_entry(
+            e,
+            project_currency=cur,
+            rates_map=rates_map,
+            task=task,
+            package_split=split,
+            ignore_amount=ignore_amount,
+        )
         pid = (e.project_id or "").strip()
         by_group[(pid, dk)].append(e)
 

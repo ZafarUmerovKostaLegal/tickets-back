@@ -272,6 +272,7 @@ def _list_item(
     author: dict | None = None,
     paid_by_profile: dict | None = None,
     partner_profile: dict | None = None,
+    approved_by_profile: dict | None = None,
 ) -> ExpenseRequestListItemOut:
     n = len(row.attachments or [])
     a = author or {}
@@ -285,6 +286,11 @@ def _list_item(
     paid_by = (
         _author_snippet(row.paid_by_user_id, paid_by_profile)
         if row.paid_by_user_id is not None
+        else None
+    )
+    approved_by = (
+        _author_snippet(row.approved_by_user_id, approved_by_profile)
+        if row.approved_by_user_id is not None
         else None
     )
     partner_user = (
@@ -320,6 +326,8 @@ def _list_item(
         updated_at=row.updated_at,
         submitted_at=row.submitted_at,
         approved_at=row.approved_at,
+        approved_by_user_id=row.approved_by_user_id,
+        approved_by=approved_by,
         rejected_at=row.rejected_at,
         paid_at=row.paid_at,
         paid_by_user_id=row.paid_by_user_id,
@@ -335,8 +343,9 @@ def _detail(
     author: dict | None = None,
     paid_by_profile: dict | None = None,
     partner_profile: dict | None = None,
+    approved_by_profile: dict | None = None,
 ) -> ExpenseRequestDetailOut:
-    li = _list_item(row, author, paid_by_profile, partner_profile)
+    li = _list_item(row, author, paid_by_profile, partner_profile, approved_by_profile)
     sh = sorted(row.status_history or [], key=lambda x: x.changed_at)
     al = sorted(row.audit_logs or [], key=lambda x: x.performed_at)
     atts = row.attachments or []
@@ -389,13 +398,16 @@ async def _detail_response(row: ExpenseRequestModel, authorization: Optional[str
     ids = {row.created_by_user_id}
     if row.paid_by_user_id is not None:
         ids.add(row.paid_by_user_id)
+    if row.approved_by_user_id is not None:
+        ids.add(row.approved_by_user_id)
     if row.partner_user_id is not None:
         ids.add(row.partner_user_id)
     m = await fetch_users_by_ids(settings.auth_service_url, authorization, ids)
     author = m.get(row.created_by_user_id)
     paid_by_p = m.get(row.paid_by_user_id) if row.paid_by_user_id is not None else None
+    approved_by_p = m.get(row.approved_by_user_id) if row.approved_by_user_id is not None else None
     partner_p = m.get(row.partner_user_id) if row.partner_user_id is not None else None
-    return _detail(row, author, paid_by_p, partner_p)
+    return _detail(row, author, paid_by_p, partner_p, approved_by_p)
 
 
 async def _list_with_authors(
@@ -411,6 +423,8 @@ async def _list_with_authors(
         ids.add(r.created_by_user_id)
         if r.paid_by_user_id is not None:
             ids.add(r.paid_by_user_id)
+        if r.approved_by_user_id is not None:
+            ids.add(r.approved_by_user_id)
         if r.partner_user_id is not None:
             ids.add(r.partner_user_id)
     m = await fetch_users_by_ids(settings.auth_service_url, authorization, ids)
@@ -421,6 +435,7 @@ async def _list_with_authors(
                 m.get(r.created_by_user_id),
                 m.get(r.paid_by_user_id) if r.paid_by_user_id is not None else None,
                 m.get(r.partner_user_id) if r.partner_user_id is not None else None,
+                m.get(r.approved_by_user_id) if r.approved_by_user_id is not None else None,
             )
             for r in rows
         ],
@@ -573,6 +588,7 @@ async def create_expense(
     if partner:
         row.submitted_at = now
         row.approved_at = now
+        row.approved_by_user_id = uid
         await repo.add_status_history(
             expense_request_id=row.id,
             from_status=None,
@@ -796,6 +812,7 @@ async def submit_expense(
         row.status = "approved"
         row.submitted_at = row.submitted_at or now
         row.approved_at = row.approved_at or now
+        row.approved_by_user_id = row.approved_by_user_id or uid_submit
         row.updated_by_user_id = uid_submit
         row.updated_at = now
         await repo.add_status_history(
@@ -874,15 +891,17 @@ async def approve_expense(
         )
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
+    approver_uid = int(user["id"])
     row.status = "approved"
     row.approved_at = _utc_now()
-    row.updated_by_user_id = int(user["id"])
+    row.approved_by_user_id = approver_uid
+    row.updated_by_user_id = approver_uid
     row.updated_at = _utc_now()
     await repo.add_status_history(
         expense_request_id=row.id,
         from_status=prev,
         to_status="approved",
-        changed_by_user_id=int(user["id"]),
+        changed_by_user_id=approver_uid,
         comment=None,
     )
     await repo.add_audit(
@@ -891,7 +910,7 @@ async def approve_expense(
         field_name="status",
         old_value=prev,
         new_value="approved",
-        performed_by_user_id=int(user["id"]),
+        performed_by_user_id=approver_uid,
     )
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)

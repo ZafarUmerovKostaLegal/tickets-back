@@ -161,6 +161,10 @@ async def expense_email_action(
     if action == "approve":
         row.status = "approved"
         row.approved_at = _utc_now()
+        # Email links are shared; prefer current_approver_id when set, else keep null
+        # (history still records the sentinel uid for audit).
+        if row.current_approver_id is not None and int(row.current_approver_id) > 0:
+            row.approved_by_user_id = int(row.current_approver_id)
         row.updated_by_user_id = uid
         row.updated_at = _utc_now()
         await repo.add_status_history(

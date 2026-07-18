@@ -23,6 +23,40 @@ async def apply_expense_request_extra_columns(conn: AsyncConnection) -> None:
         await conn.execute(text(ddl))
 
 
+async def apply_expense_approved_by_user_id(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text("ALTER TABLE expense_requests ADD COLUMN IF NOT EXISTS approved_by_user_id INTEGER")
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_expense_requests_approved_by_user_id "
+            "ON expense_requests (approved_by_user_id)"
+        )
+    )
+    # Backfill from the latest transition into «approved» (skip sentinel user id 0 from email links).
+    await conn.execute(
+        text(
+            """
+            UPDATE expense_requests AS er
+            SET approved_by_user_id = src.changed_by_user_id
+            FROM (
+                SELECT DISTINCT ON (expense_request_id)
+                    expense_request_id,
+                    changed_by_user_id
+                FROM expense_status_history
+                WHERE to_status = 'approved'
+                  AND changed_by_user_id IS NOT NULL
+                  AND changed_by_user_id > 0
+                ORDER BY expense_request_id, changed_at DESC
+            ) AS src
+            WHERE er.id = src.expense_request_id
+              AND er.approved_by_user_id IS NULL
+            """
+        )
+    )
+
+
 REGISTERED_EXPENSE_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("expense_request_extra_columns", apply_expense_request_extra_columns),
+    ("expense_approved_by_user_id", apply_expense_approved_by_user_id),
 ]

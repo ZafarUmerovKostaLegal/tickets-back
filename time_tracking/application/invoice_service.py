@@ -255,6 +255,11 @@ async def create_invoice(
     tp = tax_percent if tax_percent is not None else client.tax_percent
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
     dp = discount_percent if discount_percent is not None else client.discount_percent
+    # Partner-confirmed invoices match report totals (pre-tax) unless caller sets tax explicitly.
+    if partner_preview is not None and tax_percent is None and tax2_percent is None and discount_percent is None:
+        tp = Decimal(0)
+        t2p = Decimal(0)
+        dp = Decimal(0)
 
     manual_number = (invoice_number or "").strip()
     if manual_number:
@@ -1246,15 +1251,6 @@ async def list_unbilled_time_entries(
         tasks_map = {str(r.id): r for r in rows}
 
     projects_map = {project_id: proj} if proj else {}
-    entries, _dropped = deduplicate_entries_for_report(
-        entries,
-        projects_map=projects_map,
-        rates_map=rates,
-        tasks_map=tasks_map,
-    )
-    ids = [e.id for e in entries]
-    invoiced = await repo.invoiced_time_entry_ids(ids)
-
     package_splits: dict[str, Any] = {}
     if proj and is_hour_package_project(proj):
         _, package_splits = compute_entry_splits_for_project_entries(
@@ -1264,6 +1260,22 @@ async def list_unbilled_time_entries(
             date_to=date_to,
             tasks_map=tasks_map,
         )
+    entries, _dropped = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates,
+        tasks_map=tasks_map,
+        package_splits=package_splits or None,
+    )
+    entries, _ = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates,
+        tasks_map=tasks_map,
+        ignore_amount=True,
+    )
+    ids = [e.id for e in entries]
+    invoiced = await repo.invoiced_time_entry_ids(ids)
 
     out: list[dict[str, Any]] = []
     for e in entries:

@@ -522,6 +522,24 @@ async def get_time_report(
         date_to=date_to,
         tasks_map=tasks_map,
     )
+    # Second pass: same fingerprint as report-preview FE (package-aware amount + minute hours).
+    if package_splits:
+        entries, dropped2 = deduplicate_entries_for_report(
+            entries,
+            projects_map=projects_map,
+            rates_map=rates_map,
+            tasks_map=tasks_map,
+            package_splits=package_splits,
+        )
+        _report_dup_dropped += dropped2
+    entries, dropped_id = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates_map,
+        tasks_map=tasks_map,
+        ignore_amount=True,
+    )
+    _report_dup_dropped += dropped_id
 
     line_ctx = {
         "projects_map": projects_map,
@@ -821,6 +839,14 @@ async def get_time_report_flat_entries(
         rates_map=rates_map,
         tasks_map=tasks_map,
     )
+    entries, dropped_id = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates_map,
+        tasks_map=tasks_map,
+        ignore_amount=True,
+    )
+    _report_dup_dropped += dropped_id
 
     line_ctx: dict[str, Any] = {
         "projects_map": projects_map,
