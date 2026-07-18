@@ -371,10 +371,32 @@ async def confirm_partner_report_confirmation(
         await conf_repo.add_signature(request_id, vid)
         await session.flush()
     signed_ids = set(await conf_repo.list_signature_partner_ids(request_id))
+    just_fully_confirmed = False
     if partners_confirmation_is_complete(partners, signed_ids):
         await conf_repo.mark_fully_confirmed(request_id)
+        just_fully_confirmed = True
+    # Отчёт полностью подтверждён → синхронизируем БД с тем, что показывает отчёт:
+    # гасим дубли (void + архив), которые отчёт схлопывает лишь на экране. Иначе они
+    # оставались живыми и завышали бюджет/итоги/«не выставлено» и всплывали в счёте.
+    # Обратимо через вкладку «Дубликаты» → «Восстановить».
+    if just_fully_confirmed:
+        from application.entry_archive_service import (
+            auto_archive_duplicates_for_project_period,
+        )
+
+        await auto_archive_duplicates_for_project_period(
+            session,
+            project_id=req.project_id,
+            date_from=req.date_from,
+            date_to=req.date_to,
+            archived_by_auth_user_id=vid,
+        )
     await session.commit()
     invalidate_partner_confirmation_read_caches()
+    if just_fully_confirmed:
+        from infrastructure.report_cache import invalidate_all_reports
+
+        invalidate_all_reports()
     req = await conf_repo.get_request_by_id(request_id, load_signatures=True)
     if not req:
         raise HTTPException(status_code=500, detail="internal")
