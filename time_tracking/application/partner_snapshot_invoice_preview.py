@@ -101,8 +101,9 @@ def _row_duplicate_fingerprint(
     wd = (work_date or "").strip()[:10]
     if len(wd) != 10:
         return None
-    tid = _pick_str(d, "taskId", "task_id")
-    task_key = tid if (tid and not tid.startswith("task:")) else _norm_text(_pick_str(d, "taskName", "task_name"))
+    # Сравниваем задачу по ИМЕНИ (а не по task_id): ловим дубли с разными карточками
+    # задачи, но одинаковым названием — их отчёт схлопывает.
+    task_key = _norm_text(_pick_str(d, "taskName", "task_name"))
     note = _norm_text(_pick_str(d, "note", "notes", "description"))
     hours_key = str(hours.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
     amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))

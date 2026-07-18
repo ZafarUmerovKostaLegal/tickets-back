@@ -34,6 +34,8 @@ from infrastructure.models import (
 from infrastructure.repositories import ClientProjectRepository
 from infrastructure.repository_invoices import InvoiceRepository
 
+_Q2 = Decimal("0.01")
+_Q6 = Decimal("0.000001")
 _Q4 = Decimal("0.0001")
 _ZERO = Decimal(0)
 _INVOICABLE_EXPENSE_STATUSES = frozenset({"approved", "paid", "closed"})
@@ -45,6 +47,45 @@ def _money4(v: Decimal) -> Decimal:
 
 def _norm_ccy(v: str | None) -> str:
     return (v or "USD").strip().upper()[:10] or "USD"
+
+
+def _norm_text(v: str | None) -> str:
+    return " ".join((v or "").strip().lower().split())
+
+
+def _entry_duplicate_fingerprint(
+    e: Any,
+    task: Any | None,
+    *,
+    amount: Decimal,
+    currency: str,
+    project_id: str,
+) -> str | None:
+    """Отпечаток дубля — как в просмотре отчёта (`deduplicateTimeExcelPreviewRows`):
+    сотрудник + дата + ИМЯ задачи + заметка + часы(6 зн.) + сумма(2 зн.) + валюта.
+
+    Ключевое отличие от `deduplicate_entries_for_report`: здесь задача сравнивается
+    по ИМЕНИ, а не по `task_id`. Это ловит дубли с разными карточками задачи, но
+    одинаковым названием (отчёт их схлопывает, а раньше счёт — нет)."""
+    wd = e.work_date.isoformat() if getattr(e, "work_date", None) else ""
+    if len(wd) != 10:
+        return None
+    task_name = _norm_text(getattr(task, "name", None))
+    note = _norm_text(getattr(e, "description", None))
+    hours_key = str(dec(e.hours).quantize(_Q6, rounding=ROUND_HALF_UP))
+    amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
+    return "\x1f".join(
+        (
+            (project_id or "").strip(),
+            f"id:{e.auth_user_id}",
+            wd,
+            task_name,
+            note,
+            hours_key,
+            amount_key,
+            _norm_ccy(currency),
+        )
+    )
 
 
 @dataclass
@@ -234,6 +275,7 @@ async def build_partner_confirmed_invoice_preview(
     lines: list[PartnerInvoicePreviewLine] = []
     time_ids: list[str] = []
     time_sub = _ZERO
+    seen_fp: set[str] = set()
 
     for e in entries:
         if e.id in invoiced:
@@ -264,6 +306,18 @@ async def build_partner_confirmed_invoice_preview(
             # Полностью покрыто пакетом или неоплачиваемо → в отчёте вклад 0,
             # отдельной строки в счёте не создаём.
             continue
+
+        # Схлопываем дубли так же, как просмотр отчёта: по отпечатку строки
+        # (сотрудник+дата+имя задачи+заметка+часы+сумма). Это убирает лишние строки,
+        # которых нет в подтверждённом отчёте (в т.ч. дубли с разными карточками задачи).
+        fp = _entry_duplicate_fingerprint(
+            e, task, amount=src_total, currency=project_ccy, project_id=pid
+        )
+        if fp:
+            if fp in seen_fp:
+                dropped += 1
+                continue
+            seen_fp.add(fp)
 
         rate_amt, _rate_cur = _billable_rate_for_entry(
             e.work_date,
