@@ -559,6 +559,7 @@ async def _append_time_line(
             project_currency=pc,
             time_entry_project_id=entry.project_id,
             task=task,
+            project_row=proj,
         )
         src_total = _money4(amt)
         unit_src = src_total
@@ -619,6 +620,7 @@ async def _append_time_line(
         project_currency=pc,
         time_entry_project_id=entry.project_id,
         task=task,
+        project_row=proj,
     )
     unit_src = invoice_rate_for_billing(rate_amt)
     if unit_src > 0:
@@ -632,6 +634,7 @@ async def _append_time_line(
             project_currency=pc,
             time_entry_project_id=entry.project_id,
             task=task,
+            project_row=proj,
         )
         src_total = _money4(amt)
         unit_src = _money4(src_total / qty) if qty > 0 else Decimal(0)
@@ -1340,6 +1343,7 @@ async def list_unbilled_time_entries(
             time_entry_project_id=e.project_id,
             task=task,
             package_split=split,
+            project_row=proj,
         )
         cur = cur or pc
         package_covered = False

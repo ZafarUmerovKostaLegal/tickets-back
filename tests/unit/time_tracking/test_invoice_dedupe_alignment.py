@@ -37,6 +37,31 @@ def test_invoice_hours_for_billing_matches_excel_num2():
     assert invoice_hours_for_billing(Decimal("1.033333")) == Decimal("1.03")
 
 
+def test_billable_amount_uses_invoice_hour_rounding():
+    """2.633333h × 150 → 2.63 × 150 = 394.50 (Excel / invoice formula)."""
+    ensure_service_in_path("time_tracking")
+    from application.entry_pricing import _billable_amount_for_entry
+
+    class _Rate:
+        def __init__(self):
+            self.amount = Decimal("150")
+            self.currency = "EUR"
+            self.valid_from = None
+            self.valid_to = None
+            self.applies_to_project_id = None
+            self.id = "r1"
+
+    amt, cur = _billable_amount_for_entry(
+        Decimal("2.633333"),
+        True,
+        date(2026, 7, 1),
+        [_Rate()],
+        project_currency="EUR",
+    )
+    assert cur == "EUR"
+    assert amt == Decimal("394.50")
+
+
 def test_ignore_amount_collapses_near_duplicate_entries():
     ensure_service_in_path("time_tracking")
     from application.duplicate_time_entries import deduplicate_entries_for_report

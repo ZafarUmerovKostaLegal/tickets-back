@@ -107,6 +107,7 @@ def _entry_billable_amount_with_package(
     rates_map: dict[int, list],
     package_splits: dict[str, Any] | None,
     task: Any | None = None,
+    project_row: Any | None = None,
 ) -> tuple[Decimal, str]:
     br = rates_map.get(e.auth_user_id)
     split = (package_splits or {}).get(str(e.id)) if package_splits else None
@@ -119,6 +120,7 @@ def _entry_billable_amount_with_package(
         time_entry_project_id=e.project_id,
         task=task,
         package_split=split,
+        project_row=project_row,
     )
 
 
@@ -162,6 +164,7 @@ def _time_entry_line_snake(
         time_entry_project_id=e.project_id,
         task=t,
         package_split=split,
+        project_row=p,
     )
     br, _brc = _billable_rate_for_entry(
         e.work_date,
@@ -169,6 +172,7 @@ def _time_entry_line_snake(
         project_currency=project_currency,
         time_entry_project_id=e.project_id,
         task=t,
+        project_row=p,
     )
     cost_amt, cost_r, _cnc = _cost_amount_for_entry(
         h, e.work_date, crates, project_currency=project_currency
@@ -267,6 +271,7 @@ def _aggregate_entries_to_snake_line(
             total_h += h
             billable_h += h
             brt = rates_map.get(uid) or []
+            proj_row = projects_map.get(e.project_id) if e.project_id else None
             a, _c = billable_amount_respecting_package(
                 h,
                 True,
@@ -276,6 +281,7 @@ def _aggregate_entries_to_snake_line(
                 time_entry_project_id=e.project_id,
                 task=tasks_map.get(e.task_id) if e.task_id else None,
                 package_split=(package_splits or {}).get(str(e.id)) if package_splits else None,
+                project_row=proj_row,
             )
             total_amt += a
         else:
@@ -586,6 +592,7 @@ async def get_time_report(
                     rates_map=rates_map,
                     package_splits=package_splits,
                     task=tasks_map.get(e.task_id) if e.task_id else None,
+                    project_row=p,
                 )
                 bkt["amount"] += amt
                 bkt["currency"] = effective_cur or project_currency
@@ -646,6 +653,7 @@ async def get_time_report(
                 rates_map=rates_map,
                 package_splits=package_splits,
                 task=tasks_map.get(e.task_id) if e.task_id else None,
+                project_row=p,
             )
             bkt["amount"] += amt
             bkt["currency"] = effective_cur or project_currency
@@ -689,6 +697,7 @@ async def get_time_report(
                     rates_map=rates_map,
                     package_splits=package_splits,
                     task=tasks_map.get(e.task_id) if e.task_id else None,
+                    project_row=p,
                 )
                 oa += a
             enriched = MonthPackageSummary(

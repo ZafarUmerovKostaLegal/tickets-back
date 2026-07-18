@@ -9,15 +9,19 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.duplicate_time_entries import deduplicate_entries_for_report
 from application.entry_pricing import (
-    _billable_amount_for_entry,
     _cost_amount_for_entry,
+    billable_amount_respecting_package,
+)
+from application.package_billing import (
+    compute_entry_splits_for_project_entries,
+    is_hour_package_project,
 )
 from application.report_builder import (
     _fetch_expense_report_data,
     _invoice_info_for_time_entries,
     _load_initials_map,
-    _load_projects_map,
     _load_user_cost_rates,
     _load_user_rates,
 )
@@ -52,6 +56,50 @@ def _week_start_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+def _entry_hours(e: Any) -> Decimal:
+    """Match time report: prefer stored hours, fallback to duration_seconds."""
+    if getattr(e, "hours", None) is not None:
+        return _d(e.hours)
+    sec = getattr(e, "duration_seconds", None)
+    if sec is not None:
+        return hours_from_seconds(int(sec))
+    return _ZERO
+
+
+def _dedupe_dashboard_entries(
+    entries: list[Any],
+    *,
+    proj_row: Any,
+    rates_map: dict[int, list],
+    tasks_map: dict[str, Any],
+    package_splits: dict[str, Any] | None,
+) -> list[Any]:
+    """Same three-pass collapse as get_time_report for one project."""
+    projects_map = {str(proj_row.id): proj_row}
+    kept, _ = deduplicate_entries_for_report(
+        entries,
+        projects_map=projects_map,
+        rates_map=rates_map,
+        tasks_map=tasks_map,
+    )
+    if package_splits:
+        kept, _ = deduplicate_entries_for_report(
+            kept,
+            projects_map=projects_map,
+            rates_map=rates_map,
+            tasks_map=tasks_map,
+            package_splits=package_splits,
+        )
+    kept, _ = deduplicate_entries_for_report(
+        kept,
+        projects_map=projects_map,
+        rates_map=rates_map,
+        tasks_map=tasks_map,
+        ignore_amount=True,
+    )
+    return kept
+
+
 async def build_client_project_dashboard(
     session: AsyncSession,
     *,
@@ -76,68 +124,122 @@ async def build_client_project_dashboard(
     df_eff = date_from or date(2000, 1, 1)
     dt_eff = date_to or date.today()
 
-    tot, bill, nonb = await entry_repo.aggregate_totals_for_project(project_id, date_from, date_to)
-    weeks = await entry_repo.aggregate_hours_by_week_for_project(project_id, date_from, date_to)
-    by_user = await entry_repo.aggregate_by_user_for_project(date_from, date_to, project_id)
-
     from_access = await access_repo.list_auth_user_ids_for_project(project_id)
     from_entries = await entry_repo.list_auth_users_with_entries_on_project(
         df_eff, dt_eff, project_id
     )
-    team_member_ids = sorted(set(from_access) | set(from_entries) | set(by_user.keys()))
 
     entries = await entry_repo.list_entries_for_project(project_id, date_from, date_to)
-    entry_ids = [e.id for e in entries]
-    inv_map = await _invoice_info_for_time_entries(session, entry_ids) if entry_ids else {}
-
     uids = sorted({e.auth_user_id for e in entries})
     rates_map = await _load_user_rates(session, uids or None)
     cost_rates_map = await _load_user_cost_rates(session, uids or None)
     task_repo = ClientTaskRepository(session)
     tasks_map = {str(t.id): t for t in await task_repo.list_for_project(project_id)}
 
+    package_splits: dict[str, Any] = {}
+    if is_hour_package_project(proj_row):
+        # Package overage needs full project billable history for carry-in correctness.
+        all_billable = [
+            e
+            for e in await entry_repo.list_entries_for_project(project_id, None, None)
+            if e.is_billable
+        ]
+        _, package_splits = compute_entry_splits_for_project_entries(
+            proj_row,
+            all_billable,
+            date_from=date_from,
+            date_to=date_to,
+            tasks_map=tasks_map,
+        )
+
+    # Align with time report: collapse near-duplicate entries before totals.
+    entries = _dedupe_dashboard_entries(
+        entries,
+        proj_row=proj_row,
+        rates_map=rates_map,
+        tasks_map=tasks_map,
+        package_splits=package_splits or None,
+    )
+    entry_ids = [e.id for e in entries]
+    inv_map = await _invoice_info_for_time_entries(session, entry_ids) if entry_ids else {}
+
+    tot = Decimal(0)
+    bill = Decimal(0)
+    nonb = Decimal(0)
     total_bill = Decimal(0)
     total_cost = Decimal(0)
     cost_any_incomplete = False
     unbilled_bill = Decimal(0)
+    week_hours: dict[date, dict[str, Decimal]] = defaultdict(
+        lambda: {"total": Decimal(0), "billable": Decimal(0), "non_billable": Decimal(0)}
+    )
     week_bill: dict[date, Decimal] = defaultdict(Decimal)
+    task_hours: dict[str, Decimal] = defaultdict(Decimal)
+    task_billable_default: dict[str, bool] = {}
+    task_names: dict[str, str] = {}
     task_money: dict[str, dict[str, Decimal]] = defaultdict(
         lambda: {"billable": Decimal(0), "cost": Decimal(0)},
     )
     task_user_hours: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     task_user_bill: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     task_user_cost: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    user_hours: dict[int, dict[str, Decimal]] = defaultdict(
+        lambda: {"total": Decimal(0), "billable": Decimal(0), "non_billable": Decimal(0)}
+    )
     user_bill: defaultdict[int, Decimal] = defaultdict(lambda: Decimal(0))
     user_cost: defaultdict[int, Decimal] = defaultdict(lambda: Decimal(0))
 
     for e in entries:
-
-        h = hours_from_seconds(int(e.duration_seconds))
+        h = _entry_hours(e)
         uid = e.auth_user_id
         tid = (
             str(e.task_id)
             if e.task_id
             else ("__unassigned_billable__" if e.is_billable else "__unassigned_non_billable__")
         )
+        task = tasks_map.get(str(e.task_id)) if e.task_id else None
+        split = package_splits.get(str(e.id)) if package_splits else None
+
+        tot += h
+        user_hours[uid]["total"] += h
+        ws = _week_start_monday(e.work_date)
+        week_hours[ws]["total"] += h
+        task_hours[tid] += h
+        if e.task_id and task is not None:
+            task_names[tid] = (task.name or "").strip() or tid
+            task_billable_default[tid] = bool(getattr(task, "billable_by_default", True))
+        elif tid.startswith("__unassigned_"):
+            task_names[tid] = (
+                "Без задачи (оплачиваемые)" if e.is_billable else "Без задачи (неоплачиваемые)"
+            )
+            task_billable_default[tid] = bool(e.is_billable)
 
         amt = Decimal(0)
         if e.is_billable:
-            amt, _cur = _billable_amount_for_entry(
+            bill += h
+            user_hours[uid]["billable"] += h
+            week_hours[ws]["billable"] += h
+            amt, _cur = billable_amount_respecting_package(
                 h,
                 e.is_billable,
                 e.work_date,
                 rates_map.get(uid),
                 project_currency=project_currency,
                 time_entry_project_id=project_id,
-                task=tasks_map.get(str(e.task_id)) if e.task_id else None,
+                task=task,
+                package_split=split,
+                project_row=proj_row,
             )
             total_bill += amt
             user_bill[uid] += amt
-            ws = _week_start_monday(e.work_date)
             week_bill[ws] += amt
             task_money[tid]["billable"] += amt
             if e.id not in inv_map:
                 unbilled_bill += amt
+        else:
+            nonb += h
+            user_hours[uid]["non_billable"] += h
+            week_hours[ws]["non_billable"] += h
 
         c_amt, c_rate, _c_cur = _cost_amount_for_entry(
             h, e.work_date, cost_rates_map.get(uid), project_currency=project_currency,
@@ -151,6 +253,8 @@ async def build_client_project_dashboard(
         task_user_hours[tid][uid] += h
         task_user_bill[tid][uid] += amt
         task_user_cost[tid][uid] += c_amt
+
+    team_member_ids = sorted(set(from_access) | set(from_entries) | set(user_hours.keys()))
 
     user_repo = TimeTrackingUserRepository(session)
     by_auth = {
@@ -187,7 +291,7 @@ async def build_client_project_dashboard(
 
     team: list[dict] = []
     for uid in sorted(team_member_ids, key=_member_sort_key_uid):
-        ut, ub, un = by_user.get(uid, (_ZERO, _ZERO, _ZERO))
+        uh = user_hours.get(uid, {"total": _ZERO, "billable": _ZERO, "non_billable": _ZERO})
         u = by_auth.get(uid)
         label = (u.display_name or u.email or str(uid)) if u else str(uid)
         team.append(
@@ -195,9 +299,9 @@ async def build_client_project_dashboard(
                 "user_id": str(uid),
                 "name": label,
                 "initials": resolve_user_initials(u, initials_map=initials_map),
-                "hours": _hours_json(ut),
-                "billable_hours": _hours_json(ub),
-                "non_billable_hours": _hours_json(un),
+                "hours": _hours_json(uh["total"]),
+                "billable_hours": _hours_json(uh["billable"]),
+                "non_billable_hours": _hours_json(uh["non_billable"]),
                 "billable_amount": float(_money(user_bill.get(uid, _ZERO))),
                 "internal_cost_amount": float(_money(user_cost.get(uid, _ZERO))),
                 "has_project_access": uid in set(from_access),
@@ -207,11 +311,11 @@ async def build_client_project_dashboard(
     hours_by_week = [
         {
             "week_start": wk.isoformat(),
-            "hours": _hours_json(t),
-            "billable_hours": _hours_json(b),
-            "non_billable_hours": _hours_json(n),
+            "hours": _hours_json(vals["total"]),
+            "billable_hours": _hours_json(vals["billable"]),
+            "non_billable_hours": _hours_json(vals["non_billable"]),
         }
-        for wk, t, b, n in weeks
+        for wk, vals in sorted(week_hours.items(), key=lambda item: item[0])
     ]
 
     progress_by_week: list[dict] = []
@@ -227,18 +331,18 @@ async def build_client_project_dashboard(
 
     task_rows: list[dict] = []
     seen_task_ids: set[str] = set()
-    for tid, tname, billable_default, hrs in await entry_repo.aggregate_task_hours_for_project(
-        project_id, date_from, date_to
-    ):
-        seen_task_ids.add(tid)
+    for tid, hrs in sorted(task_hours.items(), key=lambda item: str(item[0])):
         if hrs <= 0:
             continue
+        if tid.startswith("__unassigned_"):
+            continue
+        seen_task_ids.add(tid)
         tm = task_money.get(str(tid), {"billable": Decimal(0), "cost": Decimal(0)})
         task_rows.append(
             {
                 "task_id": tid,
-                "name": tname,
-                "billable": billable_default,
+                "name": task_names.get(tid) or tid,
+                "billable": task_billable_default.get(tid, True),
                 "hours": _hours_json(hrs),
                 "billable_amount": float(_money(tm["billable"])),
                 "internal_cost_amount": float(_money(tm["cost"])),
@@ -246,7 +350,6 @@ async def build_client_project_dashboard(
             }
         )
 
-    task_repo = ClientTaskRepository(session)
     for task in await task_repo.list_for_project(project_id):
         tid = str(task.id)
         if tid in seen_task_ids:
@@ -263,18 +366,17 @@ async def build_client_project_dashboard(
             }
         )
     task_rows.sort(key=lambda row: (not row["billable"], str(row["name"]).lower()))
-    for is_b, hrs in await entry_repo.aggregate_unassigned_hours_by_billable_for_project(
-        project_id, date_from, date_to
-    ):
+    for synthetic in ("__unassigned_billable__", "__unassigned_non_billable__"):
+        hrs = task_hours.get(synthetic, _ZERO)
         if hrs <= 0:
             continue
-        synthetic = "__unassigned_billable__" if is_b else "__unassigned_non_billable__"
-        label = "Без задачи (оплачиваемые)" if is_b else "Без задачи (неоплачиваемые)"
+        is_b = synthetic == "__unassigned_billable__"
         tm = task_money.get(synthetic, {"billable": Decimal(0), "cost": Decimal(0)})
         task_rows.append(
             {
                 "task_id": synthetic,
-                "name": label,
+                "name": task_names.get(synthetic)
+                or ("Без задачи (оплачиваемые)" if is_b else "Без задачи (неоплачиваемые)"),
                 "billable": is_b,
                 "hours": _hours_json(hrs),
                 "billable_amount": float(_money(tm["billable"])),

@@ -300,6 +300,7 @@ async def build_partner_confirmed_invoice_preview(
             time_entry_project_id=e.project_id,
             task=task,
             package_split=split,
+            project_row=proj,
         )
         src_total = _money4(src_amt)
         if src_total <= 0:
@@ -325,6 +326,7 @@ async def build_partner_confirmed_invoice_preview(
             project_currency=project_ccy,
             time_entry_project_id=e.project_id,
             task=task,
+            project_row=proj,
         )
         desc = (e.description or "").strip() or f"Время {e.work_date.isoformat()}"
 

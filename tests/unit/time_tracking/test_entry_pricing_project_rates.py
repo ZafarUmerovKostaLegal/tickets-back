@@ -41,6 +41,16 @@ def test_global_used_when_no_project_rate() -> None:
     assert scoped[0].amount == Decimal("100")
 
 
+def test_scoped_falls_back_to_other_project_when_no_global() -> None:
+    rates = [
+        _Rate(150, "EUR", None, None, applies_to_project_id="proj-A"),
+    ]
+    scoped = billable_scoped_user_rates(rates, "EUR", "proj-B")
+    assert scoped is not None
+    assert len(scoped) == 1
+    assert scoped[0].amount == Decimal("150")
+
+
 def test_multiple_project_intervals_pick_by_date() -> None:
     rates = [
         _Rate(120, "EUR", date(2023, 1, 1), date(2023, 6, 30), applies_to_project_id="proj-A"),
@@ -85,6 +95,66 @@ def test_project_rate_closed_falls_back_to_global() -> None:
     )
     assert rate is not None
     assert rate.amount == Decimal("100")
+
+
+def test_falls_back_to_other_project_rate_when_no_global() -> None:
+    """Onboarding often creates only project-scoped rates; they must still bill other projects."""
+    rates = [
+        _Rate(150, "EUR", None, None, applies_to_project_id="proj-other"),
+    ]
+    rate = pick_billable_rate_for_entry(
+        date(2026, 7, 15),
+        rates,
+        project_currency="EUR",
+        time_entry_project_id="proj-gor",
+    )
+    assert rate is not None
+    assert rate.amount == Decimal("150")
+    amt, cur = _billable_amount_for_entry(
+        Decimal("1.4"),
+        True,
+        date(2026, 7, 15),
+        rates,
+        project_currency="EUR",
+        time_entry_project_id="proj-gor",
+    )
+    assert cur == "EUR"
+    assert amt == Decimal("210.00")
+
+
+def test_other_project_rate_does_not_override_this_project_or_global() -> None:
+    rates = [
+        _Rate(100, "EUR", None, None),
+        _Rate(200, "EUR", None, None, applies_to_project_id="proj-other"),
+    ]
+    rate = pick_billable_rate_for_entry(
+        date(2026, 7, 15),
+        rates,
+        project_currency="EUR",
+        time_entry_project_id="proj-gor",
+    )
+    assert rate is not None
+    assert rate.amount == Decimal("100")
+
+
+def test_shared_project_amount_before_other_project_rates() -> None:
+    class _Proj:
+        billable_rate_type = "project"
+        project_billable_rate_amount = Decimal("180")
+        currency = "EUR"
+
+    rates = [
+        _Rate(150, "EUR", None, None, applies_to_project_id="proj-other"),
+    ]
+    rate = pick_billable_rate_for_entry(
+        date(2026, 7, 15),
+        rates,
+        project_currency="EUR",
+        time_entry_project_id="proj-gor",
+        project_row=_Proj(),
+    )
+    assert rate is not None
+    assert rate.amount == Decimal("180")
 
 
 def test_global_rate_change_intervals_in_reports() -> None:

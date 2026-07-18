@@ -1,12 +1,11 @@
 
-
 from __future__ import annotations
 
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.hourly_rate_logic import filter_rates_by_currency, pick_rate_for_date
+from application.entry_pricing import pick_billable_rate_for_entry
 from application.project_billable_rate_sync import project_uses_shared_billable
 from infrastructure.repositories import ClientProjectRepository, HourlyRateRepository
 
@@ -31,8 +30,14 @@ async def validate_hourly_rates_for_project_access(
         if project_uses_shared_billable(row):
             continue
         rates = await hr.list_by_user_and_kind(auth_user_id, "billable")
-        scoped = filter_rates_by_currency(rates, cur)
-        if pick_rate_for_date(scoped, on_date) is None:
+        # Same resolution as report/invoice amounts (incl. other-project legacy fallback).
+        if pick_billable_rate_for_entry(
+            on_date,
+            rates,
+            project_currency=cur,
+            time_entry_project_id=pid,
+            project_row=row,
+        ) is None:
             raise ValueError(
                 f"Нельзя выдать доступ к проекту «{row.name}» (валюта {cur}): у пользователя нет "
                 f"почасовой ставки «оплачиваемая (billable)» в валюте {cur} на текущую дату. "
