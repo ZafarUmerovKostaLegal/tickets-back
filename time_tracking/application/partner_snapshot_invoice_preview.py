@@ -8,7 +8,8 @@
 по тем же правилам, что и подписанный партнёрский Excel-отчёт:
 
 - в счёт попадает по одной строке на каждую включённую строку времени отчёта;
-- ``hours = round2(hours)``, ``rate = round2(billableRate)``, ``amount = round2(hours * rate)``;
+- сумма строки = ``amountToPay`` отчёта (посчитан от точных часов, напр. 2:38 × 150 = 395.00);
+  при отсутствии ``amountToPay`` считаем от точных часов, БЕЗ округления часов до 2 знаков;
 - описание строки — это ``note``/``description`` записи (без префикса задачи);
 - суммы берутся в валюте отчёта и, если валюта счёта другая, конвертируются по FX.
 
@@ -249,17 +250,25 @@ async def build_invoice_preview_from_snapshot_rows(
             "quantity",
         ) or _ZERO
         rate = _pick_num(d, "billableRate", "billable_rate") or _ZERO
-        hours2 = _round2(hours)
-        rate2 = _round2(rate)
-        if hours2 <= 0:
+        if hours <= 0:
             continue
-        amount2 = _round2(hours2 * rate2)
+        rate2 = _round2(rate)
+        # Сумма строки — ровно как в подтверждённом отчёте: сначала берём
+        # замороженный `amountToPay` (он посчитан от точных часов, напр. 2:38 × 150 = 395.00),
+        # и только при его отсутствии считаем от точных часов. НЕ округляем часы до 2 знаков —
+        # иначе суммы расходятся с отчётом (394.50 против 395.00).
+        amount = _pick_num(d, "amountToPay", "amount_to_pay", "amount", "lineTotal", "line_total")
+        if amount is None or amount <= 0:
+            amount = hours * rate
+        amount2 = _round2(amount)
+        if amount2 <= 0:
+            continue
         desc = _pick_str(d, "note", "notes", "description") or f"Время {wd}".strip()
         src_ccy = _norm_ccy(_pick_str(d, "currency") or project_ccy)
         raw_time.append(
             {
                 "time_entry_id": _row_time_entry_id(sr, d),
-                "hours": hours2,
+                "hours": hours,
                 "rate": rate2,
                 "amount": amount2,
                 "description": desc[:2000],

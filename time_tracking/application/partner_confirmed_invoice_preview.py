@@ -12,12 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.duplicate_time_entries import deduplicate_entries_for_report
 from application.entry_pricing import (
-    _billable_amount_for_entry,
     _billable_rate_for_entry,
     billable_amount_respecting_package,
 )
 from application.invoice_fx import FxConversion, FxRateBook, convert_or_same, load_fx_rate_book
-from application.money_amounts import money_product_hours_rate
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
     is_hour_package_project,
@@ -29,7 +27,6 @@ from application.package_billing import (
 from application.report_builder import _fetch_expense_report_data, _load_user_rates
 from application.report_builder import _d as dec
 from application.task_billing import is_flat_fee_task
-from application.time_rounding import invoice_hours_for_billing, invoice_rate_for_billing
 from infrastructure.models import (
     TimeEntryModel,
     TimeManagerClientTaskModel,
@@ -244,83 +241,55 @@ async def build_partner_confirmed_invoice_preview(
         task = tasks_map.get(str(e.task_id)) if e.task_id else None
         user_rates = rates.get(e.auth_user_id)
         split = package_splits.get(str(e.id)) if package_splits else None
+        if is_hour_package_project(proj) and e.work_date:
+            package_months.add(month_key(e.work_date))
+
+        # ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ — подтверждённый отчёт.
+        # Сумма строки считается ровно как `amount_to_pay` в отчёте: точные часы
+        # (e.hours) с учётом пакета, БЕЗ предварительного округления часов до 2 знаков.
+        # Раньше счёт округлял часы (invoice_hours_for_billing) → 2.63 ч вместо 2:38,
+        # из-за чего суммы расходились с отчётом (394.50 против 395.00).
+        src_amt, _cur = billable_amount_respecting_package(
+            dec(e.hours),
+            bool(e.is_billable),
+            e.work_date,
+            user_rates,
+            project_currency=project_ccy,
+            time_entry_project_id=e.project_id,
+            task=task,
+            package_split=split,
+        )
+        src_total = _money4(src_amt)
+        if src_total <= 0:
+            # Полностью покрыто пакетом или неоплачиваемо → в отчёте вклад 0,
+            # отдельной строки в счёте не создаём.
+            continue
+
+        rate_amt, _rate_cur = _billable_rate_for_entry(
+            e.work_date,
+            user_rates,
+            project_currency=project_ccy,
+            time_entry_project_id=e.project_id,
+            task=task,
+        )
+        desc = (e.description or "").strip() or f"Время {e.work_date.isoformat()}"
 
         if is_flat_fee_task(task):
-            src_amt, _cur = _billable_amount_for_entry(
-                invoice_hours_for_billing(e.hours) or dec(e.hours),
-                True,
-                e.work_date,
-                user_rates,
-                project_currency=project_ccy,
-                time_entry_project_id=e.project_id,
-                task=task,
-            )
             qty = Decimal(1)
-            unit_src = _money4(src_amt)
-            src_total = unit_src
-            desc = (e.description or "").strip() or f"Время {e.work_date.isoformat()}"
-            if task and (task.name or "").strip():
-                desc = f"{(task.name or '').strip()}: {desc}"
-        elif is_hour_package_project(proj):
-            if e.work_date:
-                package_months.add(month_key(e.work_date))
-            if not split or split.overage_hours <= 0:
-                continue
-            qty = invoice_hours_for_billing(split.overage_hours)
-            if qty <= 0:
-                continue
-            rate_amt, _rate_cur = _billable_rate_for_entry(
-                e.work_date,
-                user_rates,
-                project_currency=project_ccy,
-                time_entry_project_id=e.project_id,
-                task=task,
-            )
-            unit_src = invoice_rate_for_billing(rate_amt)
-            if unit_src > 0:
-                src_total = money_product_hours_rate(qty, unit_src)
-            else:
-                src_amt, _cur = _billable_amount_for_entry(
-                    qty,
-                    True,
-                    e.work_date,
-                    user_rates,
-                    project_currency=project_ccy,
-                    time_entry_project_id=e.project_id,
-                    task=task,
-                )
-                src_total = _money4(src_amt)
-                unit_src = _money4(src_total / qty) if qty > 0 else _ZERO
-            desc = (e.description or "").strip() or f"Время {e.work_date.isoformat()}"
-            desc = f"{desc} (overage)"
+            unit_src = src_total
         else:
-            qty = invoice_hours_for_billing(e.hours)
+            # Количество = точные часы, ставка = договорная ставка отчёта.
+            # qty * unit == src_total на полной точности (как в отчёте: 2:38 × 150 = 395.00).
+            if is_hour_package_project(proj) and split is not None:
+                qty = dec(getattr(split, "overage_hours", 0))
+            else:
+                qty = dec(e.hours)
             if qty <= 0:
                 continue
-            rate_amt, _rate_cur = _billable_rate_for_entry(
-                e.work_date,
-                user_rates,
-                project_currency=project_ccy,
-                time_entry_project_id=e.project_id,
-                task=task,
-            )
-            unit_src = invoice_rate_for_billing(rate_amt)
-            if unit_src > 0:
-                src_total = money_product_hours_rate(qty, unit_src)
+            if rate_amt and rate_amt > 0:
+                unit_src = _money4(rate_amt)
             else:
-                src_amt, _cur = billable_amount_respecting_package(
-                    qty,
-                    True,
-                    e.work_date,
-                    user_rates,
-                    project_currency=project_ccy,
-                    time_entry_project_id=e.project_id,
-                    task=task,
-                    package_split=None,
-                )
-                src_total = _money4(src_amt)
-                unit_src = _money4(src_total / qty) if qty > 0 else _ZERO
-            desc = (e.description or "").strip() or f"Время {e.work_date.isoformat()}"
+                unit_src = _money4(src_total / qty)
 
         conv = convert_or_same(book, src_total, project_ccy, inv_ccy, on_date)
         _record_fx(fx_used, conv)

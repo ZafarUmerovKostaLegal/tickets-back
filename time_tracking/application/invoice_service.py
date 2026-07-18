@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from application.duplicate_time_entries import deduplicate_entries_for_report
-from application.entry_pricing import _billable_amount_for_entry, _billable_rate_for_entry
+from application.entry_pricing import (
+    _billable_amount_for_entry,
+    _billable_rate_for_entry,
+    billable_amount_respecting_package,
+)
 from application.invoice_fx import FxRateBook, convert_or_same, load_fx_rate_book
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
@@ -1325,59 +1329,27 @@ async def list_unbilled_time_entries(
         qty = invoice_hours_for_billing(h)
         task = tasks_map.get(str(e.task_id)) if e.task_id else None
         split = package_splits.get(str(e.id)) if package_splits else None
+        # Сумма — ровно как в подтверждённом отчёте (amount_to_pay): точные часы
+        # с учётом пакета, без предварительного округления часов до 2 знаков.
+        amt, cur = billable_amount_respecting_package(
+            h,
+            bool(e.is_billable),
+            e.work_date,
+            rates.get(e.auth_user_id),
+            project_currency=pc,
+            time_entry_project_id=e.project_id,
+            task=task,
+            package_split=split,
+        )
+        cur = cur or pc
         package_covered = False
         billable_hours = qty
         if proj and is_hour_package_project(proj) and not is_flat_fee_task(task):
             if not split or split.overage_hours <= 0:
                 package_covered = True
                 billable_hours = Decimal(0)
-                amt = Decimal(0)
-                cur = pc
             else:
                 billable_hours = invoice_hours_for_billing(split.overage_hours)
-                rate_amt, _rc = _billable_rate_for_entry(
-                    e.work_date,
-                    rates.get(e.auth_user_id),
-                    project_currency=pc,
-                    time_entry_project_id=e.project_id,
-                    task=task,
-                )
-                unit = invoice_rate_for_billing(rate_amt)
-                if unit > 0 and billable_hours > 0:
-                    amt = money_product_hours_rate(billable_hours, unit)
-                    cur = pc
-                else:
-                    amt, cur = _billable_amount_for_entry(
-                        billable_hours,
-                        True,
-                        e.work_date,
-                        rates.get(e.auth_user_id),
-                        project_currency=pc,
-                        time_entry_project_id=e.project_id,
-                        task=task,
-                    )
-        else:
-            rate_amt, _rc = _billable_rate_for_entry(
-                e.work_date,
-                rates.get(e.auth_user_id),
-                project_currency=pc,
-                time_entry_project_id=e.project_id,
-                task=task,
-            )
-            unit = invoice_rate_for_billing(rate_amt)
-            if unit > 0 and qty > 0:
-                amt = money_product_hours_rate(qty, unit)
-                cur = pc
-            else:
-                amt, cur = _billable_amount_for_entry(
-                    qty,
-                    e.is_billable,
-                    e.work_date,
-                    rates.get(e.auth_user_id),
-                    project_currency=pc,
-                    time_entry_project_id=e.project_id,
-                    task=task,
-                )
         out.append(
             {
                 "id": e.id,

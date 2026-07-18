@@ -46,9 +46,10 @@ def test_effective_data_override_wins():
     assert d["note"] == "edited"
 
 
-def test_round2_amount_matches_report_rule():
+def test_round2_primitive():
     m = _mod()
-    # hours=2.63, rate=150 → 394.50 (как в подписанном отчёте)
+    # Проверка примитива округления денег до 2 знаков (не правило суммы отчёта:
+    # сумма строки берётся из amountToPay / точных часов, напр. 2:38 × 150 = 395.00).
     hours = m._round2(Decimal("2.63"))
     rate = m._round2(Decimal("150"))
     assert m._round2(hours * rate) == Decimal("394.50")
