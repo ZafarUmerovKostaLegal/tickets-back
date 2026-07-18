@@ -27,6 +27,8 @@ from application.package_billing import (
 from application.partner_confirmed_invoice_preview import (
     build_partner_confirmed_invoice_preview,
 )
+from application.money_amounts import money_product_hours_rate
+from application.time_rounding import invoice_hours_for_billing, invoice_rate_for_billing
 from application.task_billing import is_flat_fee_task
 from application.partner_report_confirmation_service import (
     ensure_fully_confirmed_partner_period_or_403,
@@ -308,52 +310,93 @@ async def create_invoice(
 
     sort_order = 0
     package_months: set[tuple[str, int, int]] = set()
-    if time_entry_ids:
-        for tid in time_entry_ids:
-            added, month_hit = await _append_time_line(
-                session, repo, inv, tid, sort_order, actor_auth_user_id, fx_book=fx_book,
+    if partner_preview is not None:
+        # Materialize exact preview lines (already minute+2dp hours, Excel-aligned money).
+        for ln in partner_preview.lines:
+            if ln.time_entry_id:
+                other = await repo.time_entry_on_active_invoice(ln.time_entry_id, exclude_invoice_id=inv.id)
+                if other:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Запись времени уже в счёте {other}",
+                    )
+            if ln.expense_request_id:
+                other = await repo.expense_on_active_invoice(
+                    ln.expense_request_id, exclude_invoice_id=inv.id
+                )
+                if other:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Расход уже в счёте {other}",
+                    )
+            repo.add_line(
+                InvoiceLineItemModel(
+                    id=str(uuid.uuid4()),
+                    invoice_id=inv.id,
+                    sort_order=sort_order,
+                    line_kind=ln.line_kind,
+                    description=(ln.description or "")[:2000],
+                    quantity=ln.quantity,
+                    unit_amount=ln.unit_amount,
+                    line_total=ln.line_total,
+                    time_entry_id=ln.time_entry_id,
+                    expense_request_id=ln.expense_request_id,
+                    source_currency=ln.source_currency,
+                    source_amount=ln.source_amount,
+                    fx_rate=ln.fx_rate,
+                )
             )
-            if added:
-                sort_order += 1
-            if month_hit:
-                package_months.add(month_hit)
+            sort_order += 1
+        if not inv.project_id and eff_pid:
+            inv.project_id = eff_pid
         await session.flush()
-    if expense_ids:
-        pid_for_exp = project_id or inv.project_id
-        if not pid_for_exp:
-            raise HTTPException(
-                status_code=400,
-                detail="Укажите projectId или добавьте сначала строки времени по проекту",
-            )
-        exp_rows = await _load_expense_rows_for_project(session, pid_for_exp, expense_ids)
-        for eid in expense_ids:
-            row = exp_rows.get(eid)
-            if not row:
-                raise HTTPException(status_code=400, detail=f"Расход {eid} не найден или не проходит фильтр")
-            await _append_expense_line(
-                session, repo, inv, row, sort_order, actor_auth_user_id, fx_book=fx_book,
-            )
-            sort_order += 1
-    if lines:
-        for spec in lines:
-            await _append_manual_line(session, repo, inv, spec, sort_order, actor_auth_user_id)
-            sort_order += 1
+    else:
+        if time_entry_ids:
+            for tid in time_entry_ids:
+                added, month_hit = await _append_time_line(
+                    session, repo, inv, tid, sort_order, actor_auth_user_id, fx_book=fx_book,
+                )
+                if added:
+                    sort_order += 1
+                if month_hit:
+                    package_months.add(month_hit)
+            await session.flush()
+        if expense_ids:
+            pid_for_exp = project_id or inv.project_id
+            if not pid_for_exp:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Укажите projectId или добавьте сначала строки времени по проекту",
+                )
+            exp_rows = await _load_expense_rows_for_project(session, pid_for_exp, expense_ids)
+            for eid in expense_ids:
+                row = exp_rows.get(eid)
+                if not row:
+                    raise HTTPException(status_code=400, detail=f"Расход {eid} не найден или не проходит фильтр")
+                await _append_expense_line(
+                    session, repo, inv, row, sort_order, actor_auth_user_id, fx_book=fx_book,
+                )
+                sort_order += 1
+        if lines:
+            for spec in lines:
+                await _append_manual_line(session, repo, inv, spec, sort_order, actor_auth_user_id)
+                sort_order += 1
 
-    if partner_billing_period_from and partner_billing_period_to and (project_id or inv.project_id):
-        pid = (project_id or inv.project_id or "").strip()
-        if pid:
-            y, m = partner_billing_period_from.year, partner_billing_period_from.month
-            ey, em = partner_billing_period_to.year, partner_billing_period_to.month
-            while (y, m) <= (ey, em):
-                package_months.add((pid, y, m))
-                if m == 12:
-                    y, m = y + 1, 1
-                else:
-                    m += 1
+        if partner_billing_period_from and partner_billing_period_to and (project_id or inv.project_id):
+            pid = (project_id or inv.project_id or "").strip()
+            if pid:
+                y, m = partner_billing_period_from.year, partner_billing_period_from.month
+                ey, em = partner_billing_period_to.year, partner_billing_period_to.month
+                while (y, m) <= (ey, em):
+                    package_months.add((pid, y, m))
+                    if m == 12:
+                        y, m = y + 1, 1
+                    else:
+                        m += 1
 
-    sort_order = await _ensure_package_fee_lines(
-        session, repo, inv, package_months, sort_order, fx_book=fx_book,
-    )
+        sort_order = await _ensure_package_fee_lines(
+            session, repo, inv, package_months, sort_order, fx_book=fx_book,
+        )
 
     await session.flush()
     await _recalc_invoice_from_lines(session, inv)
@@ -504,7 +547,7 @@ async def _append_time_line(
             month_hit = (str(entry.project_id), y, m)
         qty = Decimal(1)
         amt, _cur = _billable_amount_for_entry(
-            dec(entry.hours),
+            invoice_hours_for_billing(entry.hours) or dec(entry.hours),
             entry.is_billable,
             entry.work_date,
             user_rates,
@@ -557,18 +600,25 @@ async def _append_time_line(
         if not split or split.overage_hours <= 0:
             # Covered by package — no time line; package fee still owed for the month.
             return False, month_hit
-        qty = split.overage_hours
-        amt, _cur = _billable_amount_for_entry(
-            qty,
-            True,
-            entry.work_date,
-            user_rates,
-            project_currency=pc,
-            time_entry_project_id=entry.project_id,
-            task=task,
-        )
+        qty = invoice_hours_for_billing(split.overage_hours)
+        if qty <= 0:
+            return False, month_hit
     else:
-        qty = dec(entry.hours)
+        qty = invoice_hours_for_billing(entry.hours)
+        if qty <= 0:
+            return False, None
+
+    rate_amt, _rate_cur = _billable_rate_for_entry(
+        entry.work_date,
+        user_rates,
+        project_currency=pc,
+        time_entry_project_id=entry.project_id,
+        task=task,
+    )
+    unit_src = invoice_rate_for_billing(rate_amt)
+    if unit_src > 0:
+        src_total = money_product_hours_rate(qty, unit_src)
+    else:
         amt, _cur = _billable_amount_for_entry(
             qty,
             entry.is_billable,
@@ -578,18 +628,7 @@ async def _append_time_line(
             time_entry_project_id=entry.project_id,
             task=task,
         )
-
-    src_total = _money4(amt)
-    rate_amt, _rate_cur = _billable_rate_for_entry(
-        entry.work_date,
-        user_rates,
-        project_currency=pc,
-        time_entry_project_id=entry.project_id,
-        task=task,
-    )
-    if rate_amt is not None:
-        unit_src = _money4(rate_amt)
-    else:
+        src_total = _money4(amt)
         unit_src = _money4(src_total / qty) if qty > 0 else Decimal(0)
     desc = (entry.description or "").strip() or f"Время {entry.work_date.isoformat()}"
     if month_hit:
@@ -1282,10 +1321,11 @@ async def list_unbilled_time_entries(
         if e.id in invoiced:
             continue
         h = dec(e.hours)
+        qty = invoice_hours_for_billing(h)
         task = tasks_map.get(str(e.task_id)) if e.task_id else None
         split = package_splits.get(str(e.id)) if package_splits else None
         package_covered = False
-        billable_hours = h
+        billable_hours = qty
         if proj and is_hour_package_project(proj) and not is_flat_fee_task(task):
             if not split or split.overage_hours <= 0:
                 package_covered = True
@@ -1293,34 +1333,58 @@ async def list_unbilled_time_entries(
                 amt = Decimal(0)
                 cur = pc
             else:
-                billable_hours = split.overage_hours
-                amt, cur = _billable_amount_for_entry(
-                    billable_hours,
-                    True,
+                billable_hours = invoice_hours_for_billing(split.overage_hours)
+                rate_amt, _rc = _billable_rate_for_entry(
                     e.work_date,
                     rates.get(e.auth_user_id),
                     project_currency=pc,
                     time_entry_project_id=e.project_id,
                     task=task,
                 )
+                unit = invoice_rate_for_billing(rate_amt)
+                if unit > 0 and billable_hours > 0:
+                    amt = money_product_hours_rate(billable_hours, unit)
+                    cur = pc
+                else:
+                    amt, cur = _billable_amount_for_entry(
+                        billable_hours,
+                        True,
+                        e.work_date,
+                        rates.get(e.auth_user_id),
+                        project_currency=pc,
+                        time_entry_project_id=e.project_id,
+                        task=task,
+                    )
         else:
-            amt, cur = _billable_amount_for_entry(
-                h,
-                e.is_billable,
+            rate_amt, _rc = _billable_rate_for_entry(
                 e.work_date,
                 rates.get(e.auth_user_id),
                 project_currency=pc,
                 time_entry_project_id=e.project_id,
                 task=task,
             )
+            unit = invoice_rate_for_billing(rate_amt)
+            if unit > 0 and qty > 0:
+                amt = money_product_hours_rate(qty, unit)
+                cur = pc
+            else:
+                amt, cur = _billable_amount_for_entry(
+                    qty,
+                    e.is_billable,
+                    e.work_date,
+                    rates.get(e.auth_user_id),
+                    project_currency=pc,
+                    time_entry_project_id=e.project_id,
+                    task=task,
+                )
         out.append(
             {
                 "id": e.id,
                 "authUserId": e.auth_user_id,
                 "workDate": e.work_date.isoformat(),
-                "hours": float(h),
+                "hours": float(qty),
                 "billableHours": float(billable_hours),
-                "roundedHours": float(h),
+                "roundedHours": float(qty),
                 "durationSeconds": int(e.duration_seconds),
                 "description": e.description,
                 "billableAmount": float(_money4(amt)),

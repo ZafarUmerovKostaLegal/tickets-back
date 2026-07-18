@@ -20,6 +20,23 @@ def test_round_decimal_hours_to_minute_matches_fe():
     assert float(round_decimal_hours_to_minute(Decimal("21.183333"))) == 21.183333
 
 
+def test_invoice_hours_for_billing_matches_excel_num2():
+    """Partner Excel: minute-round then Math.round(h*100)/100 — e.g. 2.633333 → 2.63."""
+    ensure_service_in_path("time_tracking")
+    from application.time_rounding import invoice_hours_for_billing, invoice_rate_for_billing
+    from application.money_amounts import money_product_hours_rate
+
+    qty = invoice_hours_for_billing(Decimal("2.633333"))
+    assert qty == Decimal("2.63")
+    rate = invoice_rate_for_billing(Decimal("150"))
+    assert rate == Decimal("150.00")
+    assert money_product_hours_rate(qty, rate) == Decimal("394.50")
+
+    assert invoice_hours_for_billing(Decimal("0.75")) == Decimal("0.75")
+    assert invoice_hours_for_billing(Decimal("4.65")) == Decimal("4.65")
+    assert invoice_hours_for_billing(Decimal("1.033333")) == Decimal("1.03")
+
+
 def test_ignore_amount_collapses_near_duplicate_entries():
     ensure_service_in_path("time_tracking")
     from application.duplicate_time_entries import deduplicate_entries_for_report

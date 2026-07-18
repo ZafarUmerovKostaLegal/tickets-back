@@ -53,3 +53,24 @@ def round_decimal_hours_to_minute(hours: Decimal | float | int | str) -> Decimal
         return Decimal(0)
     minutes = (h * Decimal(60)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return (minutes / Decimal(60)).quantize(_HOURS_QUANT, rounding=ROUND_HALF_UP)
+
+
+_HOURS_MONEY_QUANT = Decimal("0.01")
+
+
+def invoice_hours_for_billing(hours: Decimal | float | int | str) -> Decimal:
+    """Hours for invoice / partner Excel lines: minute-round then 2dp (FE `excelNum2`)."""
+    h = round_decimal_hours_to_minute(hours)
+    if h <= 0:
+        return Decimal(0)
+    return h.quantize(_HOURS_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def invoice_rate_for_billing(rate: Decimal | float | int | str | None) -> Decimal:
+    """Match FE Excel rate cell: Math.round(rate * 100) / 100."""
+    if rate is None:
+        return Decimal(0)
+    r = rate if isinstance(rate, Decimal) else Decimal(str(rate or 0))
+    if r <= 0:
+        return Decimal(0)
+    return r.quantize(_HOURS_MONEY_QUANT, rounding=ROUND_HALF_UP)
