@@ -1,5 +1,5 @@
 from typing import Optional, Sequence, Tuple
-from sqlalchemy import Integer, and_, func, or_, select, update, delete
+from sqlalchemy import and_, case, func, or_, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities import User
 from application.ports import UserRepositoryPort, RoleRepositoryPort
@@ -205,9 +205,23 @@ class UserRepository(UserRepositoryPort):
         )
         base = select(
             func.count().label("total"),
-            func.sum(func.cast(and_(UserModel.is_blocked == False, UserModel.is_archived == False), Integer)).label("active"),
-            func.sum(func.cast(UserModel.is_blocked == True, Integer)).label("blocked"),
-            func.sum(func.cast(UserModel.is_archived == True, Integer)).label("archived"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (and_(UserModel.is_blocked == False, UserModel.is_archived == False), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("active"),
+            func.coalesce(
+                func.sum(case((UserModel.is_blocked == True, 1), else_=0)),
+                0,
+            ).label("blocked"),
+            func.coalesce(
+                func.sum(case((UserModel.is_archived == True, 1), else_=0)),
+                0,
+            ).label("archived"),
         ).select_from(UserModel)
         if conditions:
             base = base.where(and_(*conditions))

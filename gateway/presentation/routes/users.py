@@ -399,7 +399,7 @@ async def get_user_public(
     return r.json()
 
 
-@router.get("", response_model=list[UserResponse])
+@router.get("")
 async def list_users(
     request: Request,
     include_archived: bool = Query(False, description="Include archived users"),
