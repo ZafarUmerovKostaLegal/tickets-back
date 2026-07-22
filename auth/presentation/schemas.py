@@ -37,6 +37,22 @@ class UserPublicListResponse(BaseModel):
     missing_ids: list[int] = []
 
 
+class UserListSummary(BaseModel):
+    total: int = 0
+    active: int = 0
+    blocked: int = 0
+    archived: int = 0
+    roles: list[dict] = Field(default_factory=list)
+
+
+class UserListResponse(BaseModel):
+    items: list[UserResponse]
+    total: int
+    skip: int
+    limit: int
+    summary: UserListSummary = Field(default_factory=UserListSummary)
+
+
 class UserDetailResponse(BaseModel):
     id: int
     azure_oid: str

@@ -105,6 +105,10 @@ class InventoryRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    async def list_page(self, filters: ItemFilters) -> tuple[Sequence[InventoryItem], int, dict]:
+        pass
+
+    @abstractmethod
     async def update(
         self,
         item_uuid: str,

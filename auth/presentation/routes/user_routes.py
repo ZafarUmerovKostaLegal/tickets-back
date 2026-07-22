@@ -25,6 +25,8 @@ from presentation.schemas import (
     UserDetailResponse,
     UserPublicResponse,
     UserPublicListResponse,
+    UserListResponse,
+    UserListSummary,
     SetRoleRequest,
     BlockUserRequest,
     ArchiveUserRequest,
@@ -206,16 +208,40 @@ def require_user_detail_access(
     return current_user
 
 
-@router.get("", response_model=list[UserResponse])
+@router.get("")
 async def list_users(
     include_archived: bool = Query(False, description="Include archived users"),
+    skip: int = Query(0, ge=0),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=200,
+        description="If set, returns {items,total,skip,limit,summary}; omit for full list",
+    ),
+    q: Optional[str] = Query(None, description="Search by name, email, or role"),
+    role: Optional[str] = Query(None, description="Exact role filter"),
     current_user: User = Depends(require_view_user_directory),
     session: AsyncSession = Depends(get_session),
     user_repo: UserRepositoryPort = Depends(get_user_repo),
 ):
     uc = ListUsersUseCase(user_repo)
-    users = await uc.execute(include_archived=include_archived)
-    return [_user_to_response(u, omit_permissions=True) for u in users]
+    if limit is None:
+        users = await uc.execute(include_archived=include_archived)
+        return [_user_to_response(u, omit_permissions=True) for u in users]
+    users, total, summary = await uc.execute_page(
+        include_archived=include_archived,
+        skip=skip,
+        limit=limit,
+        q=q,
+        role=role,
+    )
+    return UserListResponse(
+        items=[_user_to_response(u, omit_permissions=True) for u in users],
+        total=total,
+        skip=skip,
+        limit=limit,
+        summary=UserListSummary(**summary),
+    )
 
 
 @router.get("/me", response_model=UserResponse)

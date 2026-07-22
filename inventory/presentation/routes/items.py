@@ -18,6 +18,7 @@ from infrastructure.file_storage import save_photo
 from presentation.equipment_class import normalize_equipment_class
 from presentation.schemas import (
     InventoryItemResponse,
+    InventoryItemListResponse,
     InventoryItemCreate,
     InventoryItemUpdate,
     AssignRequest,
@@ -65,7 +66,7 @@ async def list_statuses():
     return [StatusItem(value=v, label=l) for v, l in STATUSES]
 
 
-@router.get("", response_model=list[InventoryItemResponse])
+@router.get("", response_model=InventoryItemListResponse)
 async def list_items(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -86,8 +87,16 @@ async def list_items(
         include_archived=include_archived,
     )
     uc = ListItemsUseCase(repo)
-    items = await uc.execute(filters)
-    return [_to_response(i) for i in items]
+    items, total, counts = await uc.execute_page(filters)
+    return InventoryItemListResponse(
+        items=[_to_response(i) for i in items],
+        total=total,
+        skip=skip,
+        limit=limit,
+        in_use_count=int(counts.get("in_use_count") or 0),
+        in_stock_count=int(counts.get("in_stock_count") or 0),
+        archived_count=int(counts.get("archived_count") or 0),
+    )
 
 
 @router.get("/{item_uuid}", response_model=InventoryItemResponse)

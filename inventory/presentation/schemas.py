@@ -55,6 +55,16 @@ class InventoryItemResponse(BaseModel):
     is_archived: bool
 
 
+class InventoryItemListResponse(BaseModel):
+    items: list[InventoryItemResponse]
+    total: int
+    skip: int
+    limit: int
+    in_use_count: int = 0
+    in_stock_count: int = 0
+    archived_count: int = 0
+
+
 class InventoryItemCreate(BaseModel):
     name: str
     category_id: int

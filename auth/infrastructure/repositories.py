@@ -1,9 +1,24 @@
-from typing import Optional, Sequence
-from sqlalchemy import select, update, delete, func
+from typing import Optional, Sequence, Tuple
+from sqlalchemy import Integer, and_, func, or_, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities import User
 from application.ports import UserRepositoryPort, RoleRepositoryPort
 from infrastructure.models import UserModel, RoleModel, RolePermissionModel, UserAuthSessionModel
+
+_HIDDEN_LOCAL_PARTS = ("admin", "info")
+_HIDDEN_EMAILS = ("admin@local",)
+_HIDDEN_DISPLAY_NAMES = ("главный администратор",)
+
+
+def _hidden_system_clause():
+    email_l = func.lower(UserModel.email)
+    local = func.split_part(email_l, "@", 1)
+    display_l = func.lower(func.coalesce(UserModel.display_name, ""))
+    return and_(
+        email_l.notin_(_HIDDEN_EMAILS),
+        local.notin_(_HIDDEN_LOCAL_PARTS),
+        display_l.notin_(_HIDDEN_DISPLAY_NAMES),
+    )
 
 
 class RoleRepository(RoleRepositoryPort):
@@ -121,6 +136,94 @@ class UserRepository(UserRepositoryPort):
         result = await self._session.execute(q)
         rows = result.scalars().all()
         return [self._to_entity(r) for r in rows]
+
+    def _list_filters(
+        self,
+        *,
+        include_archived: bool,
+        q: Optional[str],
+        role: Optional[str],
+        exclude_hidden_system: bool,
+    ):
+        conditions = []
+        if not include_archived:
+            conditions.append(UserModel.is_archived == False)
+        if exclude_hidden_system:
+            conditions.append(_hidden_system_clause())
+        role_value = (role or "").strip()
+        if role_value and role_value.lower() != "all":
+            conditions.append(UserModel.role == role_value)
+        needle = (q or "").strip()
+        if needle:
+            like = f"%{needle.lower()}%"
+            conditions.append(
+                or_(
+                    func.lower(UserModel.email).like(like),
+                    func.lower(func.coalesce(UserModel.display_name, "")).like(like),
+                    func.lower(UserModel.role).like(like),
+                )
+            )
+        return conditions
+
+    async def list_page(
+        self,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int = 50,
+        q: Optional[str] = None,
+        role: Optional[str] = None,
+        exclude_hidden_system: bool = True,
+    ) -> Tuple[Sequence[User], int]:
+        conditions = self._list_filters(
+            include_archived=include_archived,
+            q=q,
+            role=role,
+            exclude_hidden_system=exclude_hidden_system,
+        )
+        count_q = select(func.count()).select_from(UserModel)
+        list_q = select(UserModel).order_by(UserModel.id)
+        if conditions:
+            count_q = count_q.where(and_(*conditions))
+            list_q = list_q.where(and_(*conditions))
+        total = int((await self._session.execute(count_q)).scalar_one() or 0)
+        list_q = list_q.offset(max(0, skip)).limit(max(1, min(200, limit)))
+        rows = (await self._session.execute(list_q)).scalars().all()
+        return [self._to_entity(r) for r in rows], total
+
+    async def list_summary(
+        self,
+        *,
+        include_archived: bool = False,
+        exclude_hidden_system: bool = True,
+    ) -> dict:
+        conditions = self._list_filters(
+            include_archived=include_archived,
+            q=None,
+            role=None,
+            exclude_hidden_system=exclude_hidden_system,
+        )
+        base = select(
+            func.count().label("total"),
+            func.sum(func.cast(and_(UserModel.is_blocked == False, UserModel.is_archived == False), Integer)).label("active"),
+            func.sum(func.cast(UserModel.is_blocked == True, Integer)).label("blocked"),
+            func.sum(func.cast(UserModel.is_archived == True, Integer)).label("archived"),
+        ).select_from(UserModel)
+        if conditions:
+            base = base.where(and_(*conditions))
+        row = (await self._session.execute(base)).one()
+        roles_q = select(UserModel.role, func.count()).select_from(UserModel)
+        if conditions:
+            roles_q = roles_q.where(and_(*conditions))
+        roles_q = roles_q.group_by(UserModel.role).order_by(func.count().desc())
+        role_rows = (await self._session.execute(roles_q)).all()
+        return {
+            "total": int(row.total or 0),
+            "active": int(row.active or 0),
+            "blocked": int(row.blocked or 0),
+            "archived": int(row.archived or 0),
+            "roles": [{"name": (name or "Не указано").strip() or "Не указано", "count": int(cnt)} for name, cnt in role_rows],
+        }
 
     async def create(
         self,

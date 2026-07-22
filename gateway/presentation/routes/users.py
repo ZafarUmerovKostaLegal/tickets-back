@@ -403,14 +403,30 @@ async def get_user_public(
 async def list_users(
     request: Request,
     include_archived: bool = Query(False, description="Include archived users"),
+    skip: int = Query(0, ge=0),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=200,
+        description="If set, returns {items,total,skip,limit,summary}; omit for full list",
+    ),
+    q: Optional[str] = Query(None, description="Search by name, email, or role"),
+    role: Optional[str] = Query(None, description="Exact role filter"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     _: dict = Depends(require_admin_or_it),
 ):
+    params: dict = {"include_archived": include_archived, "skip": skip}
+    if limit is not None:
+        params["limit"] = limit
+    if q is not None and q.strip():
+        params["q"] = q.strip()
+    if role is not None and role.strip() and role.strip().lower() != "all":
+        params["role"] = role.strip()
     r = await auth_service_request(
         "GET",
         "/users",
         bearer_for_upstream(request, authorization),
-        params={"include_archived": include_archived},
+        params=params,
     )
     if r.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -422,7 +438,14 @@ async def list_users(
         raise HTTPException(status_code=403, detail=d)
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    return _normalize_desktop_backgrounds(r.json())
+    payload = r.json()
+    if isinstance(payload, list):
+        return _normalize_desktop_backgrounds(payload)
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        out = dict(payload)
+        out["items"] = _normalize_desktop_backgrounds(out["items"])
+        return out
+    return payload
 
 
 @router.patch("/me/weekly-capacity-hours", response_model=UserResponse)

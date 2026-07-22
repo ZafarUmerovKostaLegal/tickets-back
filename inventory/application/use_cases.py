@@ -138,6 +138,9 @@ class ListItemsUseCase:
     async def execute(self, filters: ItemFilters) -> Sequence[InventoryItem]:
         return await self._repo.get_all(filters)
 
+    async def execute_page(self, filters: ItemFilters) -> tuple[Sequence[InventoryItem], int, dict]:
+        return await self._repo.list_page(filters)
+
 
 class UpdateItemUseCase:
     def __init__(self, repo: InventoryRepositoryPort):

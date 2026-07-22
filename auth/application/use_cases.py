@@ -123,6 +123,29 @@ class ListUsersUseCase:
     ) -> list:
         return list(await self._user_repo.get_all(include_archived=include_archived))
 
+    async def execute_page(
+        self,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int = 50,
+        q: str | None = None,
+        role: str | None = None,
+    ) -> tuple[list, int, dict]:
+        items, total = await self._user_repo.list_page(
+            include_archived=include_archived,
+            skip=skip,
+            limit=limit,
+            q=q,
+            role=role,
+            exclude_hidden_system=True,
+        )
+        summary = await self._user_repo.list_summary(
+            include_archived=include_archived,
+            exclude_hidden_system=True,
+        )
+        return list(items), total, summary
+
 
 class SetRoleUseCase:
     def __init__(self, user_repo: UserRepositoryPort, role_repo: RoleRepositoryPort):

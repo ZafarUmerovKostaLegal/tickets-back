@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Sequence
-from sqlalchemy import select, and_, text
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities import Category, InventoryItem
 from application.ports import (
@@ -186,24 +186,61 @@ class InventoryRepository(InventoryRepositoryPort):
         return _item_to_entity(row) if row else None
 
     async def get_all(self, filters: ItemFilters) -> Sequence[InventoryItem]:
-        q = select(InventoryItemModel).order_by(InventoryItemModel.created_at.desc())
+        items, _, _ = await self.list_page(filters)
+        return items
+
+    def _item_conditions(self, filters: ItemFilters, *, apply_status: bool = True):
         conditions = []
         if not filters.include_archived:
             conditions.append(InventoryItemModel.is_archived == False)
         if filters.category_id is not None:
             conditions.append(InventoryItemModel.category_id == filters.category_id)
-        if filters.status is not None:
+        if apply_status and filters.status is not None:
             conditions.append(InventoryItemModel.status == filters.status)
         if filters.equipment_class is not None:
             conditions.append(InventoryItemModel.equipment_class == filters.equipment_class)
         if filters.assigned_to_user_id is not None:
             conditions.append(InventoryItemModel.assigned_to_user_id == filters.assigned_to_user_id)
+        return conditions
+
+    async def list_page(self, filters: ItemFilters) -> tuple[Sequence[InventoryItem], int, dict]:
+        conditions = self._item_conditions(filters, apply_status=True)
+        count_q = select(func.count()).select_from(InventoryItemModel)
+        list_q = select(InventoryItemModel).order_by(InventoryItemModel.created_at.desc())
         if conditions:
-            q = q.where(and_(*conditions))
-        q = q.offset(filters.skip).limit(filters.limit)
-        result = await self._session.execute(q)
-        rows = result.scalars().all()
-        return [_item_to_entity(r) for r in rows]
+            count_q = count_q.where(and_(*conditions))
+            list_q = list_q.where(and_(*conditions))
+        total = int((await self._session.execute(count_q)).scalar_one() or 0)
+        list_q = list_q.offset(filters.skip).limit(filters.limit)
+        rows = (await self._session.execute(list_q)).scalars().all()
+
+        kpi_conditions = self._item_conditions(filters, apply_status=False)
+        kpi_q = select(
+            func.count().label("total"),
+            func.sum(
+                case(
+                    (and_(InventoryItemModel.status == "in_use", InventoryItemModel.is_archived == False), 1),
+                    else_=0,
+                )
+            ).label("in_use"),
+            func.sum(
+                case(
+                    (and_(InventoryItemModel.status == "in_stock", InventoryItemModel.is_archived == False), 1),
+                    else_=0,
+                )
+            ).label("in_stock"),
+            func.sum(case((InventoryItemModel.is_archived == True, 1), else_=0)).label("archived"),
+        ).select_from(InventoryItemModel)
+        if kpi_conditions:
+            kpi_q = kpi_q.where(and_(*kpi_conditions))
+        kpi = (await self._session.execute(kpi_q)).one()
+        counts = {
+            "in_use_count": int(kpi.in_use or 0),
+            "in_stock_count": int(kpi.in_stock or 0),
+            "archived_count": int(kpi.archived or 0),
+            "kpi_total": int(kpi.total or 0),
+        }
+        return [_item_to_entity(r) for r in rows], total, counts
 
     async def update(
         self,

@@ -65,6 +65,28 @@ class UserRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    async def list_page(
+        self,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int = 50,
+        q: Optional[str] = None,
+        role: Optional[str] = None,
+        exclude_hidden_system: bool = True,
+    ) -> Tuple[Sequence[User], int]:
+        pass
+
+    @abstractmethod
+    async def list_summary(
+        self,
+        *,
+        include_archived: bool = False,
+        exclude_hidden_system: bool = True,
+    ) -> dict:
+        pass
+
+    @abstractmethod
     async def create(
         self,
         azure_oid: str,
