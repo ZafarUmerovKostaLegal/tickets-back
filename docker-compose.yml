@@ -231,6 +231,10 @@ services:
       - CALL_SCHEDULE_MICROSOFT_TENANT_ID=${CALL_SCHEDULE_MICROSOFT_TENANT_ID:-}
       - CALL_SCHEDULE_MICROSOFT_CLIENT_ID=${CALL_SCHEDULE_MICROSOFT_CLIENT_ID:-}
       - CALL_SCHEDULE_MICROSOFT_CLIENT_SECRET=${CALL_SCHEDULE_MICROSOFT_CLIENT_SECRET:-}
+      # Fallback to the same Azure AD app used by auth (login)
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1245/health\", timeout=3)"' ]
       interval: 15s

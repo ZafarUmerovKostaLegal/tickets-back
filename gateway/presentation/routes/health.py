@@ -262,12 +262,37 @@ async def health_call_schedule():
                 "upstream_status": r.status_code,
             },
         )
+    body: dict = {}
+    try:
+        raw = r.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
+    graph_ok = body.get("graph_configured")
+    mailbox_ok = body.get("mailbox_configured")
+    if graph_ok is False or mailbox_ok is False:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Call schedule reachable but Graph/mailbox not configured",
+                "call_schedule_service_url": base,
+                "graph_configured": graph_ok,
+                "mailbox_configured": mailbox_ok,
+                "hint": (
+                    "Задайте AZURE_CLIENT_ID/SECRET/TENANT_ID или MICROSOFT_* "
+                    "для сервиса call_schedule и CALL_SCHEDULE_MAILBOX"
+                ),
+            },
+        )
     return JSONResponse(
         content={
             "status": "ok",
             "call_schedule": "reachable",
             "call_schedule_service_url": base,
             "api_prefix": "/api/v1/call-schedule",
+            "graph_configured": graph_ok,
+            "mailbox_configured": mailbox_ok,
         }
     )
 

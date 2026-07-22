@@ -63,8 +63,11 @@ async def get_app_access_token() -> str:
     tenant_id, client_id, client_secret = s.graph_client_credentials()
     if not tenant_id or not client_id or not client_secret:
         raise ValueError(
-            "Задайте MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET "
-            "(или CALL_SCHEDULE_MICROSOFT_*) и в Azure: Application Calendars.Read + Calendars.ReadWrite, admin consent"
+            "Не заданы учётные данные Graph для call_schedule. "
+            "Укажите MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET "
+            "или AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET "
+            "(или CALL_SCHEDULE_MICROSOFT_*). В Azure нужны Application permissions "
+            "Calendars.Read + Calendars.ReadWrite и admin consent."
         )
     now = datetime.now(timezone.utc)
     fp = _cred_fp(tenant_id, client_id, client_secret)

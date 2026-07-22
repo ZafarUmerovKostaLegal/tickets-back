@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 
 from presentation.routes import schedule_routes
+from infrastructure.config import get_settings
 
 
 @asynccontextmanager
@@ -34,4 +35,12 @@ app.include_router(schedule_routes.router, prefix="/api/v1/call-schedule")
 
 @app.get("/health", tags=["health"])
 async def health() -> dict:
-    return {"status": "ok", "service": "call_schedule"}
+    s = get_settings()
+    tenant, client_id, client_secret = s.graph_client_credentials()
+    graph_configured = bool(tenant and client_id and client_secret)
+    return {
+        "status": "ok",
+        "service": "call_schedule",
+        "mailbox_configured": bool((s.call_schedule_mailbox or "").strip()),
+        "graph_configured": graph_configured,
+    }
