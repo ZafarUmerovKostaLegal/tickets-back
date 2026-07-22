@@ -64,12 +64,24 @@ async def proxy_call_schedule(
                 content=body,
             )
     except httpx.RequestError as e:
+        err = str(e)
+        hint = (
+            "Контейнер call_schedule не запущен или не в сети gateway. "
+            "На сервере: docker compose ps call_schedule && docker compose up -d --build call_schedule"
+        )
+        if "name resolution" in err.lower() or "Errno -3" in err or "Name or service not known" in err:
+            hint = (
+                "DNS не резолвит имя call_schedule — сервиса нет в текущем Docker Compose / Portainer stack. "
+                "Добавьте и запустите сервис call_schedule из docker-compose.yml "
+                "(порт 1245), затем перезапустите gateway при необходимости."
+            )
         return JSONResponse(
             status_code=503,
             content={
                 "detail": "Call schedule service unreachable",
                 "call_schedule_service_url": base,
-                "error": str(e),
+                "error": err,
+                "hint": hint,
             },
         )
     response_headers = _strip_hop_and_cors(dict(r.headers))

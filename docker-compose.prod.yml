@@ -55,3 +55,14 @@ services:
       - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
       - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
       - VACATION_EMAIL_ACTION_SECRET=${VACATION_EMAIL_ACTION_SECRET:-}
+
+  call_schedule:
+    restart: unless-stopped
+    environment:
+      - CALL_SCHEDULE_MAILBOX=${CALL_SCHEDULE_MAILBOX:-info@kostalegal.com}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
