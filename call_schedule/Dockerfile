@@ -7,6 +7,7 @@ RUN useradd -r -u 10001 -g root appuser
 COPY call_schedule/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY backend_common ./backend_common
 COPY call_schedule/ ./
 
 EXPOSE 1245
