@@ -101,9 +101,13 @@ class ExpenseRepository:
         scope_mode: str | None = None,
         partner_user_id: int | None = None,
         expense_subtype: str | None = None,
-    ) -> tuple[list[ExpenseRequestModel], int]:
+    ) -> tuple[list[ExpenseRequestModel], int, Decimal, Decimal]:
         q = select(ExpenseRequestModel)
         cnt = select(func.count()).select_from(ExpenseRequestModel)
+        sums = select(
+            func.coalesce(func.sum(ExpenseRequestModel.amount_uzs), 0),
+            func.coalesce(func.sum(ExpenseRequestModel.equivalent_amount), 0),
+        ).select_from(ExpenseRequestModel)
 
         def _apply(stmt):
             if created_by_user_id is not None:
@@ -146,6 +150,7 @@ class ExpenseRepository:
 
         q = _apply(q)
         cnt = _apply(cnt)
+        sums = _apply(sums)
 
         sort_map = {
             "createdAt": ExpenseRequestModel.created_at,
@@ -163,7 +168,14 @@ class ExpenseRepository:
         q = q.offset(skip).limit(limit).options(selectinload(ExpenseRequestModel.attachments))
         rows = await self._session.execute(q)
         total_r = await self._session.execute(cnt)
-        return list(rows.scalars().all()), int(total_r.scalar() or 0)
+        sums_r = await self._session.execute(sums)
+        total_uzs, total_equiv = sums_r.one()
+        return (
+            list(rows.scalars().all()),
+            int(total_r.scalar() or 0),
+            Decimal(str(total_uzs or 0)),
+            Decimal(str(total_equiv or 0)),
+        )
 
     async def create(
         self,

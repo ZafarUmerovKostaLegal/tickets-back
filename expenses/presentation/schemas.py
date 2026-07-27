@@ -151,6 +151,8 @@ class ExpenseListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+    total_amount_uzs: float = Field(0, serialization_alias="totalAmountUzs")
+    total_equivalent_amount: float = Field(0, serialization_alias="totalEquivalentAmount")
 
 
 class ExpenseCreateBody(BaseModel):

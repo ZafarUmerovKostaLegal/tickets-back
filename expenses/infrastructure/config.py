@@ -44,8 +44,20 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXPENSE_ALLOW_SELF_MODERATION"),
     )
 
-    expense_amount_limit_uzs: Decimal | None = None
+    expense_amount_limit_uzs: Decimal | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EXPENSE_AMOUNT_LIMIT_UZS"),
+    )
 
+    # Порог «малых» расходов (UZS): до него включительно уведомляем EXPENSE_NOTIFY_TO_LOW
+    expense_approval_low_limit_uzs: Decimal | None = Field(
+        default=Decimal("3000000"),
+        validation_alias=AliasChoices("EXPENSE_APPROVAL_LOW_LIMIT_UZS"),
+    )
+    expense_notify_to_low: str = Field(
+        default="",
+        validation_alias=AliasChoices("EXPENSE_NOTIFY_TO_LOW"),
+    )
 
     expense_notify_on_submit: bool = Field(
         default=True,
@@ -148,7 +160,7 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("expense_amount_limit_uzs", mode="before")
+    @field_validator("expense_amount_limit_uzs", "expense_approval_low_limit_uzs", mode="before")
     @classmethod
     def empty_limit(cls, v):
         if v is None or v == "":

@@ -110,6 +110,28 @@ async def get_expense_report_data(
     ]
 
 
+@router.get("/approval-routing-meta")
+async def get_approval_routing_meta(
+    user: dict = Depends(get_current_user),
+):
+    """Публичные метаданные лимита согласования (без списка email)."""
+    check_view_role(user)
+    from infrastructure.config import get_settings
+
+    settings = get_settings()
+    low_limit = settings.expense_approval_low_limit_uzs
+    to_low = (settings.expense_notify_to_low or "").strip()
+    return {
+        "lowLimitUzs": float(low_limit) if low_limit is not None else None,
+        "lowTierEnabled": bool(low_limit is not None and to_low),
+        "hardAmountLimitUzs": (
+            float(settings.expense_amount_limit_uzs)
+            if settings.expense_amount_limit_uzs is not None
+            else None
+        ),
+    }
+
+
 @router.get("/exchange-rates", response_model=ExchangeRateOut)
 async def get_exchange_rate(
     date_param: date = Query(..., alias="date"),

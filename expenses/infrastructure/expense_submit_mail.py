@@ -407,6 +407,7 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
         expense_type=ctx.expense_type,
         project_id=ctx.project_id,
         is_reimbursable=ctx.is_reimbursable,
+        amount_uzs=ctx.amount_uzs,
     )
     if not recipients:
         _log.warning("expense notify: нет получателей (ROUTING / EXPENSE_NOTIFY_TO), skip")
@@ -717,6 +718,7 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
         expense_type=ctx.expense_type,
         project_id=ctx.project_id,
         is_reimbursable=ctx.is_reimbursable,
+        amount_uzs=ctx.amount_uzs,
     )
     if not recipients:
         _log.warning("expense partner notify: нет получателей (ROUTING / EXPENSE_NOTIFY_TO), skip")
@@ -1119,6 +1121,7 @@ async def send_expense_smtp_test(settings: Settings) -> list[str]:
         expense_type=ctx.expense_type,
         project_id=ctx.project_id,
         is_reimbursable=ctx.is_reimbursable,
+        amount_uzs=ctx.amount_uzs,
     )
     if not recipients:
         raise ValueError("Нет получателей: задайте EXPENSE_NOTIFY_ROUTING_JSON или EXPENSE_NOTIFY_TO")

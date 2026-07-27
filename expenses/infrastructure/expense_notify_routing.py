@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,6 +33,15 @@ def _norm_str(v: str | None) -> str:
     return (v or "").strip()
 
 
+def _as_decimal(v: object) -> Decimal | None:
+    if v is None or v == "":
+        return None
+    try:
+        return Decimal(str(v).replace(" ", "").replace(",", ""))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
 def _rule_matches(
     if_block: dict,
     *,
@@ -39,6 +49,7 @@ def _rule_matches(
     expense_type: str | None,
     project_id: str | None,
     is_reimbursable: bool,
+    amount_uzs: Decimal | None,
 ) -> bool:
     if not if_block:
         return False
@@ -68,6 +79,16 @@ def _rule_matches(
                 return False
         else:
             return False
+
+    amount_max = _as_decimal(if_block.get("amountUzsMax")) if "amountUzsMax" in if_block else None
+    amount_min = _as_decimal(if_block.get("amountUzsMin")) if "amountUzsMin" in if_block else None
+    if amount_max is not None or amount_min is not None:
+        if amount_uzs is None:
+            return False
+        if amount_max is not None and amount_uzs > amount_max:
+            return False
+        if amount_min is not None and amount_uzs < amount_min:
+            return False
     return True
 
 
@@ -81,6 +102,31 @@ def _coerce_to_list(v: object) -> list[str]:
     return []
 
 
+def _resolve_simple_amount_tier(
+    settings: Settings,
+    *,
+    amount_uzs: Decimal | None,
+) -> list[str] | None:
+    """
+    Простой режим без ROUTING_JSON:
+    - сумма <= EXPENSE_APPROVAL_LOW_LIMIT_UZS → EXPENSE_NOTIFY_TO_LOW
+    - сумма > лимита → EXPENSE_NOTIFY_TO
+    """
+    low_limit = settings.expense_approval_low_limit_uzs
+    to_low = _dedupe_preserve(_parse_csv_emails(settings.expense_notify_to_low))
+    if low_limit is None or not to_low or amount_uzs is None:
+        return None
+    if amount_uzs <= low_limit:
+        _log.info(
+            "expense notify: low-limit tier (amount=%s <= %s) → %s",
+            amount_uzs,
+            low_limit,
+            to_low,
+        )
+        return to_low
+    return None
+
+
 def resolve_expense_notify_recipients(
     settings: Settings,
     *,
@@ -88,57 +134,60 @@ def resolve_expense_notify_recipients(
     expense_type: str | None,
     project_id: str | None,
     is_reimbursable: bool,
+    amount_uzs: Decimal | None = None,
 ) -> list[str]:
 
     raw = (settings.expense_notify_routing_json or "").strip()
     if raw.startswith("\ufeff"):
         raw = raw.lstrip("\ufeff").strip()
-    if not raw:
-        return _dedupe_preserve(_parse_csv_emails(settings.expense_notify_to))
+    if raw:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _log.warning("EXPENSE_NOTIFY_ROUTING_JSON: невалидный JSON (%s), используем EXPENSE_NOTIFY_TO", e)
+            data = None
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        _log.warning("EXPENSE_NOTIFY_ROUTING_JSON: невалидный JSON (%s), используем EXPENSE_NOTIFY_TO", e)
-        return _dedupe_preserve(_parse_csv_emails(settings.expense_notify_to))
+        if data is not None and not isinstance(data, dict):
+            _log.warning("EXPENSE_NOTIFY_ROUTING_JSON: ожидается объект, используем EXPENSE_NOTIFY_TO")
+            data = None
 
-    if not isinstance(data, dict):
-        _log.warning("EXPENSE_NOTIFY_ROUTING_JSON: ожидается объект, используем EXPENSE_NOTIFY_TO")
-        return _dedupe_preserve(_parse_csv_emails(settings.expense_notify_to))
+        if isinstance(data, dict):
+            rules = data.get("rules")
+            if not isinstance(rules, list):
+                rules = []
 
-    rules = data.get("rules")
-    if not isinstance(rules, list):
-        rules = []
+            for idx, rule in enumerate(rules):
+                if not isinstance(rule, dict):
+                    continue
+                if_block = rule.get("if")
+                if not isinstance(if_block, dict):
+                    continue
+                if not _rule_matches(
+                    if_block,
+                    department_id=department_id,
+                    expense_type=expense_type,
+                    project_id=project_id,
+                    is_reimbursable=is_reimbursable,
+                    amount_uzs=amount_uzs,
+                ):
+                    continue
+                to = _dedupe_preserve(_coerce_to_list(rule.get("to")))
+                if to:
+                    _log.info(
+                        "expense notify: маршрутизация — правило #%s (if=%s) → %s",
+                        idx,
+                        if_block,
+                        to,
+                    )
+                    return to
 
-    for idx, rule in enumerate(rules):
-        if not isinstance(rule, dict):
-            continue
-        if_block = rule.get("if")
-        if not isinstance(if_block, dict):
-            continue
-        if not _rule_matches(
-            if_block,
-            department_id=department_id,
-            expense_type=expense_type,
-            project_id=project_id,
-            is_reimbursable=is_reimbursable,
-        ):
-            continue
-        to = _coerce_to_list(rule.get("to"))
-        to = _dedupe_preserve(to)
-        if to:
-            _log.info(
-                "expense notify: маршрутизация — правило #%s (if=%s) → %s",
-                idx,
-                if_block,
-                to,
-            )
-            return to
+            default = _dedupe_preserve(_coerce_to_list(data.get("default")))
+            if default:
+                _log.info("expense notify: маршрутизация — default → %s", default)
+                return default
 
-    default = _coerce_to_list(data.get("default"))
-    default = _dedupe_preserve(default)
-    if default:
-        _log.info("expense notify: маршрутизация — default → %s", default)
-        return default
+    tier = _resolve_simple_amount_tier(settings, amount_uzs=amount_uzs)
+    if tier is not None:
+        return tier
 
     return _dedupe_preserve(_parse_csv_emails(settings.expense_notify_to))

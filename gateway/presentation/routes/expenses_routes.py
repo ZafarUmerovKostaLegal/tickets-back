@@ -162,6 +162,15 @@ async def proxy_projects(
     return await _forward(request, "projects", authorization, timeout=30.0)
 
 
+@router.get("/approval-routing-meta")
+async def proxy_approval_routing_meta(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(get_current_user),
+):
+    return await _forward(request, "approval-routing-meta", authorization, timeout=15.0)
+
+
 @router.get("/exchange-rates")
 async def proxy_exchange_rates(
     request: Request,

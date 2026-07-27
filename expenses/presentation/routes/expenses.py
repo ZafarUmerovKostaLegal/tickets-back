@@ -416,6 +416,9 @@ async def _list_with_authors(
     skip: int,
     limit: int,
     authorization: Optional[str],
+    *,
+    total_amount_uzs: float = 0,
+    total_equivalent_amount: float = 0,
 ) -> ExpenseListResponse:
     settings = get_settings()
     ids: set[int] = set()
@@ -442,6 +445,8 @@ async def _list_with_authors(
         total=total,
         skip=skip,
         limit=limit,
+        total_amount_uzs=total_amount_uzs,
+        total_equivalent_amount=total_equivalent_amount,
     )
 
 
@@ -530,7 +535,7 @@ async def list_expenses(
             detail="partnerUserId допустим только для расходов партнёров",
         )
     repo = ExpenseRepository(session)
-    rows, total = await repo.list_requests(
+    rows, total, total_uzs, total_equiv = await repo.list_requests(
         created_by_user_id=eff_creator,
         status=status,
         scope=list_scope,
@@ -549,7 +554,15 @@ async def list_expenses(
         partner_user_id=partner_user_id,
         expense_subtype=expense_subtype,
     )
-    return await _list_with_authors(rows, total, skip, limit, authorization)
+    return await _list_with_authors(
+        rows,
+        total,
+        skip,
+        limit,
+        authorization,
+        total_amount_uzs=float(total_uzs),
+        total_equivalent_amount=float(total_equiv),
+    )
 
 
 @router.post("", response_model=ExpenseRequestDetailOut)
