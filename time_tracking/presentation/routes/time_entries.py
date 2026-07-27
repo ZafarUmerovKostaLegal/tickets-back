@@ -237,60 +237,63 @@ async def patch_time_entry(
             status_code=400,
             detail="Запись снята с учёта менеджером и не может быть изменена",
         )
-    await _raise_if_work_date_is_closed(
-        session,
-        viewer,
-        auth_user_id,
-        row.work_date,
-        detail="Период уже сдан. Редактирование запрещено (обратитесь к менеджеру).",
-    )
-    if patch.get("work_date"):
+    # Scope color is a report annotation — allow updating it even in a closed week.
+    scope_color_only = set(patch.keys()) <= {"scope_color"}
+    if not scope_color_only:
         await _raise_if_work_date_is_closed(
             session,
             viewer,
             auth_user_id,
-            patch["work_date"],
-            detail="Целевой день в закрытом периоде. Перенос запрещён.",
+            row.work_date,
+            detail="Период уже сдан. Редактирование запрещено (обратитесь к менеджеру).",
         )
+        if patch.get("work_date"):
+            await _raise_if_work_date_is_closed(
+                session,
+                viewer,
+                auth_user_id,
+                patch["work_date"],
+                detail="Целевой день в закрытом периоде. Перенос запрещён.",
+            )
 
-    row_norm_project_id = _normalize_project_id(
-        str(row.project_id) if row.project_id is not None else None
-    )
-    project_changed_clears_task = False
-    if "project_id" in patch:
-        project_id = await _validate_project_if_set(
-            session,
-            patch.get("project_id"),
-            work_date=patch.get("work_date") or row.work_date,
+        row_norm_project_id = _normalize_project_id(
+            str(row.project_id) if row.project_id is not None else None
         )
-        patch["project_id"] = project_id
-        await _require_project_access_if_set(
-            session,
-            auth_user_id,
-            project_id,
-            viewer=viewer,
-            allow_transfer_bypass=True,
-        )
-        new_norm = _normalize_project_id(
-            str(project_id) if project_id is not None else None
-        )
-        if new_norm != row_norm_project_id and "task_id" not in patch:
-            project_changed_clears_task = True
-    # Do not re-check the existing project as "open": archiving/closing a project
-    # must not block edits to historical entries that already belong to it.
-    # Closed-project checks apply only when assigning/changing project_id (above).
+        project_changed_clears_task = False
+        if "project_id" in patch:
+            project_id = await _validate_project_if_set(
+                session,
+                patch.get("project_id"),
+                work_date=patch.get("work_date") or row.work_date,
+            )
+            patch["project_id"] = project_id
+            await _require_project_access_if_set(
+                session,
+                auth_user_id,
+                project_id,
+                viewer=viewer,
+                allow_transfer_bypass=True,
+            )
+            new_norm = _normalize_project_id(
+                str(project_id) if project_id is not None else None
+            )
+            if new_norm != row_norm_project_id and "task_id" not in patch:
+                project_changed_clears_task = True
+        # Do not re-check the existing project as "open": archiving/closing a project
+        # must not block edits to historical entries that already belong to it.
+        # Closed-project checks apply only when assigning/changing project_id (above).
 
-    eff_proj = patch["project_id"] if "project_id" in patch else row.project_id
-    if project_changed_clears_task:
-        eff_task: str | None = None
-    else:
-        eff_task = patch["task_id"] if "task_id" in patch else row.task_id
-    tid, bb = await resolve_time_entry_task_for_project(session, eff_proj, eff_task)
-    if tid is not None:
-        patch["task_id"] = tid
-        patch["is_billable"] = bb
-    elif "task_id" in patch or project_changed_clears_task:
-        patch["task_id"] = None
+        eff_proj = patch["project_id"] if "project_id" in patch else row.project_id
+        if project_changed_clears_task:
+            eff_task: str | None = None
+        else:
+            eff_task = patch["task_id"] if "task_id" in patch else row.task_id
+        tid, bb = await resolve_time_entry_task_for_project(session, eff_proj, eff_task)
+        if tid is not None:
+            patch["task_id"] = tid
+            patch["is_billable"] = bb
+        elif "task_id" in patch or project_changed_clears_task:
+            patch["task_id"] = None
 
     try:
         row = await repo.update(auth_user_id=auth_user_id, entry_id=entry_id, patch=patch)

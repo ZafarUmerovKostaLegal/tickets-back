@@ -344,6 +344,15 @@ class TimeEntryRepository:
                 row.external_reference_url = None
             elif isinstance(v, str):
                 row.external_reference_url = v.strip()[:4000]
+        if "scope_color" in patch:
+            v = patch["scope_color"]
+            if v is None or (isinstance(v, str) and not str(v).strip()):
+                row.scope_color = None
+            elif isinstance(v, str):
+                raw = v.strip().upper()
+                if not (len(raw) == 7 and raw.startswith("#") and all(c in "0123456789ABCDEF" for c in raw[1:])):
+                    raise ValueError("scope_color must be #RRGGBB")
+                row.scope_color = raw
         row.updated_at = _now_utc()
         self._session.add(row)
         return row

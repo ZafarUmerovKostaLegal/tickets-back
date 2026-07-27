@@ -909,6 +909,15 @@ async def apply_time_entries_external_reference_patch(conn: AsyncConnection) -> 
     )
 
 
+async def apply_time_entries_scope_color_patch(conn: AsyncConnection) -> None:
+    """Scope highlight color for report preview rows (#RRGGBB)."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_entries",
+        ("scope_color VARCHAR(7)",),
+    )
+
+
 async def apply_time_entries_manager_void_patch(conn: AsyncConnection) -> None:
 
     await add_columns_if_missing(
@@ -1331,6 +1340,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("project_currency", apply_project_currency_patch),
     ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
     ("time_entries_external_reference", apply_time_entries_external_reference_patch),
+    ("time_entries_scope_color", apply_time_entries_scope_color_patch),
     ("time_entries_manager_void", apply_time_entries_manager_void_patch),
     ("weekly_submissions", apply_weekly_submissions_schema_patch),
     ("client_projects_billable_amount", apply_client_projects_project_billable_amount_patch),

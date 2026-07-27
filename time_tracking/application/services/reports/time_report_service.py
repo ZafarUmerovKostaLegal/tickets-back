@@ -86,6 +86,7 @@ TIME_REPORT_FLAT_COLUMNS: tuple[str, ...] = (
     "cost_amount",
     "currency",
     "external_reference_url",
+    "scope_color",
     "invoice_id",
     "invoice_number",
     "time_entry_id",
@@ -183,6 +184,9 @@ def _time_entry_line_snake(
     wk_ok = (uid, e.work_date) in week_submitted
     desc = (e.description or "").strip()
     ext = (e.external_reference_url or "").strip() or None
+    scope = (getattr(e, "scope_color", None) or "").strip().upper() or None
+    if scope and not (len(scope) == 7 and scope.startswith("#")):
+        scope = None
     is_voided = e.voided_at is not None
     voider = users_map.get(e.voided_by_auth_user_id) if e.voided_by_auth_user_id else None
     voider_name = (voider.display_name or voider.email) if voider else None
@@ -218,6 +222,7 @@ def _time_entry_line_snake(
         "cost_amount": _money(cost_amt),
         "currency": _cur or project_currency,
         "external_reference_url": ext,
+        "scope_color": scope,
         "invoice_id": inv.get("invoice_id"),
         "invoice_number": inv.get("invoice_number"),
         "source_entry_count": 1,

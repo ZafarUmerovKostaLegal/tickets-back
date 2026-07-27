@@ -276,6 +276,12 @@ class TimeEntryOut(BaseModel):
     task_id: Optional[str] = None
     description: Optional[str] = None
     external_reference_url: Optional[str] = Field(None, alias="externalReferenceUrl")
+    scope_color: Optional[str] = Field(
+        None,
+        alias="scopeColor",
+        description="Подсветка строки в отчёте (#RRGGBB).",
+        max_length=7,
+    )
     voided_at: Optional[datetime] = Field(
         None,
         alias="voidedAt",
@@ -341,6 +347,12 @@ class TimeEntryPatchBody(BaseModel):
         None,
         alias="externalReferenceUrl",
         max_length=4000,
+    )
+    scope_color: Optional[str] = Field(
+        None,
+        alias="scopeColor",
+        max_length=7,
+        description="Подсветка Scope в отчёте (#RRGGBB); null/пусто — снять цвет.",
     )
 
 

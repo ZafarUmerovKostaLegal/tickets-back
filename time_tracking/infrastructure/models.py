@@ -122,6 +122,8 @@ class TimeEntryModel(Base):
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_reference_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional highlight for report Scope / partner review (#RRGGBB).
+    scope_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     voided_by_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
