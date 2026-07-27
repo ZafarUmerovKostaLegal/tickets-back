@@ -46,3 +46,4 @@ def test_allowlist_covers_intended_user_fields() -> None:
     assert "projectCode" not in OVERRIDE_ALLOWED_KEYS
     assert "timeEntryId" not in OVERRIDE_ALLOWED_KEYS
     assert "note" in OVERRIDE_ALLOWED_KEYS
+    assert "scopeColor" in OVERRIDE_ALLOWED_KEYS

@@ -13,6 +13,7 @@ from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure import models_reports
 from infrastructure import models_invoices
+from infrastructure import models_invoice_registry
 from infrastructure.schema_patches import REGISTERED_SCHEMA_PATCHES
 from infrastructure.schema_patch_runner import apply_registered_schema_patches
 from application.settings_sync import renormalize_time_entries_to_minute
@@ -33,6 +34,7 @@ from presentation.routes import (
     report_partner_confirmations,
     report_snapshots,
     reports,
+    invoice_registry,
     team_workload,
     teams,
     time_entries,
@@ -95,4 +97,5 @@ app.include_router(labor_statistics.router, dependencies=_tt_reports_auth)
 app.include_router(report_partner_confirmations.router, dependencies=_tt_reports_auth)
 app.include_router(report_snapshots.router, dependencies=_tt_reports_auth)
 app.include_router(invoices.router, dependencies=_tt_auth)
+app.include_router(invoice_registry.router, dependencies=_tt_auth)
 app.include_router(client_projects._global_projects_router, dependencies=_tt_auth)

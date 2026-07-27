@@ -1614,6 +1614,72 @@ async def reports_project_budget_export(
     return Response(content=r.content, status_code=r.status_code, headers=out_headers)
 
 
+@router.get("/invoice-registry/years")
+async def invoice_registry_years(_: dict = Depends(require_view_role)):
+    return await _tt_json("GET", "/invoice-registry/years", timeout=30.0)
+
+
+@router.get("/invoice-registry/statistics")
+async def invoice_registry_statistics(
+    year: str = Query("2026"),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("GET", "/invoice-registry/statistics", params={"year": year}, timeout=30.0)
+
+
+@router.get("/invoice-registry/{year_id}")
+async def invoice_registry_sheet(
+    year_id: str,
+    q: str | None = Query(None),
+    _: dict = Depends(require_view_role),
+):
+    params = {"q": q} if q and q.strip() else None
+    return await _tt_json("GET", f"/invoice-registry/{year_id}", params=params, timeout=45.0)
+
+
+@router.post("/invoice-registry/2026/rows")
+async def invoice_registry_create_row(
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("POST", "/invoice-registry/2026/rows", json=body, timeout=30.0)
+
+
+@router.patch("/invoice-registry/2026/rows/{row_id}")
+async def invoice_registry_patch_row(
+    row_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("PATCH", f"/invoice-registry/2026/rows/{row_id}", json=body, timeout=30.0)
+
+
+@router.put("/invoice-registry/2026/rows/{row_id}")
+async def invoice_registry_put_row(
+    row_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("PUT", f"/invoice-registry/2026/rows/{row_id}", json=body, timeout=30.0)
+
+
+@router.delete("/invoice-registry/2026/rows/{row_id}", status_code=204)
+async def invoice_registry_delete_row(
+    row_id: str,
+    _: dict = Depends(require_view_role),
+):
+    await _tt_json("DELETE", f"/invoice-registry/2026/rows/{row_id}", timeout=30.0)
+    return None
+
+
+@router.put("/invoice-registry/2026/rows")
+async def invoice_registry_replace_rows(
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("PUT", "/invoice-registry/2026/rows", json=body, timeout=90.0)
+
+
 def _invoice_actor_qs(user: dict) -> dict[str, str]:
     return {"actorAuthUserId": str(_current_auth_user_id(user))}
 

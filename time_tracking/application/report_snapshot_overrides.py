@@ -27,6 +27,7 @@ OVERRIDE_ALLOWED_KEYS: frozenset[str] = frozenset(
         "costAmount",
         "currency",
         "externalReferenceUrl",
+        "scopeColor",
     }
 )
 
