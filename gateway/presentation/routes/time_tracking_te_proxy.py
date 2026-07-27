@@ -45,6 +45,12 @@ class TimeEntryPatchBody(BaseModel):
     project_id: Optional[str] = Field(None, alias="projectId")
     task_id: Optional[str] = Field(None, alias="taskId")
     description: Optional[str] = None
+    scope_color: Optional[str] = Field(
+        None,
+        alias="scopeColor",
+        max_length=7,
+        description="Подсветка Scope в отчёте (#RRGGBB); null/пусто — снять цвет.",
+    )
 
 
 class TimeEntryDeleteBody(BaseModel):
