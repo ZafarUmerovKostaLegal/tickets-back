@@ -98,6 +98,9 @@ class ExpenseRepository:
         sort_order: str,
         skip: int,
         limit: int,
+        scope_mode: str | None = None,
+        partner_user_id: int | None = None,
+        expense_subtype: str | None = None,
     ) -> tuple[list[ExpenseRequestModel], int]:
         q = select(ExpenseRequestModel)
         cnt = select(func.count()).select_from(ExpenseRequestModel)
@@ -109,8 +112,17 @@ class ExpenseRepository:
                 stmt = stmt.where(ExpenseRequestModel.status.in_(list(REGISTRY_STATUSES)))
             elif status:
                 stmt = stmt.where(ExpenseRequestModel.status == status)
-            if expense_type:
+            mode = (scope_mode or "").strip().lower()
+            if mode == "partner":
+                stmt = stmt.where(ExpenseRequestModel.expense_type == "partner_expense")
+            elif mode == "company":
+                stmt = stmt.where(ExpenseRequestModel.expense_type != "partner_expense")
+            elif expense_type:
                 stmt = stmt.where(ExpenseRequestModel.expense_type == expense_type)
+            if partner_user_id is not None:
+                stmt = stmt.where(ExpenseRequestModel.partner_user_id == partner_user_id)
+            if expense_subtype and expense_subtype.strip():
+                stmt = stmt.where(ExpenseRequestModel.expense_subtype == expense_subtype.strip())
             if is_reimbursable is not None:
                 stmt = stmt.where(ExpenseRequestModel.is_reimbursable == is_reimbursable)
             if date_from:

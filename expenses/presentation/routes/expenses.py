@@ -478,7 +478,14 @@ async def list_expenses(
         None,
         description="timeTracking — как scope=registry: без черновиков и «на проверке» (вкладка «Расходы» в Учёте времени)",
     ),
+    scope_mode: Optional[Literal["company", "partner"]] = Query(
+        None,
+        alias="scopeMode",
+        description="company — без partner_expense; partner — только partner_expense",
+    ),
     expense_type: Optional[str] = Query(None, alias="expenseType"),
+    expense_subtype: Optional[str] = Query(None, alias="expenseSubtype"),
+    partner_user_id: Optional[int] = Query(None, alias="partnerUserId"),
     is_reimbursable: Optional[bool] = Query(None, alias="isReimbursable"),
     date_from: Optional[date] = Query(None, alias="dateFrom"),
     date_to: Optional[date] = Query(None, alias="dateTo"),
@@ -510,6 +517,18 @@ async def list_expenses(
             eff_creator = uid_filter
     else:
         eff_creator = employee_user_id
+    if scope_mode == "partner":
+        expense_type = "partner_expense"
+    elif scope_mode == "company" and expense_type == "partner_expense":
+        raise HTTPException(
+            status_code=400,
+            detail="expenseType=partner_expense недоступен в scopeMode=company",
+        )
+    if partner_user_id is not None and scope_mode != "partner" and expense_type != "partner_expense":
+        raise HTTPException(
+            status_code=400,
+            detail="partnerUserId допустим только для расходов партнёров",
+        )
     repo = ExpenseRepository(session)
     rows, total = await repo.list_requests(
         created_by_user_id=eff_creator,
@@ -526,6 +545,9 @@ async def list_expenses(
         sort_order=sort_order,
         skip=skip,
         limit=limit,
+        scope_mode=scope_mode,
+        partner_user_id=partner_user_id,
+        expense_subtype=expense_subtype,
     )
     return await _list_with_authors(rows, total, skip, limit, authorization)
 
