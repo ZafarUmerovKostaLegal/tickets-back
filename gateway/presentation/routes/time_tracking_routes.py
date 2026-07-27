@@ -61,7 +61,6 @@ from presentation.routes.time_tracking_hourly_proxy import (
 )
 from presentation.time_tracking_user_provision import (
     provision_time_tracking_users_for_project_members,
-    sync_eligible_auth_users_to_time_tracking,
 )
 from presentation.routes.time_tracking_te_proxy import (
     ProjectAccessPutBody,
@@ -726,7 +725,6 @@ async def list_partner_users(user: dict = Depends(require_view_time_tracking_use
 async def list_users(user: dict = Depends(require_view_time_tracking_user_directory)):
     role = (user.get("role") or "").strip()
     if role in _VIEW_ROLES_TIME_ENTRIES:
-        await sync_eligible_auth_users_to_time_tracking(get_incoming_authorization())
         return await _tt_json("GET", "/users")
     mid = _current_auth_user_id(user)
     tt_role = await _fetch_time_tracking_user_role(mid)
