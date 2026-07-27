@@ -403,6 +403,7 @@ def _line_snake_to_api_json(line: dict[str, Any]) -> dict[str, Any]:
         "costAmount": line["cost_amount"],
         "currency": line["currency"],
         "externalReferenceUrl": line["external_reference_url"],
+        "scopeColor": line.get("scope_color"),
         "invoiceId": line.get("invoice_id"),
         "invoiceNumber": line.get("invoice_number"),
         "sourceEntryCount": line.get("source_entry_count", 1),
@@ -426,6 +427,7 @@ def _line_snake_to_api_json(line: dict[str, Any]) -> dict[str, Any]:
     out["task_id"] = line["task_id"]
     out["task_name"] = line["task_name"]
     out["description"] = line["note"]
+    out["scope_color"] = line.get("scope_color")
     out["is_voided"] = line.get("is_voided", False)
     out["voided_at"] = line.get("voided_at")
     return out
