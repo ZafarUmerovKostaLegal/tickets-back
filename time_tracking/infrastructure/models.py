@@ -302,6 +302,25 @@ class TimeManagerClientProjectModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ProjectScopeDefinitionModel(Base):
+    """Project-level meaning assigned to a Scope highlight color."""
+
+    __tablename__ = "time_tracking_project_scope_definitions"
+    __table_args__ = (Index("ix_tt_project_scope_project", "project_id"),)
+
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("time_tracking_client_projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    color: Mapped[str] = mapped_column(String(7), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_by_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TimeTrackingUserProjectAccessModel(Base):
 
 

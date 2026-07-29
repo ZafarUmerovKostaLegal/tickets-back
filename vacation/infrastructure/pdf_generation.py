@@ -10,7 +10,13 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from application.leave_pdf_copy import DEFAULT_PDF_COPY, FIRM_LINE, KIND_PDF_COPY, MANAGING_PARTNER_NAME
+from application.leave_pdf_copy import (
+    DEFAULT_PDF_COPY,
+    FIRM_LINE,
+    KIND_PDF_COPY,
+    MANAGING_PARTNER_NAME,
+    employee_role_genitive,
+)
 from infrastructure.models import LeaveRequest
 
 _FONT_REG = "LeavePdfRegular"
@@ -82,33 +88,8 @@ def _partner_dative(_req: LeaveRequest) -> str:
     return MANAGING_PARTNER_NAME
 
 
-_ROLE_GENITIVE: dict[str, str] = {
-    "partner": "партнера",
-    "assistant": "помощника",
-    "lawyer": "юриста",
-    "attorney": "адвоката",
-    "intern": "стажера",
-    "trainee": "стажера",
-    "партнер": "партнера",
-    "партнёр": "партнёра",
-    "помощник": "помощника",
-    "юрист": "юриста",
-    "адвокат": "адвоката",
-    "стажер": "стажера",
-    "стажёр": "стажёра",
-}
-
-
 def _employee_role_label(req: LeaveRequest) -> str:
-    pos = (req.employee_position or "").strip()
-    if not pos:
-        return "помощника"
-    key = pos.lower()
-    if key in _ROLE_GENITIVE:
-        return _ROLE_GENITIVE[key]
-    if key.endswith(("а", "я", "ы", "и")):
-        return key
-    return key
+    return employee_role_genitive(req.employee_position)
 
 
 def _copy_for(req: LeaveRequest) -> tuple[str, str]:

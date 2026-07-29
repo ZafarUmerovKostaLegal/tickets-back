@@ -2,7 +2,8 @@
 
 import csv
 import json
-from datetime import date
+import re
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import StringIO
 from typing import Literal
@@ -40,13 +41,14 @@ from application.entry_archive_service import archive_duplicate_entries, restore
 from application.report_builder import _load_initials_map
 from application.project_team_workload import compute_project_team_workload
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from infrastructure.database import get_session
-from infrastructure.models import TimeEntryModel
+from infrastructure.models import ProjectScopeDefinitionModel, TimeEntryModel
 from infrastructure.repositories import (
     ClientProjectRepository,
     TimeTrackingUserRepository,
@@ -86,6 +88,88 @@ def _out_fixed_fee_amount_for_api(row) -> object:
 
 
 _global_projects_router = APIRouter(tags=["projects_global"])
+
+
+class ProjectScopeDefinitionBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    color: str = Field(..., min_length=7, max_length=7)
+    description: str = Field(..., min_length=1, max_length=1000)
+
+
+def _scope_definition_out(row: ProjectScopeDefinitionModel) -> dict:
+    return {
+        "projectId": row.project_id,
+        "color": row.color,
+        "description": row.description,
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    }
+
+
+def _normalize_scope_color(value: str) -> str:
+    color = str(value or "").strip().upper()
+    if not re.fullmatch(r"#[0-9A-F]{6}", color):
+        raise HTTPException(status_code=400, detail="Scope color must be #RRGGBB")
+    return color
+
+
+@_global_projects_router.get("/projects/{project_id}/scope-definitions")
+async def list_project_scope_definitions(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+):
+    project = await ClientProjectRepository(session).get_by_id_global(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    rows = (
+        await session.execute(
+            select(ProjectScopeDefinitionModel)
+            .where(ProjectScopeDefinitionModel.project_id == project_id)
+            .order_by(ProjectScopeDefinitionModel.created_at.asc(), ProjectScopeDefinitionModel.color.asc())
+        )
+    ).scalars().all()
+    return [_scope_definition_out(row) for row in rows]
+
+
+@_global_projects_router.put("/projects/{project_id}/scope-definitions")
+async def upsert_project_scope_definition(
+    project_id: str,
+    body: ProjectScopeDefinitionBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+):
+    project = await ClientProjectRepository(session).get_by_id_global(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    description = body.description.strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Добавьте описание Scope")
+    color = _normalize_scope_color(body.color)
+    now = datetime.now(timezone.utc)
+    viewer_id = int(viewer["id"]) if viewer.get("id") is not None else None
+    row = await session.get(
+        ProjectScopeDefinitionModel,
+        {"project_id": project_id, "color": color},
+    )
+    if row is None:
+        row = ProjectScopeDefinitionModel(
+            project_id=project_id,
+            color=color,
+            description=description,
+            created_by_auth_user_id=viewer_id,
+            updated_by_auth_user_id=viewer_id,
+            created_at=now,
+            updated_at=None,
+        )
+        session.add(row)
+    else:
+        row.description = description
+        row.updated_by_auth_user_id = viewer_id
+        row.updated_at = now
+    await session.commit()
+    return _scope_definition_out(row)
 
 
 @_global_projects_router.get("/projects-for-expenses")

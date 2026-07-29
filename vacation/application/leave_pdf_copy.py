@@ -9,6 +9,32 @@ class LeavePdfCopy:
     body: str
 
 
+_ROLE_GENITIVE: dict[str, str] = {
+    "partner": "партнера",
+    "assistant": "помощника",
+    "lawyer": "юриста",
+    "attorney": "адвоката",
+    "intern": "стажера",
+    "trainee": "стажера",
+    "партнер": "партнера",
+    "партнёр": "партнёра",
+    "помощник": "помощника",
+    "юрист": "юриста",
+    "адвокат": "адвоката",
+    "стажер": "стажера",
+    "стажёр": "стажёра",
+}
+
+
+def employee_role_genitive(position: str | None) -> str:
+    """Return the employee role for the PDF sender line with an uppercase initial."""
+    pos = (position or "").strip()
+    if not pos:
+        return "Помощника"
+    role = _ROLE_GENITIVE.get(pos.casefold(), pos)
+    return f"{role[:1].upper()}{role[1:]}"
+
+
                                                                       
 KIND_PDF_COPY: dict[int, LeavePdfCopy] = {
     1: LeavePdfCopy(

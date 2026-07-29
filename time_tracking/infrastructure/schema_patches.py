@@ -918,6 +918,34 @@ async def apply_time_entries_scope_color_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_project_scope_definitions_patch(conn: AsyncConnection) -> None:
+    """Descriptions for Scope colors, unique within a project."""
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_project_scope_definitions (
+                project_id VARCHAR(36) NOT NULL REFERENCES time_tracking_client_projects(id) ON DELETE CASCADE,
+                color VARCHAR(7) NOT NULL,
+                description TEXT NOT NULL,
+                created_by_auth_user_id INTEGER,
+                updated_by_auth_user_id INTEGER,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ,
+                PRIMARY KEY (project_id, color)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_project_scope_project
+                ON time_tracking_project_scope_definitions (project_id)
+            """
+        )
+    )
+
+
 async def apply_time_entries_manager_void_patch(conn: AsyncConnection) -> None:
 
     await add_columns_if_missing(
@@ -1341,6 +1369,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
     ("time_entries_external_reference", apply_time_entries_external_reference_patch),
     ("time_entries_scope_color", apply_time_entries_scope_color_patch),
+    ("project_scope_definitions", apply_project_scope_definitions_patch),
     ("time_entries_manager_void", apply_time_entries_manager_void_patch),
     ("weekly_submissions", apply_weekly_submissions_schema_patch),
     ("client_projects_billable_amount", apply_client_projects_project_billable_amount_patch),

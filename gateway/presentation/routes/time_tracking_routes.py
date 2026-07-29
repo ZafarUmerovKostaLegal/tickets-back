@@ -81,6 +81,13 @@ from presentation.routes.time_tracking_te_proxy import (
 router = APIRouter(prefix="/api/v1/time-tracking", tags=["time_tracking"])
 
 
+class ProjectScopeDefinitionBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    color: str = Field(..., min_length=7, max_length=7)
+    description: str = Field(..., min_length=1, max_length=1000)
+
+
 def _time_tracking_base_url() -> str:
     return service_base_url(get_settings().time_tracking_service_url, "Time tracking")
 
@@ -1027,6 +1034,30 @@ async def get_projects_budget_metrics(
         "/projects/budget-metrics",
         params={"ids": ids},
         timeout=45.0,
+    )
+
+
+@router.get("/projects/{project_id}/scope-definitions")
+async def list_project_scope_definitions(
+    project_id: str,
+    _: dict = Depends(get_current_user),
+):
+    return await _tt_json(
+        "GET",
+        f"/projects/{project_id}/scope-definitions",
+    )
+
+
+@router.put("/projects/{project_id}/scope-definitions")
+async def upsert_project_scope_definition(
+    project_id: str,
+    body: ProjectScopeDefinitionBody,
+    _: dict = Depends(get_current_user),
+):
+    return await _tt_json(
+        "PUT",
+        f"/projects/{project_id}/scope-definitions",
+        json=body.model_dump(mode="json", by_alias=False),
     )
 
 
