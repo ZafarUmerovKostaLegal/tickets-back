@@ -342,10 +342,10 @@ class InvoiceRepository:
             InvoiceLineItemModel.__table__.delete().where(InvoiceLineItemModel.invoice_id == invoice_id)
         )
 
-    async def add_payment(self, p: InvoicePaymentModel) -> None:
+    def add_payment(self, p: InvoicePaymentModel) -> None:
         self._s.add(p)
 
-    async def add_audit(self, log: InvoiceAuditLogModel) -> None:
+    def add_audit(self, log: InvoiceAuditLogModel) -> None:
         self._s.add(log)
 
     async def sum_payments(self, invoice_id: str) -> Decimal:

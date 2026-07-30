@@ -128,7 +128,7 @@ async def _audit(
     actor_id: int,
     detail: dict | None = None,
 ) -> None:
-    await repo.add_audit(
+    repo.add_audit(
         InvoiceAuditLogModel(
             invoice_id=invoice_id,
             action=action,
