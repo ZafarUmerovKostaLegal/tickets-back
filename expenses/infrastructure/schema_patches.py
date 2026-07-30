@@ -81,8 +81,18 @@ async def apply_expense_rejection_reason(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_expense_reimbursement_card_number(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            "ALTER TABLE expense_requests "
+            "ADD COLUMN IF NOT EXISTS reimbursement_card_number VARCHAR(32)"
+        )
+    )
+
+
 REGISTERED_EXPENSE_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("expense_request_extra_columns", apply_expense_request_extra_columns),
     ("expense_approved_by_user_id", apply_expense_approved_by_user_id),
     ("expense_rejection_reason", apply_expense_rejection_reason),
+    ("expense_reimbursement_card_number", apply_expense_reimbursement_card_number),
 ]

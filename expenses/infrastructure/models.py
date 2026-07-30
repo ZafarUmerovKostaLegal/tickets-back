@@ -31,6 +31,7 @@ class ExpenseRequestModel(Base):
     expense_subtype: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_reimbursable: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
     payment_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reimbursement_card_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     department_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     expense_category_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

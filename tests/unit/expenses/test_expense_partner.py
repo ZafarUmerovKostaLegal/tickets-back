@@ -5,7 +5,13 @@ from decimal import Decimal
 
 import pytest
 
-from application.expense_service import is_partner_expense, normalize_payment_method, validate_submit_fields
+from application.expense_service import (
+    is_partner_expense,
+    normalize_payment_method,
+    normalize_reimbursement_card_number,
+    validate_payment_details,
+    validate_submit_fields,
+)
 
 
 def test_is_partner_expense():
@@ -32,6 +38,27 @@ def test_removed_payment_methods_are_rejected(value: str):
         normalize_payment_method(value)
 
 
+def test_payment_method_is_required():
+    with pytest.raises(ValueError, match="paymentMethod is required"):
+        validate_payment_details(None, None)
+
+
+def test_cash_payment_requires_and_normalizes_reimbursement_card():
+    assert validate_payment_details("cash", "8600 1234-1234 5678") == (
+        "cash",
+        "8600123412345678",
+    )
+    assert normalize_reimbursement_card_number("8600 1234 1234 5678") == "8600123412345678"
+    with pytest.raises(ValueError, match="required"):
+        validate_payment_details("cash", None)
+    with pytest.raises(ValueError, match="exactly 16 digits"):
+        validate_payment_details("cash", "8600 1234")
+
+
+def test_non_cash_payment_drops_reimbursement_card():
+    assert validate_payment_details("transfer", "8600123412345678") == ("transfer", None)
+
+
 def test_partner_submit_relaxes_reimbursable_requirements():
 
     validate_submit_fields(
@@ -42,6 +69,8 @@ def test_partner_submit_relaxes_reimbursable_requirements():
         expense_type="partner_expense",
         expense_subtype="partner_fuel",
         is_reimbursable=True,
+        payment_method="transfer",
+        reimbursement_card_number=None,
         comment=None,
         project_id=None,
         attachment_count=0,
@@ -61,6 +90,8 @@ def test_reimbursable_without_project_allowed_when_docs_ok():
         expense_type="transport",
         expense_subtype=None,
         is_reimbursable=True,
+        payment_method="cash",
+        reimbursement_card_number="8600123412345678",
         comment=None,
         project_id=None,
         attachment_count=0,
@@ -80,6 +111,8 @@ def test_partner_submit_still_enforces_amount_limit():
             expense_type="partner_expense",
             expense_subtype="partner_fuel",
             is_reimbursable=False,
+            payment_method="card",
+            reimbursement_card_number=None,
             comment=None,
             project_id=None,
             attachment_count=0,

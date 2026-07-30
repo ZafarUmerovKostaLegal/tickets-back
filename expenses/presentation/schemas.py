@@ -4,7 +4,13 @@ from typing import Annotated, Any, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from application.expense_service import normalize_payment_method, validate_expense_subtype_rules, validate_expense_type
+from application.expense_service import (
+    normalize_payment_method,
+    normalize_reimbursement_card_number,
+    validate_expense_subtype_rules,
+    validate_expense_type,
+    validate_payment_details,
+)
 
 MoneyDecimal = Annotated[
     Decimal,
@@ -136,6 +142,10 @@ class ExpenseRequestListItemOut(BaseModel):
 
 
 class ExpenseRequestDetailOut(ExpenseRequestListItemOut):
+    reimbursement_card_number: Optional[str] = Field(
+        None,
+        serialization_alias="reimbursementCardNumber",
+    )
     attachments: list[AttachmentOut] = Field(default_factory=list)
     status_history: list[StatusHistoryOut] = Field(
         default_factory=list,
@@ -165,7 +175,11 @@ class ExpenseCreateBody(BaseModel):
     expense_type: str = Field(..., validation_alias=AliasChoices("expenseType", "expense_type"))
     is_reimbursable: bool = Field(..., validation_alias=AliasChoices("isReimbursable", "is_reimbursable"))
     expense_subtype: Optional[str] = Field(None, validation_alias=AliasChoices("expenseSubtype", "expense_subtype"))
-    payment_method: Optional[str] = Field(None, validation_alias=AliasChoices("paymentMethod", "payment_method"))
+    payment_method: str = Field(..., validation_alias=AliasChoices("paymentMethod", "payment_method"))
+    reimbursement_card_number: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("reimbursementCardNumber", "reimbursement_card_number"),
+    )
     department_id: Optional[str] = Field(None, validation_alias=AliasChoices("departmentId", "department_id"))
     project_id: Optional[str] = Field(None, validation_alias=AliasChoices("projectId", "project_id"))
     expense_category_id: Optional[str] = Field(None, validation_alias=AliasChoices("expenseCategoryId", "expense_category_id"))
@@ -189,7 +203,7 @@ class ExpenseCreateBody(BaseModel):
     @classmethod
     def coerce_payment_method(cls, v: Any) -> Any:
         if v is None or v == "":
-            return None
+            raise ValueError("paymentMethod is required")
         return normalize_payment_method(str(v))
 
     @field_validator("partner_user_id", mode="before")
@@ -208,6 +222,12 @@ class ExpenseCreateBody(BaseModel):
     @model_validator(mode="after")
     def validate_partner_subtype_create(self) -> "ExpenseCreateBody":
         validate_expense_subtype_rules(self.expense_type, self.expense_subtype)
+        method, card_number = validate_payment_details(
+            self.payment_method,
+            self.reimbursement_card_number,
+        )
+        self.payment_method = method
+        self.reimbursement_card_number = card_number
         return self
 
 
@@ -222,6 +242,10 @@ class ExpenseUpdateBody(BaseModel):
     expense_subtype: Optional[str] = Field(None, validation_alias=AliasChoices("expenseSubtype", "expense_subtype"))
     is_reimbursable: Optional[bool] = Field(None, validation_alias=AliasChoices("isReimbursable", "is_reimbursable"))
     payment_method: Optional[str] = Field(None, validation_alias=AliasChoices("paymentMethod", "payment_method"))
+    reimbursement_card_number: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("reimbursementCardNumber", "reimbursement_card_number"),
+    )
     department_id: Optional[str] = Field(None, validation_alias=AliasChoices("departmentId", "department_id"))
     project_id: Optional[str] = Field(None, validation_alias=AliasChoices("projectId", "project_id"))
     expense_category_id: Optional[str] = Field(None, validation_alias=AliasChoices("expenseCategoryId", "expense_category_id"))
@@ -251,6 +275,13 @@ class ExpenseUpdateBody(BaseModel):
         if v is None or v == "":
             return None
         return normalize_payment_method(str(v))
+
+    @field_validator("reimbursement_card_number", mode="before")
+    @classmethod
+    def coerce_reimbursement_card_number_opt(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return None
+        return normalize_reimbursement_card_number(str(v))
 
     @field_validator("partner_user_id", mode="before")
     @classmethod

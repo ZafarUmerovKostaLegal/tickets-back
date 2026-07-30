@@ -114,14 +114,14 @@ class ExpenseRepository:
                 stmt = stmt.where(ExpenseRequestModel.created_by_user_id == created_by_user_id)
             if scope == "registry":
                 stmt = stmt.where(ExpenseRequestModel.status.in_(list(REGISTRY_STATUSES)))
-            elif status:
+            if status:
                 stmt = stmt.where(ExpenseRequestModel.status == status)
             mode = (scope_mode or "").strip().lower()
             if mode == "partner":
                 stmt = stmt.where(ExpenseRequestModel.expense_type == "partner_expense")
             elif mode == "company":
                 stmt = stmt.where(ExpenseRequestModel.expense_type != "partner_expense")
-            elif expense_type:
+            if expense_type:
                 stmt = stmt.where(ExpenseRequestModel.expense_type == expense_type)
             if partner_user_id is not None:
                 stmt = stmt.where(ExpenseRequestModel.partner_user_id == partner_user_id)
@@ -190,6 +190,7 @@ class ExpenseRepository:
         expense_subtype: str | None,
         is_reimbursable: bool,
         payment_method: str | None,
+        reimbursement_card_number: str | None,
         department_id: str | None,
         project_id: str | None,
         expense_category_id: str | None = None,
@@ -213,6 +214,7 @@ class ExpenseRepository:
             expense_subtype=(expense_subtype or None),
             is_reimbursable=is_reimbursable,
             payment_method=payment_method,
+            reimbursement_card_number=reimbursement_card_number,
             department_id=department_id,
             project_id=project_id,
             expense_category_id=expense_category_id,
@@ -243,6 +245,7 @@ class ExpenseRepository:
         expense_subtype: str | None,
         is_reimbursable: bool | None,
         payment_method: str | None,
+        reimbursement_card_number: str | None | object = _MISSING,
         department_id: str | None,
         project_id: str | None,
         expense_category_id: str | None = None,
@@ -271,6 +274,8 @@ class ExpenseRepository:
             row.is_reimbursable = is_reimbursable
         if payment_method is not None:
             row.payment_method = payment_method
+        if reimbursement_card_number is not _MISSING:
+            row.reimbursement_card_number = reimbursement_card_number
         if department_id is not None:
             row.department_id = department_id
         if project_id is not None:

@@ -1,5 +1,6 @@
 
 
+import re
 from decimal import Decimal, ROUND_HALF_UP
 
 
@@ -103,6 +104,30 @@ def normalize_payment_method(v: str | None) -> str | None:
     return k
 
 
+def normalize_reimbursement_card_number(v: str | None) -> str:
+    s = str(v or "").strip()
+    if not s:
+        raise ValueError("reimbursementCardNumber is required for paymentMethod=cash")
+    if re.search(r"[^0-9\s-]", s):
+        raise ValueError("reimbursementCardNumber must contain digits only")
+    digits = re.sub(r"[\s-]+", "", s)
+    if len(digits) != 16:
+        raise ValueError("reimbursementCardNumber must contain exactly 16 digits")
+    return digits
+
+
+def validate_payment_details(
+    payment_method: str | None,
+    reimbursement_card_number: str | None,
+) -> tuple[str, str | None]:
+    method = normalize_payment_method(payment_method)
+    if method is None:
+        raise ValueError("paymentMethod is required")
+    if method == "cash":
+        return method, normalize_reimbursement_card_number(reimbursement_card_number)
+    return method, None
+
+
 def validate_submit_fields(
     *,
     description: str,
@@ -112,6 +137,8 @@ def validate_submit_fields(
     expense_type: str,
     expense_subtype: str | None = None,
     is_reimbursable: bool,
+    payment_method: str | None,
+    reimbursement_card_number: str | None,
     comment: str | None,
     project_id: str | None = None,
     attachment_count: int,
@@ -129,6 +156,7 @@ def validate_submit_fields(
         raise ValueError("exchangeRate must be greater than 0")
     validate_expense_type(expense_type)
     validate_expense_subtype_rules(expense_type, expense_subtype)
+    validate_payment_details(payment_method, reimbursement_card_number)
     if is_reimbursable is None:
         raise ValueError("isReimbursable is required")
     if expense_amount_limit_uzs is not None and amount_uzs > expense_amount_limit_uzs:

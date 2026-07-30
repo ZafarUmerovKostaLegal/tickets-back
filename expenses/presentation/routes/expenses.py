@@ -17,6 +17,7 @@ from application.expense_service import (
     is_partner_expense,
     is_partner_org_role,
     validate_expense_subtype_rules,
+    validate_payment_details,
     validate_submit_fields,
 )
 from backend_common.media_path import safe_media_path
@@ -353,6 +354,7 @@ def _detail(
     atts = row.attachments or []
     return ExpenseRequestDetailOut(
         **li.model_dump(),
+        reimbursement_card_number=row.reimbursement_card_number,
         attachments=[
             AttachmentOut(
                 id=a.id,
@@ -602,6 +604,7 @@ async def create_expense(
         expense_subtype=body.expense_subtype,
         is_reimbursable=body.is_reimbursable,
         payment_method=body.payment_method,
+        reimbursement_card_number=body.reimbursement_card_number,
         department_id=body.department_id,
         project_id=body.project_id,
         expense_category_id=body.expense_category_id,
@@ -706,6 +709,14 @@ async def update_expense(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    try:
+        payment_method, reimbursement_card_number = validate_payment_details(
+            data.get("payment_method", row.payment_method),
+            data.get("reimbursement_card_number", row.reimbursement_card_number),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     eff_partner_uid = row.partner_user_id
     if "partner_user_id" in data:
         eff_partner_uid = await _resolve_partner_user_id(
@@ -750,7 +761,8 @@ async def update_expense(
         expense_type=data.get("expense_type"),
         expense_subtype=data.get("expense_subtype"),
         is_reimbursable=data.get("is_reimbursable"),
-        payment_method=data.get("payment_method"),
+        payment_method=payment_method,
+        reimbursement_card_number=reimbursement_card_number,
         department_id=data.get("department_id"),
         project_id=data.get("project_id"),
         expense_category_id=data.get("expense_category_id"),
@@ -815,6 +827,8 @@ async def submit_expense(
             expense_type=row.expense_type,
             expense_subtype=row.expense_subtype,
             is_reimbursable=row.is_reimbursable,
+            payment_method=row.payment_method,
+            reimbursement_card_number=row.reimbursement_card_number,
             comment=row.comment,
             project_id=row.project_id,
             attachment_count=n_att,
