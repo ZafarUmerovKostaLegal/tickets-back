@@ -27,6 +27,9 @@ from infrastructure.expense_author_decision_notify import (
     run_author_decision_notification_safe,
     run_expense_paid_notification_safe,
 )
+from infrastructure.expense_payment_confirmation_notify import (
+    run_payment_confirmation_notification_safe,
+)
 from infrastructure.expense_submit_mail import (
     AttachmentEmailItem,
     ExpenseModerationEmailContext,
@@ -100,7 +103,6 @@ def _moderation_email_context(
         expense_id=row.id,
         description=row.description,
         expense_date=row.expense_date,
-        payment_deadline=row.payment_deadline,
         amount_uzs=row.amount_uzs,
         exchange_rate=row.exchange_rate,
         equivalent_amount=row.equivalent_amount,
@@ -302,7 +304,6 @@ def _list_item(
         id=row.id,
         description=row.description,
         expense_date=row.expense_date,
-        payment_deadline=row.payment_deadline,
         amount_uzs=row.amount_uzs,
         exchange_rate=row.exchange_rate,
         equivalent_amount=row.equivalent_amount,
@@ -329,6 +330,7 @@ def _list_item(
         approved_by_user_id=row.approved_by_user_id,
         approved_by=approved_by,
         rejected_at=row.rejected_at,
+        rejection_reason=row.rejection_reason,
         paid_at=row.paid_at,
         paid_by_user_id=row.paid_by_user_id,
         paid_by=paid_by,
@@ -593,7 +595,6 @@ async def create_expense(
         id_=rid,
         description=body.description or "",
         expense_date=exp_d,
-        payment_deadline=body.payment_deadline,
         amount_uzs=amount_uzs,
         exchange_rate=exchange_rate,
         equivalent_amount=eq,
@@ -678,7 +679,6 @@ async def update_expense(
     before = {
         "description": row.description,
         "expense_date": row.expense_date,
-        "payment_deadline": row.payment_deadline,
         "amount_uzs": row.amount_uzs,
         "exchange_rate": row.exchange_rate,
         "equivalent_amount": row.equivalent_amount,
@@ -736,19 +736,6 @@ async def update_expense(
     if "expense_date" in data:
         exp_d = data["expense_date"]
     _validate_partner_expense_date(eff_type, exp_d)
-    pd_new = row.payment_deadline
-    if "payment_deadline" in data:
-        pd_new = data["payment_deadline"]
-    if pd_new is not None and exp_d is not None and pd_new < exp_d:
-        raise HTTPException(
-            status_code=400,
-            detail="Конечный срок оплаты не может быть раньше даты расхода",
-        )
-
-    payment_deadline_arg: date | object = _MISSING
-    if "payment_deadline" in data:
-        payment_deadline_arg = data["payment_deadline"]
-
     partner_user_id_arg: int | None | object = _MISSING
     if "partner_user_id" in data or "expense_type" in data:
         partner_user_id_arg = eff_partner_uid
@@ -757,7 +744,6 @@ async def update_expense(
         row,
         description=data.get("description"),
         expense_date=data.get("expense_date"),
-        payment_deadline=payment_deadline_arg,
         amount_uzs=data.get("amount_uzs"),
         exchange_rate=data.get("exchange_rate"),
         equivalent_amount=eq,
@@ -779,7 +765,6 @@ async def update_expense(
     after = {
         "description": row.description,
         "expense_date": row.expense_date,
-        "payment_deadline": row.payment_deadline,
         "amount_uzs": row.amount_uzs,
         "exchange_rate": row.exchange_rate,
         "equivalent_amount": row.equivalent_amount,
@@ -825,7 +810,6 @@ async def submit_expense(
         validate_submit_fields(
             description=row.description,
             expense_date=row.expense_date,
-            payment_deadline=row.payment_deadline,
             amount_uzs=row.amount_uzs,
             exchange_rate=row.exchange_rate,
             expense_type=row.expense_type,
@@ -928,6 +912,7 @@ async def approve_expense(
     prev = row.status
     approver_uid = int(user["id"])
     row.status = "approved"
+    row.rejection_reason = None
     row.approved_at = _utc_now()
     row.approved_by_user_id = approver_uid
     row.updated_by_user_id = approver_uid
@@ -957,6 +942,20 @@ async def approve_expense(
         decision="approved",
         reject_reason=None,
     )
+    if row.is_reimbursable:
+        author_profile = await fetch_user_by_id(
+            get_settings().auth_service_url,
+            authorization,
+            row.created_by_user_id,
+            fallback_bearer=(get_settings().expense_auth_bearer_for_author_email or "").strip() or None,
+        )
+        await run_payment_confirmation_notification_safe(
+            get_settings(),
+            expense_id=row.id,
+            amount_uzs=row.amount_uzs,
+            description=row.description,
+            author_name=(author_profile or {}).get("display_name"),
+        )
     return await _detail_response(row, authorization)
 
 
@@ -988,6 +987,7 @@ async def reject_expense(
     row.updated_by_user_id = int(user["id"])
     row.updated_at = _utc_now()
     reason = body.reason.strip()
+    row.rejection_reason = reason
     await repo.add_status_history(
         expense_request_id=row.id,
         from_status=prev,

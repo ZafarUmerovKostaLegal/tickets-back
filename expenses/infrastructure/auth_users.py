@@ -49,6 +49,35 @@ async def fetch_user_by_id(
     return None
 
 
+async def fetch_user_by_email_internal(
+    auth_base_url: str,
+    email: str,
+    *,
+    internal_key: str | None,
+) -> dict | None:
+    """Resolve an active user by exact email for service notifications."""
+    normalized = (email or "").strip().lower()
+    secret = (internal_key or "").strip()
+    if not normalized or not secret:
+        return None
+    base = auth_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(
+                f"{base}/internal/users/by-email",
+                params={"email": normalized},
+                headers={"X-Internal-Key": secret},
+            )
+        if r.status_code == 200:
+            data = r.json()
+            if str(data.get("email") or "").strip().lower() == normalized:
+                return data
+        _log.debug("auth internal users/by-email status=%s email=%s", r.status_code, normalized)
+    except httpx.RequestError as e:
+        _log.debug("auth internal users/by-email err=%s email=%s", e, normalized)
+    return None
+
+
 async def fetch_users_by_ids(
     auth_base_url: str,
     authorization: Optional[str],

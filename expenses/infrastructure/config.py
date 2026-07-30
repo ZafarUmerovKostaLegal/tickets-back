@@ -55,8 +55,25 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXPENSE_APPROVAL_LOW_LIMIT_UZS"),
     )
     expense_notify_to_low: str = Field(
-        default="",
+        default="oidrisova@kostalegal.com,gtemirova@kostalegal.com",
         validation_alias=AliasChoices("EXPENSE_NOTIFY_TO_LOW"),
+    )
+
+    expense_payment_confirmer_email: str = Field(
+        default="aakhmadjonov@kostalegal.com",
+        validation_alias=AliasChoices("EXPENSE_PAYMENT_CONFIRMER_EMAIL"),
+    )
+    expense_notify_payment_confirmer: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("EXPENSE_NOTIFY_PAYMENT_CONFIRMER"),
+    )
+    notification_push_url: str = Field(
+        default="http://gateway:1234/api/v1/notifications/system",
+        validation_alias=AliasChoices("NOTIFICATION_PUSH_URL"),
+    )
+    ws_internal_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("WS_INTERNAL_SECRET"),
     )
 
     expense_notify_on_submit: bool = Field(
@@ -200,6 +217,7 @@ class Settings(BaseSettings):
         "expense_email_action_confirm_step",
         "expense_notify_author_on_decision",
         "expense_notify_author_on_paid",
+        "expense_notify_payment_confirmer",
         mode="before",
     )
     @classmethod

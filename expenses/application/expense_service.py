@@ -47,7 +47,7 @@ PARTNER_EXPENSE_SUBTYPES = frozenset(
 _EXPENSE_TYPE_ALIASES = {"meals": "food", "office": "services"}
 
 
-ALLOWED_PAYMENT_METHODS = frozenset({"cash", "card", "transfer", "other_payment"})
+ALLOWED_PAYMENT_METHODS = frozenset({"cash", "transfer", "card"})
 
 
 REGISTRY_STATUSES = frozenset({"approved", "paid", "closed"})
@@ -107,7 +107,6 @@ def validate_submit_fields(
     *,
     description: str,
     expense_date,
-    payment_deadline=None,
     amount_uzs: Decimal,
     exchange_rate: Decimal,
     expense_type: str,
@@ -124,8 +123,6 @@ def validate_submit_fields(
         raise ValueError("description is required")
     if expense_date is None:
         raise ValueError("expenseDate is required")
-    if payment_deadline is not None and expense_date is not None and payment_deadline < expense_date:
-        raise ValueError("Конечный срок оплаты не может быть раньше даты расхода")
     if amount_uzs is None or amount_uzs <= 0:
         raise ValueError("amountUzs must be greater than 0")
     if exchange_rate is None or exchange_rate <= 0:

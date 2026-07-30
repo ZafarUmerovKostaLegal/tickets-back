@@ -183,7 +183,6 @@ class ExpenseRepository:
         id_: str,
         description: str,
         expense_date: date,
-        payment_deadline: date | None,
         amount_uzs: Decimal,
         exchange_rate: Decimal,
         equivalent_amount: Decimal,
@@ -207,7 +206,6 @@ class ExpenseRepository:
             id=id_,
             description=description.strip(),
             expense_date=expense_date,
-            payment_deadline=payment_deadline,
             amount_uzs=amount_uzs,
             exchange_rate=exchange_rate,
             equivalent_amount=equivalent_amount,
@@ -238,7 +236,6 @@ class ExpenseRepository:
         *,
         description: str | None,
         expense_date: date | None,
-        payment_deadline: date | None | object = _MISSING,
         amount_uzs: Decimal | None,
         exchange_rate: Decimal | None,
         equivalent_amount: Decimal | None,
@@ -260,8 +257,6 @@ class ExpenseRepository:
             row.description = description.strip()
         if expense_date is not None:
             row.expense_date = expense_date
-        if payment_deadline is not _MISSING:
-            row.payment_deadline = payment_deadline
         if amount_uzs is not None:
             row.amount_uzs = amount_uzs
         if exchange_rate is not None:

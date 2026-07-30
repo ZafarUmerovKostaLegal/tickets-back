@@ -51,7 +51,6 @@ class ExpenseModerationEmailContext:
     expense_id: str
     description: str | None
     expense_date: date | datetime | None
-    payment_deadline: date | None
     amount_uzs: Decimal | None
     exchange_rate: Decimal | None
     equivalent_amount: Decimal | None
@@ -117,6 +116,20 @@ def _format_date(d: date | datetime | None) -> str:
     if isinstance(d, datetime):
         return d.date().isoformat()
     return d.isoformat()
+
+
+_PAYMENT_METHOD_LABELS = {
+    "cash": "Наличные/Личная карта",
+    "transfer": "Перечисление",
+    "card": "Корпоративная карта офиса",
+}
+
+
+def _format_payment_method(value: str | None) -> str:
+    key = (value or "").strip().lower()
+    if not key:
+        return "—"
+    return _PAYMENT_METHOD_LABELS.get(key, value or "—")
 
 
 def _format_money(amount: Decimal | None) -> str:
@@ -234,7 +247,6 @@ def _build_moderation_html(
     dept: str,
     proj: str,
     pm: str,
-    pd_fmt: str,
     rate_fmt: str,
     eq_fmt: str,
     open_link: str | None,
@@ -273,7 +285,6 @@ def _build_moderation_html(
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f8fafc;border-radius:8px;overflow:hidden;">
               {_detail_row("Автор", safe_author)}
               {_detail_row("Дата расхода", html.escape(expense_date_fmt))}
-              {_detail_row("Срок оплаты", html.escape(pd_fmt))}
             </table>
           </td>
         </tr>
@@ -425,7 +436,7 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
     vendor = (ctx.vendor or "").strip() or "—"
     bp = (ctx.business_purpose or "").strip() or "—"
     comment = (ctx.comment or "").strip() or "—"
-    pm = (ctx.payment_method or "").strip() or "—"
+    pm = _format_payment_method(ctx.payment_method)
     dept = (ctx.department_id or "").strip() or "—"
     proj = (ctx.project_id or "").strip() or "—"
 
@@ -437,7 +448,6 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
     safe_comment = html.escape(comment).replace("\n", "<br/>")
     safe_author = html.escape(author_line)
     expense_date_fmt = _format_date(ctx.expense_date)
-    pd_fmt = _format_date(ctx.payment_deadline)
     money_fmt = _format_money(ctx.amount_uzs)
     rate_fmt = _format_rate(ctx.exchange_rate)
     eq_fmt = _format_money(ctx.equivalent_amount)
@@ -595,7 +605,6 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
         dept=dept,
         proj=proj,
         pm=pm,
-        pd_fmt=pd_fmt,
         rate_fmt=rate_fmt,
         eq_fmt=eq_fmt,
         open_link=open_link,
@@ -608,7 +617,6 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
         f"Заявка на согласование: {expense_id}",
         f"Автор: {author_line}",
         f"Дата расхода: {expense_date_fmt}",
-        f"Срок оплаты: {pd_fmt}",
         f"Тип: {et} / {sub}",
         f"Сумма (UZS): {money_fmt}",
         f"Курс: {rate_fmt}",
@@ -740,7 +748,6 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
     sub = (ctx.expense_subtype or "").strip() or "—"
     vendor = (ctx.vendor or "").strip() or "—"
     expense_date_fmt = _format_date(ctx.expense_date)
-    pd_fmt = _format_date(ctx.payment_deadline)
     money_fmt = _format_money(ctx.amount_uzs)
     rate_fmt = _format_rate(ctx.exchange_rate)
     eq_fmt = _format_money(ctx.equivalent_amount)
@@ -763,7 +770,6 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
         f"Автор: {author_line}",
         f"Партнёр (расход): {partner_line}",
         f"Дата расхода: {expense_date_fmt}",
-        f"Срок оплаты: {pd_fmt}",
         f"Подтип: {sub}",
         f"Сумма (UZS): {money_fmt}",
         f"Курс: {rate_fmt}",
@@ -794,7 +800,6 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
           {_detail_row("Автор", html.escape(author_line))}
           {_detail_row("Партнёр (расход)", html.escape(partner_line))}
           {_detail_row("Дата расхода", html.escape(expense_date_fmt))}
-          {_detail_row("Срок оплаты", html.escape(pd_fmt))}
           {_detail_row("Тип / подтип", html.escape(f"{et} / {sub}"))}
           {_detail_row("Сумма (UZS)", html.escape(money_fmt))}
           {_detail_row("Курс", html.escape(rate_fmt))}
@@ -976,6 +981,92 @@ async def notify_expense_author_decision(
     _log.info("expense author notify: отправлено expense_id=%s to=%s", expense_id, to)
 
 
+async def notify_expense_payment_confirmation_requested(
+    settings: Settings,
+    *,
+    to_email: str,
+    expense_id: str,
+    amount_uzs: Decimal | None,
+    description: str | None,
+    author_name: str | None,
+) -> None:
+    """Tell the designated payment confirmer that an approved expense awaits payment."""
+    if not _smtp_ready(settings):
+        _log.warning(
+            "expense payment confirmation notify: SMTP не настроен (%s), expense_id=%s",
+            ", ".join(_smtp_missing_env_names(settings)),
+            expense_id,
+        )
+        return
+    to = (to_email or "").strip()
+    if not to:
+        _log.warning("expense payment confirmation notify: пустой email, expense_id=%s", expense_id)
+        return
+
+    safe_id = html.escape(expense_id)
+    safe_amount = html.escape(_format_money(amount_uzs))
+    safe_description = html.escape((description or "").strip() or "—").replace("\n", "<br/>")
+    safe_author = html.escape((author_name or "").strip() or "—")
+    open_link = _build_open_link(settings, expense_id)
+    if open_link:
+        open_link = append_url_intent(
+            open_link,
+            (settings.expense_notify_intent_param or "intent").strip() or "intent",
+            "pay",
+        )
+    action_html = _button_row_html(open_link, "Открыть и подтвердить оплату", "#4f46e5") if open_link else ""
+    link_plain = f"\n\nОткрыть заявку: {open_link}" if open_link else ""
+
+    subject = f"Требуется подтвердить оплату заявки {expense_id}"
+    html_body = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"/></head>
+<body style="margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f8fafc;color:#0f172a;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f8fafc;padding:24px 12px;">
+  <tr><td align="center">
+    <table role="presentation" width="580" cellspacing="0" cellpadding="0" border="0" style="max-width:580px;background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:28px 24px;">
+      <tr><td>
+        <p style="margin:0 0 12px;font-size:18px;font-weight:700;">Подтвердите оплату расхода</p>
+        <p style="margin:0 0 18px;color:#475569;line-height:1.55;">Возмещаемая заявка <strong>{safe_id}</strong> одобрена и ожидает подтверждения фактической оплаты.</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f8fafc;border-radius:8px;overflow:hidden;margin-bottom:18px;">
+          {_detail_row("Сумма (UZS)", safe_amount)}
+          {_detail_row("Автор", safe_author)}
+          {_detail_row("Описание", safe_description)}
+        </table>
+        {action_html}
+        <p style="margin:20px 0 0;font-size:13px;color:#64748b;">После фактической оплаты нажмите в заявке «Оплачено».</p>
+        <p style="margin:8px 0 0;font-size:13px;color:#64748b;">Kosta Legal · расходы</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>"""
+    plain_body = (
+        f"Возмещаемая заявка {expense_id} одобрена и ожидает подтверждения оплаты.\n\n"
+        f"Сумма (UZS): {_format_money(amount_uzs)}\n"
+        f"Автор: {(author_name or '').strip() or '—'}\n"
+        f"Описание: {(description or '').strip() or '—'}"
+        f"{link_plain}\n\nПосле фактической оплаты нажмите в заявке «Оплачено»."
+    )
+    from_addr = (settings.expense_mail_from or settings.smtp_user or "").strip()
+    if not from_addr:
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.smtp_host.strip(),
+        port=int(settings.smtp_port),
+        username=settings.smtp_user.strip(),
+        password=settings.smtp_password,
+        start_tls=bool(settings.smtp_use_tls),
+    )
+    _log.info("expense payment confirmation notify: отправлено expense_id=%s to=%s", expense_id, to)
+
+
 async def notify_expense_author_paid(
     settings: Settings,
     *,
@@ -1098,7 +1189,6 @@ async def send_expense_smtp_test(settings: Settings) -> list[str]:
         expense_id="TEST-EXPENSE",
         description="Тестовое описание для проверки SMTP.",
         expense_date=date(2099, 1, 1),
-        payment_deadline=None,
         amount_uzs=Decimal("1234567.89"),
         exchange_rate=Decimal("12500"),
         equivalent_amount=Decimal("98.76"),

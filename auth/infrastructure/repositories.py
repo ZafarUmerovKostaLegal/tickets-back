@@ -116,6 +116,16 @@ class UserRepository(UserRepositoryPort):
         row = result.scalars().one_or_none()
         return self._to_entity(row) if row else None
 
+    async def get_by_email(self, email: str) -> Optional[User]:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        result = await self._session.execute(
+            select(UserModel).where(func.lower(UserModel.email) == normalized)
+        )
+        row = result.scalars().one_or_none()
+        return self._to_entity(row) if row else None
+
     async def get_many_by_ids(self, user_ids: Sequence[int]) -> Sequence[User]:
         ids = sorted({int(x) for x in user_ids})
         if not ids:

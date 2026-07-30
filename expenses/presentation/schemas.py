@@ -97,7 +97,6 @@ class ExpenseRequestListItemOut(BaseModel):
     id: str
     description: str
     expense_date: date = Field(serialization_alias="expenseDate")
-    payment_deadline: Optional[date] = Field(None, serialization_alias="paymentDeadline")
     amount_uzs: MoneyDecimal = Field(serialization_alias="amountUzs")
     exchange_rate: MoneyDecimal = Field(serialization_alias="exchangeRate")
     equivalent_amount: MoneyDecimal = Field(serialization_alias="equivalentAmount")
@@ -125,6 +124,7 @@ class ExpenseRequestListItemOut(BaseModel):
     approved_by_user_id: Optional[int] = Field(None, serialization_alias="approvedByUserId")
     approved_by: Optional[ExpenseAuthorSnippet] = Field(None, serialization_alias="approvedBy")
     rejected_at: Optional[datetime] = Field(None, serialization_alias="rejectedAt")
+    rejection_reason: Optional[str] = Field(None, serialization_alias="rejectionReason")
     paid_at: Optional[datetime] = Field(None, serialization_alias="paidAt")
     paid_by_user_id: Optional[int] = Field(None, serialization_alias="paidByUserId")
     paid_by: Optional[ExpenseAuthorSnippet] = Field(None, serialization_alias="paidBy")
@@ -160,9 +160,6 @@ class ExpenseCreateBody(BaseModel):
 
     description: str = Field(..., min_length=1)
     expense_date: date = Field(..., validation_alias=AliasChoices("expenseDate", "expense_date"))
-    payment_deadline: Optional[date] = Field(
-        None, validation_alias=AliasChoices("paymentDeadline", "payment_deadline")
-    )
     amount_uzs: MoneyDecimal = Field(..., validation_alias=AliasChoices("amountUzs", "amount_uzs"))
     exchange_rate: MoneyDecimal = Field(..., validation_alias=AliasChoices("exchangeRate", "exchange_rate"))
     expense_type: str = Field(..., validation_alias=AliasChoices("expenseType", "expense_type"))
@@ -209,12 +206,6 @@ class ExpenseCreateBody(BaseModel):
         return n
 
     @model_validator(mode="after")
-    def validate_deadline_vs_expense_date(self) -> "ExpenseCreateBody":
-        if self.payment_deadline is not None and self.payment_deadline < self.expense_date:
-            raise ValueError("Конечный срок оплаты не может быть раньше даты расхода")
-        return self
-
-    @model_validator(mode="after")
     def validate_partner_subtype_create(self) -> "ExpenseCreateBody":
         validate_expense_subtype_rules(self.expense_type, self.expense_subtype)
         return self
@@ -225,9 +216,6 @@ class ExpenseUpdateBody(BaseModel):
 
     description: Optional[str] = None
     expense_date: Optional[date] = Field(None, validation_alias=AliasChoices("expenseDate", "expense_date"))
-    payment_deadline: Optional[date] = Field(
-        None, validation_alias=AliasChoices("paymentDeadline", "payment_deadline")
-    )
     amount_uzs: Optional[MoneyDecimal] = Field(None, validation_alias=AliasChoices("amountUzs", "amount_uzs"))
     exchange_rate: Optional[MoneyDecimal] = Field(None, validation_alias=AliasChoices("exchangeRate", "exchange_rate"))
     expense_type: Optional[str] = Field(None, validation_alias=AliasChoices("expenseType", "expense_type"))

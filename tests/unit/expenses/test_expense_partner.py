@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from application.expense_service import is_partner_expense, validate_submit_fields
+from application.expense_service import is_partner_expense, normalize_payment_method, validate_submit_fields
 
 
 def test_is_partner_expense():
@@ -21,12 +21,22 @@ def test_is_partner_org_role():
     assert is_partner_org_role("Сотрудник") is False
 
 
+@pytest.mark.parametrize("value", ["cash", "transfer", "card"])
+def test_allowed_payment_methods(value: str):
+    assert normalize_payment_method(value) == value
+
+
+@pytest.mark.parametrize("value", ["other_payment", "other", "bank_card"])
+def test_removed_payment_methods_are_rejected(value: str):
+    with pytest.raises(ValueError, match="paymentMethod"):
+        normalize_payment_method(value)
+
+
 def test_partner_submit_relaxes_reimbursable_requirements():
 
     validate_submit_fields(
         description="Партнёр",
         expense_date=date(2026, 1, 10),
-        payment_deadline=None,
         amount_uzs=Decimal("100.00"),
         exchange_rate=Decimal("12500"),
         expense_type="partner_expense",
@@ -46,7 +56,6 @@ def test_reimbursable_without_project_allowed_when_docs_ok():
     validate_submit_fields(
         description="Такси",
         expense_date=date(2026, 1, 10),
-        payment_deadline=None,
         amount_uzs=Decimal("100.00"),
         exchange_rate=Decimal("12500"),
         expense_type="transport",
@@ -66,7 +75,6 @@ def test_partner_submit_still_enforces_amount_limit():
         validate_submit_fields(
             description="Партнёр",
             expense_date=date(2026, 1, 10),
-            payment_deadline=None,
             amount_uzs=Decimal("999999"),
             exchange_rate=Decimal("12500"),
             expense_type="partner_expense",

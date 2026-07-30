@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html as html_mod
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
@@ -14,6 +14,7 @@ from starlette.responses import FileResponse
 from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.expense_author_decision_notify import run_author_decision_notification_safe
+from infrastructure.expense_payment_confirmation_notify import run_payment_confirmation_notification_safe
 from infrastructure.database import get_session
 from infrastructure.email_action_token import verify_attachment_view_token, verify_email_action_token
 from infrastructure.repositories import ExpenseRepository
@@ -75,7 +76,17 @@ def _confirm_html(
     title_verb = "Утвердить" if action == "approve" else "Отклонить"
     accent = "#16a34a" if action == "approve" else "#dc2626"
     safe_eid = html_mod.escape(expense_id)
-    safe_final = html_mod.escape(final_url, quote=True)
+    parsed_final = urlsplit(final_url)
+    action_url = f"{parsed_final.scheme}://{parsed_final.netloc}{parsed_final.path}"
+    action_token = (parse_qs(parsed_final.query).get("token") or [""])[0]
+    safe_action_url = html_mod.escape(action_url, quote=True)
+    safe_action_token = html_mod.escape(action_token, quote=True)
+    reason_field = ""
+    if action == "reject":
+        reason_field = """
+<label for="reason" style="display:block;margin:0 0 8px;font-size:13px;font-weight:600;color:#e2e8f0;">Причина отказа</label>
+<textarea id="reason" name="reason" required maxlength="2000" rows="5" placeholder="Укажите причину — автор увидит её в заявке"
+ style="box-sizing:border-box;width:100%;resize:vertical;margin:0 0 16px;padding:12px;border-radius:10px;border:1px solid #475569;background:#0f172a;color:#f8fafc;font:14px/1.45 Segoe UI,Arial,sans-serif;"></textarea>"""
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Подтверждение · {safe_eid}</title></head>
@@ -84,10 +95,12 @@ def _confirm_html(
 <p style="margin:0 0 8px 0;font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;">Подтверждение</p>
 <h1 style="margin:0 0 12px 0;font-size:22px;font-weight:600;">{title_verb} заявку {safe_eid}?</h1>
 <p style="margin:0 0 24px 0;font-size:15px;color:#cbd5e1;line-height:1.5;">После нажатия кнопки заявка будет <strong>{verb}</strong> через сервер. Это не страница приложения — отдельного входа не требуется.</p>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-<tr><td style="padding:0 0 12px 0;">
-<a href="{safe_final}" style="display:block;text-align:center;padding:16px 20px;background:{accent};color:#fff !important;text-decoration:none;border-radius:10px;font-weight:600;font-size:16px;">Да, {title_verb.lower()}</a>
-</td></tr>
+<form method="get" action="{safe_action_url}">
+<input type="hidden" name="token" value="{safe_action_token}"/>
+{reason_field}
+<button type="submit" style="box-sizing:border-box;width:100%;border:0;cursor:pointer;text-align:center;padding:16px 20px;background:{accent};color:#fff;border-radius:10px;font-weight:600;font-size:16px;">Да, {title_verb.lower()}</button>
+</form>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:12px;">
 <tr><td style="padding:0;">
 <p style="margin:0;font-size:13px;color:#64748b;text-align:center;">{html_mod.escape(cancel_hint)}</p>
 </td></tr>
@@ -101,6 +114,7 @@ async def expense_email_action(
     expense_id: str,
     token: str = Query(..., description="Подписанный токен из письма"),
     confirm: str | None = Query(None, description="1 — только экран подтверждения, без действия"),
+    reason: str | None = Query(None, max_length=2000, description="Причина отказа"),
     session: AsyncSession = Depends(get_session),
 ):
     settings = get_settings()
@@ -155,11 +169,18 @@ async def expense_email_action(
             status_code=409,
         )
 
+    if action == "reject" and not (reason or "").strip():
+        return HTMLResponse(
+            _page("Укажите причину отказа", "Причина обязательна — вернитесь по ссылке из письма и заполните поле.", False),
+            status_code=400,
+        )
+
     uid = _EMAIL_ACTION_USER_ID
     prev = row.status
 
     if action == "approve":
         row.status = "approved"
+        row.rejection_reason = None
         row.approved_at = _utc_now()
         # Email links are shared; prefer current_approver_id when set, else keep null
         # (history still records the sentinel uid for audit).
@@ -191,14 +212,23 @@ async def expense_email_action(
             decision="approved",
             reject_reason=None,
         )
+        if row.is_reimbursable:
+            await run_payment_confirmation_notification_safe(
+                settings,
+                expense_id=row.id,
+                amount_uzs=row.amount_uzs,
+                description=row.description,
+                author_name=None,
+            )
         return HTMLResponse(
             _page("Заявка утверждена", f"Расход {expense_id} отмечен как утверждённый.", True),
             status_code=200,
         )
 
-    reason = "Отклонено по ссылке из письма"
+    reason = (reason or "").strip()
     row.status = "rejected"
     row.rejected_at = _utc_now()
+    row.rejection_reason = reason
     row.updated_by_user_id = uid
     row.updated_at = _utc_now()
     await repo.add_status_history(

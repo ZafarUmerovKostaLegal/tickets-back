@@ -90,3 +90,25 @@ async def internal_users_by_ids(
         }
         for user in rows
     }
+
+
+@router.get("/users/by-email")
+async def internal_user_by_email(
+    email: str = Query(..., min_length=3),
+    _: None = Depends(_require_internal_key),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    """Resolve a user for service-to-service targeted notifications."""
+    user = await user_repo.get_by_email(email)
+    if user is None or bool(user.is_archived):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "picture": user.picture,
+        "position": user.position,
+        "role": user.role,
+        "is_blocked": bool(user.is_blocked),
+        "is_archived": bool(user.is_archived),
+    }
