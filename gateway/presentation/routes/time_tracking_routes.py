@@ -490,6 +490,53 @@ async def proxy_delete_team(
     return None
 
 
+@router.get("/firm-bank-profiles")
+async def proxy_list_firm_bank_profiles(_: dict = Depends(require_view_role)):
+    return await _tt_json("GET", "/firm-bank-profiles")
+
+
+@router.post("/firm-bank-profiles", status_code=201)
+async def proxy_create_firm_bank_profile(
+    body: dict = Body(...),
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json("POST", "/firm-bank-profiles", json=body)
+
+
+@router.put("/firm-bank-profiles/replace")
+async def proxy_replace_firm_bank_profiles(
+    body: dict = Body(...),
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json("PUT", "/firm-bank-profiles/replace", json=body)
+
+
+@router.patch("/firm-bank-profiles/{profile_id}")
+async def proxy_patch_firm_bank_profile(
+    profile_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json("PATCH", f"/firm-bank-profiles/{profile_id}", json=body)
+
+
+@router.post("/firm-bank-profiles/{profile_id}/set-default")
+async def proxy_set_default_firm_bank_profile(
+    profile_id: str,
+    _: dict = Depends(require_manage_role),
+):
+    return await _tt_json("POST", f"/firm-bank-profiles/{profile_id}/set-default")
+
+
+@router.delete("/firm-bank-profiles/{profile_id}", status_code=204)
+async def proxy_delete_firm_bank_profile(
+    profile_id: str,
+    _: dict = Depends(require_manage_role),
+):
+    await _tt_json("DELETE", f"/firm-bank-profiles/{profile_id}")
+    return None
+
+
 @router.get("/statistics/labor/meta")
 async def proxy_labor_statistics_meta(
     _: dict = Depends(require_reports_view_role),

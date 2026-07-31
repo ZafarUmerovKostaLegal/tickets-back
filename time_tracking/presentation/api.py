@@ -14,6 +14,7 @@ from infrastructure import models
 from infrastructure import models_reports
 from infrastructure import models_invoices
 from infrastructure import models_invoice_registry
+from infrastructure import models_firm_bank  # noqa: F401 — register ORM metadata
 from infrastructure.schema_patches import REGISTERED_SCHEMA_PATCHES
 from infrastructure.schema_patch_runner import apply_registered_schema_patches
 from application.settings_sync import renormalize_time_entries_to_minute
@@ -28,6 +29,7 @@ from presentation.routes import (
     client_projects,
     client_tasks,
     clients,
+    firm_bank_profiles,
     health,
     hourly_rates,
     project_access,
@@ -87,6 +89,7 @@ app.include_router(client_contacts.router, dependencies=_tt_auth)
 app.include_router(clients.router, dependencies=_tt_auth)
 app.include_router(team_workload.router, dependencies=_tt_auth)
 app.include_router(teams.router, dependencies=_tt_auth)
+app.include_router(firm_bank_profiles.router, dependencies=_tt_auth)
 app.include_router(hourly_rates.router, dependencies=_tt_auth)
 app.include_router(time_entries.router, dependencies=_tt_auth)
 app.include_router(weekly_submissions.router, dependencies=_tt_auth)

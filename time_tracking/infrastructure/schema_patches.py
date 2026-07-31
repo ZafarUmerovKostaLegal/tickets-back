@@ -1072,6 +1072,49 @@ async def apply_project_scoped_billable_rates_open_interval_patch(conn: AsyncCon
     )
 
 
+async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS time_tracking_firm_bank_profiles (
+                id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL DEFAULT '',
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                tin TEXT NOT NULL DEFAULT '',
+                bank_name TEXT NOT NULL DEFAULT '',
+                bank_address TEXT NOT NULL DEFAULT '',
+                account_currency VARCHAR(16) NOT NULL DEFAULT 'EUR',
+                account_number TEXT NOT NULL DEFAULT '',
+                bank_code TEXT NOT NULL DEFAULT '',
+                swift TEXT NOT NULL DEFAULT '',
+                correspondent_bank TEXT NOT NULL DEFAULT '',
+                correspondent_account TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_by_auth_user_id INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_firm_bank_default
+                ON time_tracking_firm_bank_profiles (is_default)
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_tt_firm_bank_currency
+                ON time_tracking_firm_bank_profiles (account_currency)
+            """
+        )
+    )
+
+
 async def apply_time_tracking_teams_schema_patch(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
@@ -1379,6 +1422,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("hourly_rates_applies_to_project", apply_hourly_rates_applies_to_project_patch),
     ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),
     ("time_tracking_teams", apply_time_tracking_teams_schema_patch),
+    ("firm_bank_profiles", apply_firm_bank_profiles_schema_patch),
     ("report_performance_indexes", apply_report_performance_indexes_patch),
     ("time_entry_archives", apply_time_entry_archives_patch),
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
