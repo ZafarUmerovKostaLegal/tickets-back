@@ -83,6 +83,64 @@ async def unbilled_expenses(
     )
 
 
+@router.post("/fx-rates/ensure")
+async def ensure_invoice_fx_rates(
+    body: dict[str, Any],
+    session: AsyncSession = Depends(get_session),
+):
+    """Seed time_tracking_fx_rates from client CBU payload and/or live CBU fetch."""
+    from application.invoice_fx import ensure_fx_book_for_dates, upsert_fx_rates_payload
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+
+    raw_rates = body.get("rates")
+    written = 0
+    if isinstance(raw_rates, list) and raw_rates:
+        written = await upsert_fx_rates_payload(session, raw_rates)
+
+    raw_dates = body.get("dates")
+    parsed: list[date] = []
+    if isinstance(raw_dates, list):
+        for item in raw_dates:
+            s = str(item or "").strip()[:10]
+            if len(s) != 10:
+                continue
+            try:
+                parsed.append(date.fromisoformat(s))
+            except ValueError:
+                continue
+    if isinstance(raw_rates, list):
+        for item in raw_rates:
+            if not isinstance(item, dict):
+                continue
+            s = str(item.get("rateDate") or item.get("rate_date") or "").strip()[:10]
+            if len(s) != 10:
+                continue
+            try:
+                parsed.append(date.fromisoformat(s))
+            except ValueError:
+                continue
+
+    target = str(body.get("currency") or body.get("targetCurrency") or "UZS").strip().upper()[:10] or "UZS"
+    if parsed:
+        await ensure_fx_book_for_dates(
+            session,
+            parsed,
+            required_pairs=[("USD", "UZS"), ("UZS", "USD"), ("USD", target), ("UZS", target)],
+        )
+    elif written == 0:
+        raise HTTPException(status_code=400, detail="Передайте dates: string[] и/или rates: [...]")
+
+    await session.commit()
+    return {
+        "ok": True,
+        "dates": [d.isoformat() for d in sorted(set(parsed))],
+        "currency": target,
+        "upserted": written,
+    }
+
+
 @router.get("/from-partner-period/preview")
 async def partner_period_invoice_preview(
     project_id: str = Query(..., alias="projectId"),

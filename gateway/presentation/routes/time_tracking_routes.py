@@ -1752,6 +1752,15 @@ async def invoices_unbilled_expenses(
     return await _tt_json("GET", "/invoices/unbilled-expenses", params=dict(request.query_params), timeout=30.0)
 
 
+@router.post("/invoices/fx-rates/ensure")
+async def invoices_fx_rates_ensure(
+    request: Request,
+    _: dict = Depends(require_view_role),
+):
+    body = await request.json()
+    return await _tt_json("POST", "/invoices/fx-rates/ensure", json=body, timeout=60.0)
+
+
 @router.get("/invoices/from-partner-period/preview")
 async def invoices_partner_period_preview(
     request: Request,

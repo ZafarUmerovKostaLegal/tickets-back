@@ -144,3 +144,40 @@ async def get_exchange_rate(
     if not row:
         raise HTTPException(status_code=404, detail="Курс на указанную дату не найден")
     return ExchangeRateOut(date=row.rate_date, rate=row.rate, pair_label=row.pair_label)
+
+
+@router.get("/cbu-rates")
+async def get_cbu_rates(
+    date_param: date = Query(..., alias="date"),
+    user: dict = Depends(get_current_user),
+):
+    """Proxy ЦБ РУз JSON so the browser never calls cbu.uz (CORS / 404 spam)."""
+    import os
+
+    import httpx
+
+    check_view_role(user)
+    origin = (os.getenv("CBU_ORIGIN") or "https://cbu.uz").rstrip("/")
+    path = "/ru/arkhiv-kursov-valyut/json"
+    urls: list[str] = []
+    for back in range(0, 3):
+        d = date.fromordinal(date_param.toordinal() - back)
+        urls.append(f"{origin}{path}/all/{d.isoformat()}/")
+    urls.append(f"{origin}{path}/")
+    last_err: Exception | None = None
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for url in urls:
+            try:
+                res = await client.get(url, headers={"Accept": "application/json"})
+                res.raise_for_status()
+                rows = res.json()
+                if not isinstance(rows, list) or not rows:
+                    raise ValueError("empty CBU rates list")
+                return {"date": date_param.isoformat(), "rows": rows}
+            except Exception as exc:
+                last_err = exc
+                continue
+    raise HTTPException(
+        status_code=502,
+        detail=f"Не удалось загрузить курсы ЦБ РУз на {date_param.isoformat()}: {last_err}",
+    )

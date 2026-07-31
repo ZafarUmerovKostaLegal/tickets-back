@@ -178,3 +178,12 @@ async def proxy_exchange_rates(
     _: dict = Depends(get_current_user),
 ):
     return await _forward(request, "exchange-rates", authorization, timeout=30.0)
+
+
+@router.get("/cbu-rates")
+async def proxy_cbu_rates(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    _: dict = Depends(get_current_user),
+):
+    return await _forward(request, "cbu-rates", authorization, timeout=30.0)
