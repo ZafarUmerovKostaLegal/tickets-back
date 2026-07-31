@@ -38,6 +38,7 @@ from infrastructure.repository_partner_report_confirmations import (
 from presentation.deps import invoice_actor_auth_user_id
 from presentation.schemas_invoices import (
     InvoiceCreateBody,
+    InvoiceAccountingLastPageNotifyBody,
     InvoicePatchBody,
     InvoicePaymentBody,
     InvoicePaymentConfirmationBody,
@@ -391,6 +392,48 @@ async def send_invoice_route(
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
     return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+
+
+@router.post("/{invoice_id}/notify-accounting-last-page")
+async def notify_accounting_last_page_route(
+    invoice_id: str,
+    body: InvoiceAccountingLastPageNotifyBody,
+    session: AsyncSession = Depends(get_session),
+    actor: int = Depends(invoice_actor_auth_user_id),
+):
+    """Email the legal invoice page PDF to accounting (after client send)."""
+    _ = actor
+    inv = await InvoiceRepository(session).get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+
+    from infrastructure.config import get_settings
+    from infrastructure.invoice_sent_mail import send_invoice_last_page_to_accounting
+
+    settings = get_settings()
+    client_name = (body.client_name or "").strip() or None
+    if not client_name and inv.client_id:
+        client = await session.get(TimeManagerClientModel, inv.client_id)
+        if client is not None:
+            client_name = (getattr(client, "name", None) or "").strip() or None
+
+    try:
+        result = await send_invoice_last_page_to_accounting(
+            settings,
+            invoice_number=(inv.invoice_number or inv.id),
+            client_name=client_name,
+            pdf_base64=body.pdf_base64,
+            pdf_file_name=body.pdf_file_name,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось отправить PDF бухгалтерии: {type(e).__name__}",
+        ) from e
+
+    return JSONResponse(content=jsonable_encoder(result))
 
 
 @router.post("/{invoice_id}/mark-viewed")

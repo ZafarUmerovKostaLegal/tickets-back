@@ -49,6 +49,14 @@ class Settings(BaseSettings):
         default="Контрактный менеджер",
         validation_alias="TT_PROJECT_ACCESS_MAIL_SIGNATURE_TITLE",
     )
+    notify_invoice_sent_accounting: bool = Field(
+        default=True,
+        validation_alias="TT_NOTIFY_INVOICE_SENT_ACCOUNTING",
+    )
+    invoice_sent_notify_to: str = Field(
+        default="oidrisova@kostalegal.com",
+        validation_alias="TT_INVOICE_SENT_NOTIFY_TO",
+    )
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

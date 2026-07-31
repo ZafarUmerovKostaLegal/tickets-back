@@ -1892,6 +1892,28 @@ async def invoices_send(
     return await _tt_json("POST", f"/invoices/{invoice_id}/send", params=_invoice_actor_qs(user), timeout=30.0)
 
 
+@router.post("/invoices/{invoice_id}/notify-accounting-last-page")
+async def invoices_notify_accounting_last_page(
+    invoice_id: str,
+    request: Request,
+    user: dict = Depends(require_view_role),
+):
+    """Proxy: email last invoice page PDF to accounting after client send."""
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    return await _tt_json(
+        "POST",
+        f"/invoices/{invoice_id}/notify-accounting-last-page",
+        params=_invoice_actor_qs(user),
+        json=body,
+        timeout=60.0,
+    )
+
+
 @router.post("/invoices/{invoice_id}/outlook-draft")
 async def invoices_outlook_draft(
     invoice_id: str,

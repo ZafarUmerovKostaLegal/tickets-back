@@ -121,6 +121,35 @@ class InvoicePaymentConfirmationBody(BaseModel):
         return s
 
 
+class InvoiceAccountingLastPageNotifyBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    pdf_base64: str = Field(
+        ...,
+        min_length=1,
+        alias="pdfBase64",
+        description="PDF последней страницы счёта (base64, опционально data-URL)",
+    )
+    pdf_file_name: Optional[str] = Field(None, alias="pdfFileName")
+    client_name: Optional[str] = Field(None, alias="clientName")
+
+    @field_validator("pdf_base64", mode="after")
+    @classmethod
+    def _strip_pdf_base64(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("pdfBase64")
+        return s
+
+    @field_validator("pdf_file_name", "client_name", mode="after")
+    @classmethod
+    def _strip_optional_str(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+
 class InvoicePaymentBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
