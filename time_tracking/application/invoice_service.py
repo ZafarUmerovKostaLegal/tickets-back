@@ -982,16 +982,13 @@ async def cancel_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth
 async def delete_draft_invoice(
     session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int,
 ) -> None:
-    """Hard-delete draft or canceled invoice (no payments). Releases time/expense lines for re-billing."""
+    """Hard-delete draft or canceled invoice (payments cascade). Releases time/expense lines for re-billing."""
     status = (inv.status or "").strip()
     if status not in ("draft", "canceled"):
         raise HTTPException(
             status_code=400,
             detail="Удалить можно только черновик или отменённый счёт. Сначала отмените счёт.",
         )
-    repo = InvoiceRepository(session)
-    if await repo.sum_payments(inv.id) > 0:
-        raise HTTPException(status_code=400, detail="Нельзя удалить счёт с платежами")
     _ = actor_auth_user_id
     await session.delete(inv)
 
