@@ -1703,10 +1703,33 @@ async def invoice_registry_delete_row(
 
 @router.put("/invoice-registry/2026/rows")
 async def invoice_registry_replace_rows(
+    request: Request,
     body: dict = Body(...),
     _: dict = Depends(require_view_role),
 ):
-    return await _tt_json("PUT", "/invoice-registry/2026/rows", json=body, timeout=90.0)
+    params = {}
+    if str(request.query_params.get("force", "")).lower() in ("1", "true", "yes"):
+        params["force"] = "true"
+    return await _tt_json("PUT", "/invoice-registry/2026/rows", json=body, params=params or None, timeout=90.0)
+
+
+@router.put("/invoice-registry/archive/{year_id}")
+async def invoice_registry_replace_archive(
+    year_id: str,
+    request: Request,
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    params = {}
+    if str(request.query_params.get("force", "")).lower() in ("1", "true", "yes"):
+        params["force"] = "true"
+    return await _tt_json(
+        "PUT",
+        f"/invoice-registry/archive/{year_id}",
+        json=body,
+        params=params or None,
+        timeout=90.0,
+    )
 
 
 def _invoice_actor_qs(user: dict) -> dict[str, str]:

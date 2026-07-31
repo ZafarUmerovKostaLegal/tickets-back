@@ -156,3 +156,29 @@ class InvoiceRegistryRepository:
     async def get_archive_sheet(self, year_id: str) -> InvoiceRegistryArchiveSheetModel | None:
         return await self._s.get(InvoiceRegistryArchiveSheetModel, year_id)
 
+    async def upsert_archive_sheet(
+        self,
+        year_id: str,
+        *,
+        sheet_name: str,
+        rows: list[dict[str, Any]],
+    ) -> InvoiceRegistryArchiveSheetModel:
+        import json
+
+        payload = json.dumps(rows, ensure_ascii=False)
+        existing = await self.get_archive_sheet(year_id)
+        if existing is None:
+            existing = InvoiceRegistryArchiveSheetModel(
+                year_id=year_id,
+                sheet_name=sheet_name,
+                rows_json=payload,
+                imported_at=_now_utc(),
+            )
+            self._s.add(existing)
+        else:
+            existing.sheet_name = sheet_name
+            existing.rows_json = payload
+            existing.imported_at = _now_utc()
+        await self._s.flush()
+        return existing
+

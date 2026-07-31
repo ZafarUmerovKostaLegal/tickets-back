@@ -317,11 +317,51 @@ async def delete_invoice_registry_row_2026(
 @router.put("/2026/rows")
 async def replace_invoice_registry_rows_2026(
     body: RegistryRowsReplaceBody,
+    force: bool = Query(False, description="Allow replacing a non-empty sheet with an empty list"),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_bearer_user),
 ):
     repo = InvoiceRegistryRepository(session)
+    existing = await repo.count_2026_rows()
+    if existing > 0 and len(body.rows) == 0 and not force:
+        raise HTTPException(
+            status_code=400,
+            detail="Отказ: пустая замена сотрёт реестр 2026. Передайте force=true для подтверждения.",
+        )
     n = await repo.replace_2026_rows([r.model_dump() for r in body.rows], updated_by=int(user.get("id") or 0))
     await session.commit()
     return {"ok": True, "rows": n}
+
+
+@router.put("/archive/{year_id}")
+async def replace_invoice_registry_archive_sheet(
+    year_id: str,
+    body: RegistryRowsReplaceBody,
+    force: bool = Query(False, description="Allow replacing a non-empty archive sheet with an empty list"),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_bearer_user),
+):
+    if year_id not in ARCHIVE_YEARS:
+        raise HTTPException(status_code=404, detail="Unknown archive sheet")
+    repo = InvoiceRegistryRepository(session)
+    existing = await repo.get_archive_sheet(year_id)
+    existing_count = len(_safe_rows_json(existing.rows_json if existing else "[]"))
+    if existing_count > 0 and len(body.rows) == 0 and not force:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Отказ: пустая замена сотрёт архив {year_id}. Передайте force=true для подтверждения.",
+        )
+    rows_payload = [r.model_dump(exclude_none=True) for r in body.rows]
+    # Keep stable ids for archive rows.
+    for idx, row in enumerate(rows_payload, start=1):
+        rid = str(row.get("id") or "").strip()
+        if not rid:
+            row["id"] = f"{year_id}-{idx}"
+    await repo.upsert_archive_sheet(
+        year_id,
+        sheet_name=SHEET_NAMES.get(year_id, year_id),
+        rows=rows_payload,
+    )
+    await session.commit()
+    return {"ok": True, "year": year_id, "rows": len(rows_payload)}
 
