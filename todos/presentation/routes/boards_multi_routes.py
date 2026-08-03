@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +19,12 @@ from infrastructure.system_notifications import (
     notify_todo_board_added,
     notify_todo_board_invited,
     notify_todo_card_assigned,
+)
+from presentation.board_import_export import (
+    BoardImportError,
+    detect_and_normalize_import,
+    export_board_dict,
+    import_normalized_board,
 )
 from presentation.board_payload import (
     BoardInvitesListOut,
@@ -207,6 +216,82 @@ async def create_board(
                     board_title=board.title,
                 )
     return await build_board_out(session, board.id, viewer_user_id=user_id)
+
+
+def _safe_export_filename(title: str, board_id: int) -> str:
+    base = re.sub(r"[^\w\s\-а-яА-ЯёЁ]+", "", (title or "").strip(), flags=re.UNICODE)
+    base = re.sub(r"\s+", "-", base).strip("-")[:80] or f"board-{board_id}"
+    return f"{base}.json"
+
+
+def _content_disposition(filename: str) -> str:
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename) or "board.json"
+    from urllib.parse import quote
+
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+@boards_router.post("/import", response_model=BoardOut)
+async def import_board(
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+    file: UploadFile = File(...),
+):
+    """Создаёт новую доску из JSON (наш экспорт или экспорт Trello)."""
+    filename = (file.filename or "").lower()
+    if filename and not filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Only .json files are supported")
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw_bytes) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 15 MB)")
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON file") from exc
+    try:
+        normalized = detect_and_normalize_import(payload)
+    except BoardImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    columns = normalized.get("columns") or []
+    cards_count = sum(len(c.get("cards") or []) for c in columns)
+    if len(columns) > 100:
+        raise HTTPException(status_code=400, detail="Too many columns (max 100)")
+    if cards_count > 5000:
+        raise HTTPException(status_code=400, detail="Too many cards (max 5000)")
+
+    repo = KanbanRepository(session)
+    try:
+        board_id = await import_normalized_board(session, user_id, normalized)
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Could not import board") from exc
+    await repo.set_last_selected_board_id(user_id, board_id)
+    await session.commit()
+    return await build_board_out(session, board_id, viewer_user_id=user_id)
+
+
+@boards_router.get("/{board_id}/export")
+async def export_board(
+    board_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    """Скачать доску как JSON (формат kosta_todos, совместим с /boards/import)."""
+    await _require_read(session, user_id, board_id)
+    payload = await export_board_dict(session, board_id, user_id)
+    title = str((payload.get("board") or {}).get("title") or f"board-{board_id}")
+    filename = _safe_export_filename(title, board_id)
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": _content_disposition(filename),
+        },
+    )
 
 
 @boards_router.get("/{board_id}", response_model=BoardOut)

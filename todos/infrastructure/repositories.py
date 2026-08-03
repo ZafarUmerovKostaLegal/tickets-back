@@ -357,6 +357,7 @@ class KanbanRepository:
         color: str | None,
         member_user_ids: list[int],
         instant_add_members: bool,
+        with_default_columns: bool = True,
     ) -> TodoBoardModel:
         now = _utc_now()
         rmax = await self._session.execute(
@@ -380,7 +381,8 @@ class KanbanRepository:
         )
         self._session.add(board)
         await self._session.flush()
-        self.add_default_kanban_columns(board.id, now)
+        if with_default_columns:
+            self.add_default_kanban_columns(board.id, now)
         uniq_members = sorted({int(x) for x in member_user_ids if int(x) != owner_user_id})
         if visibility == BOARD_VIS_SHARED and uniq_members:
             if instant_add_members:
