@@ -197,7 +197,10 @@ async def partner_report_confirmation_pending(
     authorization: str | None = Header(None, alias="Authorization"),
     scope: Optional[str] = Query(
         None,
-        description="mine (default) — только заявки пользователя; all — все незавершённые (менеджер/админ)",
+        description=(
+            "mine (default) — заявки, где зритель обязательный партнёр "
+            "или уже подписал; all — все незавершённые (менеджер/админ/партнёр)"
+        ),
     ),
     priority: Optional[str] = Query(
         None,

@@ -10,10 +10,6 @@ from application.project_partner_users import (
     list_partner_auth_user_ids_by_projects,
     list_partner_auth_user_ids_for_project,
 )
-from application.partner_confirmation_team_scope import (
-    list_team_member_auth_user_ids_for_partner,
-    periods_overlapping_team_entries,
-)
 from application.reports.partner_scope import (
     normalize_partner_pending_scope,
     pending_confirmation_visible_for_user_mine,
@@ -599,30 +595,14 @@ async def list_pending_partner_confirmations(
     partners_by_request: dict[str, list[int]] = {}
     priority_counts = {"red": 0, "yellow": 0, "green": 0, "all": 0}
 
-    overlapping_periods: set[tuple[str, date, date]] = set()
-    team_member_ids: set[int] = set()
-    if mode == "mine":
-        team_member_ids = await list_team_member_auth_user_ids_for_partner(session, vid)
-        if team_member_ids:
-            period_keys = list(dict.fromkeys(
-                (m.project_id, m.date_from, m.date_to) for m in candidates
-            ))
-            overlapping_periods = await periods_overlapping_team_entries(
-                session, period_keys, team_member_ids
-            )
-
     for m in candidates:
         partners = partners_by_project.get(m.project_id, [])
         if mode == "mine":
-            report_key = (m.project_id, m.date_from, m.date_to)
-            # Synthetic set: only needed for intersect check with team_member_ids.
-            report_user_ids = team_member_ids if report_key in overlapping_periods else set()
+            # Партнёр / подписант: без фильтра по часам команды (см. partner_scope).
             if not pending_confirmation_visible_for_user_mine(
                 m,
                 required_partners=partners,
                 viewer_id=vid,
-                team_member_ids=team_member_ids,
-                report_user_ids=report_user_ids,
             ):
                 continue
         prio = (getattr(m, "review_priority", None) or DEFAULT_REVIEW_PRIORITY).strip().lower()

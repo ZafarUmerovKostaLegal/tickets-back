@@ -45,20 +45,17 @@ def pending_confirmation_visible_for_user_mine(
     team_member_ids: set[int] | None = None,
     report_user_ids: set[int] | None = None,
 ) -> bool:
+    """«Мои»: отчёт виден, если нужна подпись зрителя или он уже подписал.
+
+    Фильтр по пересечению часов команды с периодом отчёта намеренно не
+    применяется: партнёр должен видеть все заявки, где он обязательный
+    подписант, даже если его команда не писала время в этом периоде.
+    """
+    del team_member_ids, report_user_ids  # retained for call-site compatibility
     if (getattr(request_row, "status", None) or "").strip() == "fully_confirmed":
         return False
     signatures = getattr(request_row, "signatures", None) or []
     signed_ids = {s.partner_auth_user_id for s in signatures}
     if viewer_id in signed_ids:
         return True
-    if viewer_id not in required_partners:
-        return False
-    if team_member_ids is not None and report_user_ids is not None:
-        from application.partner_confirmation_team_scope import partner_team_overlaps_report
-
-        if not partner_team_overlaps_report(
-            team_member_ids=team_member_ids,
-            report_user_ids=report_user_ids,
-        ):
-            return False
-    return True
+    return viewer_id in required_partners

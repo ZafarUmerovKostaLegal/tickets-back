@@ -78,16 +78,10 @@ def test_pending_visible_for_user_mine_required_partner():
     )
 
 
-def test_pending_visible_for_user_mine_requires_team_overlap_for_new_review():
+def test_pending_visible_for_user_mine_ignores_team_hours_filter():
+    """Партнёр видит заявку без пересечения часов команды с периодом отчёта."""
     req = _Req(status="pending_partners")
     assert pending_confirmation_visible_for_user_mine(
-        req,
-        required_partners=[10],
-        viewer_id=10,
-        team_member_ids={101, 102},
-        report_user_ids={102, 103},
-    )
-    assert not pending_confirmation_visible_for_user_mine(
         req,
         required_partners=[10],
         viewer_id=10,
@@ -96,7 +90,7 @@ def test_pending_visible_for_user_mine_requires_team_overlap_for_new_review():
     )
 
 
-def test_pending_visible_for_user_mine_signed_bypasses_team_overlap():
+def test_pending_visible_for_user_mine_signed_still_visible():
     req = _Req(status="pending_partners", signatures=[_Sig(10)])
     assert pending_confirmation_visible_for_user_mine(
         req,
