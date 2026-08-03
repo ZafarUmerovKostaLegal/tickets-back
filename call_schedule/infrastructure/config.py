@@ -1,8 +1,6 @@
-
-
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -11,6 +9,13 @@ class Settings(BaseSettings):
     auth_service_url: str = "http://auth:1236"
 
     auth_session_cookie_name: str = Field(default="kl_access_token")
+
+    database_url: str = Field(
+        default="postgresql://call_schedule:call_schedule@call_schedule_db:5432/kosta_call_schedule",
+        validation_alias=AliasChoices("DATABASE_URL", "CALL_SCHEDULE_DATABASE_URL"),
+    )
+    media_path: str = Field(default="/app/media", validation_alias=AliasChoices("MEDIA_PATH", "CALL_SCHEDULE_MEDIA_PATH"))
+    max_upload_mb: int = Field(default=50, validation_alias=AliasChoices("MAX_UPLOAD_MB", "CALL_SCHEDULE_MAX_UPLOAD_MB"))
 
     call_schedule_mailbox: str = "info@kostalegal.com"
 
@@ -55,6 +60,8 @@ class Settings(BaseSettings):
         "azure_client_secret",
         "auth_session_cookie_name",
         "call_schedule_online_meeting_provider",
+        "database_url",
+        "media_path",
         mode="before",
     )
     @classmethod

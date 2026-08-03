@@ -224,6 +224,9 @@ services:
     environment:
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - AUTH_SESSION_COOKIE_NAME=${AUTH_SESSION_COOKIE_NAME:-kl_access_token}
+      - DATABASE_URL=${CALL_SCHEDULE_DATABASE_URL:-postgresql://call_schedule:call_schedule@call_schedule_db:5432/kosta_call_schedule}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - MAX_UPLOAD_MB=${CALL_SCHEDULE_MAX_UPLOAD_MB:-50}
       - CALL_SCHEDULE_MAILBOX=${CALL_SCHEDULE_MAILBOX:-info@kostalegal.com}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
@@ -235,6 +238,8 @@ services:
       - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
       - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
       - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+    volumes:
+      - media_storage:/app/media
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1245/health\", timeout=3)"' ]
       interval: 15s
@@ -242,8 +247,26 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
+      call_schedule_db:
+        condition: service_healthy
       auth:
         condition: service_healthy
+
+  call_schedule_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: [ "postgres", "-c", "log_min_messages=warning" ]
+    environment:
+      POSTGRES_USER: ${CALL_SCHEDULE_DB_USER:-call_schedule}
+      POSTGRES_PASSWORD: ${CALL_SCHEDULE_DB_PASSWORD:-call_schedule}
+      POSTGRES_DB: ${CALL_SCHEDULE_DB_NAME:-kosta_call_schedule}
+    volumes:
+      - call_schedule_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   chat:
     build:
@@ -788,3 +811,4 @@ volumes:
   vacation_db_data:
   chat_db_data:
   correspondence_db_data:
+  call_schedule_db_data:

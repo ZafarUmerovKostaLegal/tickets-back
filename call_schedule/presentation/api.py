@@ -4,20 +4,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 
-from presentation.routes import schedule_routes
+from presentation.routes import schedule_routes, day_files
 from infrastructure.config import get_settings
+from infrastructure.database import Base, engine
+from infrastructure import models as _models  # noqa: F401
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
 
 
 app = FastAPI(
     title="Call schedule",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
-    description="Календари и события общего ящика (Microsoft Graph, без БД).",
+    description="Календари и события общего ящика (Microsoft Graph) + файлы на день.",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -31,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(schedule_routes.router, prefix="/api/v1/call-schedule")
+app.include_router(day_files.router, prefix="/api/v1/call-schedule")
 
 
 @app.get("/health", tags=["health"])

@@ -59,6 +59,9 @@ services:
   call_schedule:
     restart: unless-stopped
     environment:
+      - DATABASE_URL=${CALL_SCHEDULE_DATABASE_URL:-postgresql://call_schedule:call_schedule@call_schedule_db:5432/kosta_call_schedule}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - MAX_UPLOAD_MB=${CALL_SCHEDULE_MAX_UPLOAD_MB:-50}
       - CALL_SCHEDULE_MAILBOX=${CALL_SCHEDULE_MAILBOX:-info@kostalegal.com}
       - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
       - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
