@@ -125,6 +125,8 @@ services:
       - MEDIA_PATH=${MEDIA_PATH:-/app/media}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CORRESPONDENCE_MAX_FILE_BYTES=${CORRESPONDENCE_MAX_FILE_BYTES:-15728640}
+      - NOTIFICATION_PUSH_URL=${NOTIFICATION_PUSH_URL:-http://gateway:1234/api/v1/notifications/system}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - LOG_LEVEL=${CORRESPONDENCE_LOG_LEVEL:-info}
     volumes:
       - media_storage:/app/media

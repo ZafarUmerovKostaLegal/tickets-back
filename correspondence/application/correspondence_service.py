@@ -1,8 +1,17 @@
 
-
 ALLOWED_DIRECTIONS = frozenset({"incoming", "outgoing"})
 ALLOWED_DOC_TYPES = frozenset({"letter", "contract", "note"})
-ALLOWED_STATUSES = frozenset({"new", "progress", "approval", "done"})
+ALLOWED_STATUSES = frozenset(
+    {
+        "draft",
+        "pending_review",
+        "rejected",
+        "new",
+        "progress",
+        "approval",
+        "done",
+    }
+)
 ALLOWED_ATTACHMENT_KINDS = frozenset({"scan", "attachment"})
 
 ALLOWED_MIME_TYPES = frozenset(
@@ -17,7 +26,10 @@ ALLOWED_MIME_TYPES = frozenset(
     }
 )
 
-WORK_STATUS_GROUP = frozenset({"progress", "approval"})
+# Registered workflow + partner review queue
+WORK_STATUS_GROUP = frozenset({"progress", "approval", "pending_review"})
+REVIEW_EDITABLE_STATUSES = frozenset({"draft", "rejected"})
+UNREGISTERED_STATUSES = frozenset({"draft", "pending_review", "rejected"})
 
 REGISTRY_PREFIX = {"incoming": "ВХ", "outgoing": "ИСХ"}
 

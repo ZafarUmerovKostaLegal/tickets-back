@@ -44,7 +44,7 @@ class CorrespondenceRepository:
         self,
         *,
         id_: str,
-        registry_number: str,
+        registry_number: str | None,
         direction: str,
         doc_type: str,
         status: str,
@@ -54,8 +54,9 @@ class CorrespondenceRepository:
         partner_user_id: int | None,
         responsible_user_id: int,
         registered_at: datetime | None = None,
+        rejection_comment: str | None = None,
     ) -> CorrespondenceDocumentModel:
-        now = registered_at or _utc_now()
+        now = _utc_now()
         row = CorrespondenceDocumentModel(
             id=id_,
             registry_number=registry_number,
@@ -65,9 +66,10 @@ class CorrespondenceRepository:
             counterparty=counterparty.strip(),
             subject=subject.strip(),
             comment=(comment or None),
+            rejection_comment=(rejection_comment or None),
             partner_user_id=partner_user_id,
             responsible_user_id=responsible_user_id,
-            registered_at=now,
+            registered_at=registered_at,
             archived_at=None,
             created_at=now,
             updated_at=now,
@@ -121,12 +123,15 @@ class CorrespondenceRepository:
         include_archived: bool,
         skip: int,
         limit: int,
+        registered_only: bool = False,
     ) -> tuple[list[CorrespondenceDocumentModel], int]:
         conds: list[Any] = []
         if direction:
             conds.append(CorrespondenceDocumentModel.direction == direction)
         if not include_archived:
             conds.append(CorrespondenceDocumentModel.archived_at.is_(None))
+        if registered_only:
+            conds.append(CorrespondenceDocumentModel.registry_number.is_not(None))
         if statuses:
             conds.append(CorrespondenceDocumentModel.status.in_(statuses))
         if doc_types:
@@ -143,10 +148,14 @@ class CorrespondenceRepository:
         where = and_(*conds) if conds else True
         cnt_q = select(func.count()).select_from(CorrespondenceDocumentModel).where(where)
         total = int((await self._session.execute(cnt_q)).scalar() or 0)
+        order_ts = func.coalesce(
+            CorrespondenceDocumentModel.registered_at,
+            CorrespondenceDocumentModel.created_at,
+        )
         q = (
             select(CorrespondenceDocumentModel)
             .where(where)
-            .order_by(CorrespondenceDocumentModel.registered_at.desc(), CorrespondenceDocumentModel.created_at.desc())
+            .order_by(order_ts.desc(), CorrespondenceDocumentModel.created_at.desc())
             .offset(skip)
             .limit(limit)
             .options(selectinload(CorrespondenceDocumentModel.attachments))
@@ -156,6 +165,7 @@ class CorrespondenceRepository:
 
     async def get_stats(self) -> dict[str, int]:
         base = CorrespondenceDocumentModel.archived_at.is_(None)
+
         async def _count(*extra) -> int:
             conds = [base, *extra]
             q = select(func.count()).select_from(CorrespondenceDocumentModel).where(and_(*conds))
@@ -163,8 +173,13 @@ class CorrespondenceRepository:
 
         return {
             "incoming_total": await _count(CorrespondenceDocumentModel.direction == "incoming"),
-            "outgoing_total": await _count(CorrespondenceDocumentModel.direction == "outgoing"),
-            "approval_total": await _count(CorrespondenceDocumentModel.status == "approval"),
+            "outgoing_total": await _count(
+                CorrespondenceDocumentModel.direction == "outgoing",
+                CorrespondenceDocumentModel.registry_number.is_not(None),
+            ),
+            "approval_total": await _count(
+                CorrespondenceDocumentModel.status.in_(("approval", "pending_review")),
+            ),
             "incoming_new_total": await _count(
                 CorrespondenceDocumentModel.direction == "incoming",
                 CorrespondenceDocumentModel.status == "new",
@@ -178,6 +193,15 @@ class CorrespondenceRepository:
         status: str | None = None,
         responsible_user_id: int | None = None,
         comment: str | None = None,
+        counterparty: str | None = None,
+        subject: str | None = None,
+        partner_user_id: int | None = None,
+        clear_partner: bool = False,
+        rejection_comment: str | None = None,
+        clear_rejection_comment: bool = False,
+        registry_number: str | None = None,
+        registered_at: datetime | None = None,
+        set_registered_at: bool = False,
     ) -> None:
         if status is not None:
             row.status = status
@@ -185,6 +209,22 @@ class CorrespondenceRepository:
             row.responsible_user_id = responsible_user_id
         if comment is not None:
             row.comment = comment or None
+        if counterparty is not None:
+            row.counterparty = counterparty.strip()
+        if subject is not None:
+            row.subject = subject.strip()
+        if clear_partner:
+            row.partner_user_id = None
+        elif partner_user_id is not None:
+            row.partner_user_id = partner_user_id
+        if clear_rejection_comment:
+            row.rejection_comment = None
+        elif rejection_comment is not None:
+            row.rejection_comment = rejection_comment or None
+        if registry_number is not None:
+            row.registry_number = registry_number
+        if set_registered_at:
+            row.registered_at = registered_at
         row.updated_at = _utc_now()
 
     async def archive_document(self, row: CorrespondenceDocumentModel) -> None:

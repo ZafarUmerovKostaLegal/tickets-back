@@ -29,13 +29,13 @@ class DocumentListItemOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    registry_number: str = Field(serialization_alias="registryNumber")
+    registry_number: Optional[str] = Field(None, serialization_alias="registryNumber")
     direction: str
     counterparty: str
     subject: str
     doc_type: str = Field(serialization_alias="docType")
     status: str
-    registered_at: datetime = Field(serialization_alias="registeredAt")
+    registered_at: Optional[datetime] = Field(None, serialization_alias="registeredAt")
     responsible_user_id: int = Field(serialization_alias="responsibleUserId")
     responsible_user: Optional[UserSnippetOut] = Field(None, serialization_alias="responsibleUser")
     partner_user_id: Optional[int] = Field(None, serialization_alias="partnerUserId")
@@ -43,6 +43,8 @@ class DocumentListItemOut(BaseModel):
     attachments_count: int = Field(0, serialization_alias="attachmentsCount")
     has_scan: bool = Field(False, serialization_alias="hasScan")
     comment: Optional[str] = None
+    rejection_comment: Optional[str] = Field(None, serialization_alias="rejectionComment")
+    created_at: Optional[datetime] = Field(None, serialization_alias="createdAt")
 
 
 class DocumentDetailOut(DocumentListItemOut):
@@ -73,3 +75,18 @@ class DocumentPatchBody(BaseModel):
     status: Optional[str] = None
     responsible_user_id: Optional[int] = Field(None, validation_alias="responsibleUserId")
     comment: Optional[str] = None
+    counterparty: Optional[str] = None
+    subject: Optional[str] = None
+    partner_user_id: Optional[int] = Field(None, validation_alias="partnerUserId")
+
+
+class SubmitReviewBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    partner_user_id: int = Field(..., validation_alias="partnerUserId")
+
+
+class RejectReviewBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    comment: str = Field(..., min_length=1)

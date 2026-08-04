@@ -28,6 +28,14 @@ class Settings(BaseSettings):
         default=15 * 1024 * 1024,
         validation_alias=AliasChoices("CORRESPONDENCE_MAX_FILE_BYTES", "MAX_FILE_BYTES"),
     )
+    notification_push_url: str = Field(
+        default="http://gateway:1234/api/v1/notifications/system",
+        validation_alias=AliasChoices("NOTIFICATION_PUSH_URL"),
+    )
+    ws_internal_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("WS_INTERNAL_SECRET"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=_env_files(),

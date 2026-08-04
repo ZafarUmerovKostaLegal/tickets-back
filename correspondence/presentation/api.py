@@ -24,6 +24,26 @@ async def lifespan(app: FastAPI):
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                from sqlalchemy import text
+
+                await conn.execute(
+                    text(
+                        "ALTER TABLE correspondence_documents "
+                        "ALTER COLUMN registry_number DROP NOT NULL"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "ALTER TABLE correspondence_documents "
+                        "ALTER COLUMN registered_at DROP NOT NULL"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "ALTER TABLE correspondence_documents "
+                        "ADD COLUMN IF NOT EXISTS rejection_comment TEXT"
+                    )
+                )
             break
         except Exception as e:
             last_exc = e

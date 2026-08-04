@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
+    REVIEW_EDITABLE_STATUSES,
     is_partner_org_role,
     normalize_attachment_kind,
     normalize_doc_type,
@@ -20,6 +21,7 @@ from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.file_storage import resolve_storage_path, save_correspondence_file
 from infrastructure.models import CorrespondenceAttachmentModel, CorrespondenceDocumentModel
+from infrastructure.notify import send_system_notification
 from infrastructure.repositories import CorrespondenceRepository
 from presentation.deps import check_manage_role, check_view_role, get_current_user
 from presentation.schemas import (
@@ -28,7 +30,9 @@ from presentation.schemas import (
     DocumentListItemOut,
     DocumentListResponse,
     DocumentPatchBody,
+    RejectReviewBody,
     StatsOut,
+    SubmitReviewBody,
     UserSnippetOut,
 )
 
@@ -83,6 +87,8 @@ def _list_item(
         attachments_count=len(atts),
         has_scan=has_scan,
         comment=row.comment,
+        rejection_comment=row.rejection_comment,
+        created_at=row.created_at,
     )
 
 
@@ -149,6 +155,33 @@ async def _save_uploads(
         )
 
 
+def _assert_not_archived(row: CorrespondenceDocumentModel) -> None:
+    if row.archived_at is not None:
+        raise HTTPException(status_code=400, detail="Архивный документ нельзя изменять")
+
+
+def _assert_outgoing(row: CorrespondenceDocumentModel) -> None:
+    if row.direction != "outgoing":
+        raise HTTPException(status_code=400, detail="Действие доступно только для исходящих документов")
+
+
+def _assert_author_or_manage(row: CorrespondenceDocumentModel, user: dict) -> None:
+    uid = int(user["id"])
+    if row.responsible_user_id == uid:
+        return
+    try:
+        check_manage_role(user)
+    except HTTPException:
+        raise HTTPException(status_code=403, detail="Только автор или делопроизводитель могут изменить документ")
+
+
+def _assert_assigned_partner(row: CorrespondenceDocumentModel, user: dict) -> None:
+    uid = int(user["id"])
+    if row.partner_user_id == uid and is_partner_org_role(user.get("role")):
+        return
+    raise HTTPException(status_code=403, detail="Только назначенный партнёр может выполнить это действие")
+
+
 @router.get("", response_model=DocumentListResponse)
 async def list_correspondence(
     direction: Optional[str] = Query(None),
@@ -159,6 +192,7 @@ async def list_correspondence(
     skip: int = Query(0, ge=0),
     limit: int = Query(8, ge=1, le=200),
     include_archived: bool = Query(False, alias="includeArchived"),
+    registered_only: bool = Query(False, alias="registeredOnly"),
     user: dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     session: AsyncSession = Depends(get_session),
@@ -180,6 +214,7 @@ async def list_correspondence(
         include_archived=include_archived,
         skip=skip,
         limit=limit,
+        registered_only=registered_only,
     )
     settings = get_settings()
     ids: set[int] = set()
@@ -270,6 +305,7 @@ async def register_incoming(
     year = datetime.now(timezone.utc).year
     reg_no = await repo.next_registry_number("incoming", year)
     uid = int(user["id"])
+    now = datetime.now(timezone.utc)
     row = await repo.create_document(
         id_=doc_id,
         registry_number=reg_no,
@@ -281,6 +317,7 @@ async def register_incoming(
         comment=comment,
         partner_user_id=partner_user_id,
         responsible_user_id=uid,
+        registered_at=now,
     )
     await _save_uploads(
         repo,
@@ -305,6 +342,7 @@ async def register_outgoing(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     session: AsyncSession = Depends(get_session),
 ):
+    """Immediate registry registration (contracts/notes bypass, office manager)."""
     check_view_role(user)
     if not (counterparty or "").strip():
         raise HTTPException(status_code=422, detail="counterparty is required")
@@ -319,6 +357,7 @@ async def register_outgoing(
     year = datetime.now(timezone.utc).year
     reg_no = await repo.next_registry_number("outgoing", year)
     uid = int(user["id"])
+    now = datetime.now(timezone.utc)
     row = await repo.create_document(
         id_=doc_id,
         registry_number=reg_no,
@@ -330,6 +369,7 @@ async def register_outgoing(
         comment=comment,
         partner_user_id=None,
         responsible_user_id=uid,
+        registered_at=now,
     )
     if files:
         await _save_uploads(
@@ -341,6 +381,194 @@ async def register_outgoing(
         )
     await session.commit()
     row = await repo.get_by_id(doc_id, load_attachments=True)
+    return await _detail(row, authorization)
+
+
+@router.post("/outgoing/draft", response_model=DocumentDetailOut, status_code=201)
+async def create_outgoing_draft(
+    counterparty: str = Form(...),
+    subject: str = Form(...),
+    doc_type: str = Form("letter", alias="docType"),
+    comment: Optional[str] = Form(None),
+    partner_user_id: Optional[int] = Form(None, alias="partnerUserId"),
+    files: list[UploadFile] | None = File(None),
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create outgoing letter draft without registry number (awaiting partner review)."""
+    check_view_role(user)
+    if not (counterparty or "").strip():
+        raise HTTPException(status_code=422, detail="counterparty is required")
+    if not (subject or "").strip():
+        raise HTTPException(status_code=422, detail="subject is required")
+    try:
+        dt = normalize_doc_type(doc_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    partner_id = None
+    if partner_user_id is not None and int(partner_user_id) > 0:
+        await _validate_partner(int(partner_user_id), authorization)
+        partner_id = int(partner_user_id)
+    repo = CorrespondenceRepository(session)
+    doc_id = str(uuid.uuid4())
+    uid = int(user["id"])
+    await repo.create_document(
+        id_=doc_id,
+        registry_number=None,
+        direction="outgoing",
+        doc_type=dt,
+        status="draft",
+        counterparty=counterparty,
+        subject=subject,
+        comment=comment,
+        partner_user_id=partner_id,
+        responsible_user_id=uid,
+        registered_at=None,
+    )
+    if files:
+        await _save_uploads(
+            repo,
+            document_id=doc_id,
+            files=files,
+            attachment_kind="attachment",
+            uploaded_by_user_id=uid,
+        )
+    await session.commit()
+    row = await repo.get_by_id(doc_id, load_attachments=True)
+    return await _detail(row, authorization)
+
+
+@router.post("/{document_id}/submit-review", response_model=DocumentDetailOut)
+async def submit_outgoing_for_review(
+    document_id: str,
+    body: SubmitReviewBody,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    _assert_outgoing(row)
+    _assert_author_or_manage(row, user)
+    if row.status not in REVIEW_EDITABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="На проверку можно отправить только черновик или отклонённый документ",
+        )
+    if body.partner_user_id <= 0:
+        raise HTTPException(status_code=422, detail="partnerUserId is required")
+    await _validate_partner(body.partner_user_id, authorization)
+    await repo.update_document(
+        row,
+        status="pending_review",
+        partner_user_id=body.partner_user_id,
+        clear_rejection_comment=True,
+    )
+    await session.commit()
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    assert row is not None
+    settings = get_settings()
+    await send_system_notification(
+        settings,
+        recipient_user_id=body.partner_user_id,
+        title="Исходящее письмо на проверке",
+        description=(
+            f"«{row.subject}» — {row.counterparty}. "
+            "Откройте раздел корреспонденции, чтобы подтвердить или отклонить."
+        ),
+        notification_type="correspondence_review",
+    )
+    return await _detail(row, authorization)
+
+
+@router.post("/{document_id}/approve", response_model=DocumentDetailOut)
+async def approve_outgoing(
+    document_id: str,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    _assert_outgoing(row)
+    if row.status != "pending_review":
+        raise HTTPException(status_code=400, detail="Документ не ожидает проверки")
+    _assert_assigned_partner(row, user)
+    year = datetime.now(timezone.utc).year
+    now = datetime.now(timezone.utc)
+    reg_no = await repo.next_registry_number("outgoing", year)
+    await repo.update_document(
+        row,
+        status="new",
+        registry_number=reg_no,
+        set_registered_at=True,
+        registered_at=now,
+        clear_rejection_comment=True,
+    )
+    await session.commit()
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    assert row is not None
+    settings = get_settings()
+    await send_system_notification(
+        settings,
+        recipient_user_id=row.responsible_user_id,
+        title="Исходящее письмо зарегистрировано",
+        description=(
+            f"Письмо «{row.subject}» зарегистрировано как {reg_no}."
+        ),
+        notification_type="correspondence_registered",
+    )
+    return await _detail(row, authorization)
+
+
+@router.post("/{document_id}/reject", response_model=DocumentDetailOut)
+async def reject_outgoing(
+    document_id: str,
+    body: RejectReviewBody,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    comment = (body.comment or "").strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="Укажите комментарий при отказе")
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    _assert_outgoing(row)
+    if row.status != "pending_review":
+        raise HTTPException(status_code=400, detail="Документ не ожидает проверки")
+    _assert_assigned_partner(row, user)
+    await repo.update_document(
+        row,
+        status="rejected",
+        rejection_comment=comment,
+    )
+    await session.commit()
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    assert row is not None
+    settings = get_settings()
+    await send_system_notification(
+        settings,
+        recipient_user_id=row.responsible_user_id,
+        title="Исходящее письмо отклонено",
+        description=(
+            f"Письмо «{row.subject}» отклонено партнёром. Комментарий: {comment}"
+        ),
+        notification_type="correspondence_rejected",
+    )
     return await _detail(row, authorization)
 
 
@@ -361,22 +589,44 @@ async def patch_correspondence(
     row = await repo.get_by_id(document_id, load_attachments=True)
     if not row:
         raise HTTPException(status_code=404, detail="Документ не найден")
-    if row.archived_at is not None:
-        raise HTTPException(status_code=400, detail="Архивный документ нельзя редактировать")
+    _assert_not_archived(row)
+
+    content_keys = {"counterparty", "subject", "comment", "partner_user_id"}
+    if any(k in data for k in content_keys):
+        if row.direction == "outgoing" and row.status in REVIEW_EDITABLE_STATUSES:
+            _assert_author_or_manage(row, user)
+        elif needs_manage is False and "comment" in data and len(data) == 1:
+            pass
+        else:
+            check_manage_role(user)
+
     new_status = None
     if "status" in data:
         try:
             new_status = normalize_status(data["status"])
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
+        if new_status in ("draft", "pending_review", "rejected"):
+            raise HTTPException(
+                status_code=422,
+                detail="Статусы проверки меняются через submit-review / approve / reject",
+            )
     new_resp = data.get("responsible_user_id")
     if new_resp is not None and int(new_resp) <= 0:
         raise HTTPException(status_code=422, detail="responsibleUserId must be positive")
+    partner_id = data.get("partner_user_id")
+    if partner_id is not None:
+        if int(partner_id) <= 0:
+            raise HTTPException(status_code=422, detail="partnerUserId must be positive")
+        await _validate_partner(int(partner_id), authorization)
     await repo.update_document(
         row,
         status=new_status,
         responsible_user_id=int(new_resp) if new_resp is not None else None,
         comment=data.get("comment") if "comment" in data else None,
+        counterparty=data.get("counterparty") if "counterparty" in data else None,
+        subject=data.get("subject") if "subject" in data else None,
+        partner_user_id=int(partner_id) if partner_id is not None else None,
     )
     await session.commit()
     row = await repo.get_by_id(document_id, load_attachments=True)
@@ -417,9 +667,10 @@ async def upload_attachment(
     repo = CorrespondenceRepository(session)
     row = await repo.get_by_id(document_id, load_attachments=True)
     if not row:
-        raise HTTPException(status_code=404, detail="Дocument not found")
-    if row.archived_at is not None:
-        raise HTTPException(status_code=400, detail="Архивный документ нельзя изменять")
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    if row.direction == "outgoing" and row.status in REVIEW_EDITABLE_STATUSES:
+        _assert_author_or_manage(row, user)
     default_kind = "scan" if row.direction == "incoming" else "attachment"
     try:
         kind = normalize_attachment_kind(attachment_kind, default=default_kind)
@@ -478,8 +729,9 @@ async def delete_attachment(
     row = await repo.get_by_id(document_id, load_attachments=True)
     if not row:
         raise HTTPException(status_code=404, detail="Документ не найден")
-    if row.archived_at is not None:
-        raise HTTPException(status_code=400, detail="Архивный документ нельзя изменять")
+    _assert_not_archived(row)
+    if row.direction == "outgoing" and row.status in REVIEW_EDITABLE_STATUSES:
+        _assert_author_or_manage(row, user)
     att = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
     if not att:
         raise HTTPException(status_code=404, detail="Вложение не найдено")

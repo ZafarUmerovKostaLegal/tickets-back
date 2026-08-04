@@ -18,7 +18,15 @@ def test_format_registry_number_outgoing():
 
 
 def test_parse_status_group_work():
-    assert parse_status_filter(None, "work") == ["approval", "progress"]
+    assert parse_status_filter(None, "work") == ["approval", "pending_review", "progress"]
+
+
+def test_normalize_review_statuses():
+    from application.correspondence_service import normalize_status
+
+    assert normalize_status("draft") == "draft"
+    assert normalize_status("pending_review") == "pending_review"
+    assert normalize_status("rejected") == "rejected"
 
 
 def test_validate_pdf_magic():
