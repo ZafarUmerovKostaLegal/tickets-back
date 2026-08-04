@@ -364,6 +364,7 @@ async def patch_invoice_route(
         actor_auth_user_id=actor,
         issue_date=body.issue_date,
         due_date=body.due_date,
+        invoice_number=body.invoice_number,
         client_note=body.client_note,
         internal_note=body.internal_note,
         tax_percent=body.tax_percent,
@@ -371,6 +372,8 @@ async def patch_invoice_route(
         discount_percent=body.discount_percent,
         project_id=body.project_id,
         replace_lines=body.lines,
+        document_overrides=body.document_overrides,
+        document_overrides_provided="document_overrides" in body.model_fields_set,
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)

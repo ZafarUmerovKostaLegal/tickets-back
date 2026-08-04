@@ -56,6 +56,8 @@ class InvoiceModel(Base):
 
     client_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     internal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Preview/document polish (legal page, cover letter, time-report table edits).
+    document_overrides_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

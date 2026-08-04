@@ -92,6 +92,12 @@ class InvoicePatchBody(BaseModel):
 
     issue_date: Optional[date] = Field(None, alias="issueDate")
     due_date: Optional[date] = Field(None, alias="dueDate")
+    invoice_number: Optional[str] = Field(
+        None,
+        alias="invoiceNumber",
+        max_length=64,
+        description="Новый номер счёта (только draft; уникальный)",
+    )
     client_note: Optional[str] = Field(None, alias="clientNote")
     internal_note: Optional[str] = Field(None, alias="internalNote")
     tax_percent: Optional[Decimal] = Field(None, alias="taxPercent")
@@ -99,6 +105,19 @@ class InvoicePatchBody(BaseModel):
     discount_percent: Optional[Decimal] = Field(None, alias="discountPercent")
     project_id: Optional[str] = Field(None, alias="projectId")
     lines: Optional[list[dict[str, Any]]] = None
+    document_overrides: Optional[dict[str, Any]] = Field(
+        None,
+        alias="documentOverrides",
+        description="JSON правок предпросмотра (legal/cover/timeReport); null — очистить",
+    )
+
+    @field_validator("invoice_number", mode="after")
+    @classmethod
+    def _strip_patch_invoice_number(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
 
 
 class InvoicePaymentConfirmationBody(BaseModel):

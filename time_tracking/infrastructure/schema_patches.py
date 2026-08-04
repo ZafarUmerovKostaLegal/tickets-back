@@ -1298,6 +1298,15 @@ async def apply_time_entries_project_id_fk_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_invoice_document_overrides_patch(conn: AsyncConnection) -> None:
+    """Persist invoice preview/document field overrides (legal page, cover, time report)."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_invoices",
+        ("document_overrides_json TEXT",),
+    )
+
+
 async def apply_invoice_partner_billing_and_fx_patch(conn: AsyncConnection) -> None:
     """Partner billing period on invoices, FX audit on lines, FX rates table."""
     await add_columns_if_missing(
@@ -1417,6 +1426,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("partner_confirmation_review_priority", apply_partner_confirmation_review_priority_patch),
     ("invoices", apply_invoices_schema_patch),
     ("invoice_partner_billing_and_fx", apply_invoice_partner_billing_and_fx_patch),
+    ("invoice_document_overrides", apply_invoice_document_overrides_patch),
     ("project_currency", apply_project_currency_patch),
     ("time_entries_seconds_rounded", apply_time_entries_seconds_and_rounded_patch),
     ("time_entries_external_reference", apply_time_entries_external_reference_patch),

@@ -777,6 +777,33 @@ async def _load_expense_rows_for_project(
     return {eid: by_id[eid] for eid in expense_ids if eid in by_id}
 
 
+MAX_DOCUMENT_OVERRIDES_JSON_BYTES = 512 * 1024
+
+
+def _serialize_document_overrides(raw: dict[str, Any] | None) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="documentOverrides должен быть объектом")
+    try:
+        payload = json.dumps(raw, ensure_ascii=False, default=str)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Некорректный documentOverrides") from exc
+    if len(payload.encode("utf-8")) > MAX_DOCUMENT_OVERRIDES_JSON_BYTES:
+        raise HTTPException(status_code=400, detail="documentOverrides слишком большой")
+    return payload
+
+
+def _parse_document_overrides_json(raw: str | None) -> dict[str, Any] | None:
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 async def patch_invoice_draft(
     session: AsyncSession,
     inv: InvoiceModel,
@@ -784,6 +811,7 @@ async def patch_invoice_draft(
     actor_auth_user_id: int,
     issue_date: date | None = None,
     due_date: date | None = None,
+    invoice_number: str | None = None,
     client_note: str | None = None,
     internal_note: str | None = None,
     tax_percent: Decimal | None = None,
@@ -791,9 +819,38 @@ async def patch_invoice_draft(
     discount_percent: Decimal | None = None,
     project_id: str | None = None,
     replace_lines: list[dict[str, Any]] | None = None,
+    document_overrides: dict[str, Any] | None = None,
+    document_overrides_provided: bool = False,
 ) -> InvoiceModel:
-    _require_draft(inv)
+    _require_not_canceled(inv)
     repo = InvoiceRepository(session)
+
+    draft_only_touch = any(
+        x is not None
+        for x in (
+            issue_date,
+            due_date,
+            invoice_number,
+            client_note,
+            internal_note,
+            tax_percent,
+            tax2_percent,
+            discount_percent,
+            project_id,
+            replace_lines,
+        )
+    )
+    if draft_only_touch:
+        _require_draft(inv)
+
+    if invoice_number is not None:
+        number = invoice_number.strip()
+        if not number:
+            raise HTTPException(status_code=400, detail="Номер счёта не может быть пустым")
+        if number != inv.invoice_number and await repo.exists_invoice_number(number, exclude_id=inv.id):
+            raise HTTPException(status_code=409, detail="Счёт с таким номером уже существует")
+        inv.invoice_number = number
+
     if issue_date:
         inv.issue_date = issue_date
     if due_date:
@@ -814,6 +871,9 @@ async def patch_invoice_draft(
             if not proj or proj.client_id != inv.client_id:
                 raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту счёта")
         inv.project_id = project_id or None
+
+    if document_overrides_provided:
+        inv.document_overrides_json = _serialize_document_overrides(document_overrides)
 
     if replace_lines is not None:
         await repo.delete_lines(inv.id)
@@ -852,7 +912,9 @@ async def patch_invoice_draft(
         await _ensure_package_fee_lines(session, repo, inv, package_months, sort_idx)
         await session.flush()
 
-    await _recalc_invoice_from_lines(session, inv)
+    if draft_only_touch or replace_lines is not None:
+        await _recalc_invoice_from_lines(session, inv)
+    inv.updated_at = _now_utc()
     await _audit(session, repo, inv.id, "updated", actor_auth_user_id, {})
     return inv
 
@@ -1101,6 +1163,9 @@ def invoice_to_dict(
         "stored_status": inv.status,
         "clientNote": inv.client_note,
         "internalNote": inv.internal_note,
+        "documentOverrides": _parse_document_overrides_json(
+            getattr(inv, "document_overrides_json", None)
+        ),
         "sentAt": inv.sent_at.isoformat() if inv.sent_at else None,
         "lastSentAt": inv.last_sent_at.isoformat() if inv.last_sent_at else None,
         "viewedAt": inv.viewed_at.isoformat() if inv.viewed_at else None,

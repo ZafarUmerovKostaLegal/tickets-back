@@ -54,12 +54,19 @@ class InvoiceRepository:
         await self._s.flush()
         return row.last_seq
 
-    async def exists_invoice_number(self, invoice_number: str) -> bool:
+    async def exists_invoice_number(
+        self,
+        invoice_number: str,
+        *,
+        exclude_id: str | None = None,
+    ) -> bool:
         q = (
             select(func.count())
             .select_from(InvoiceModel)
             .where(InvoiceModel.invoice_number == invoice_number)
         )
+        if exclude_id:
+            q = q.where(InvoiceModel.id != exclude_id)
         n = (await self._s.execute(q)).scalar_one()
         return int(n or 0) > 0
 
