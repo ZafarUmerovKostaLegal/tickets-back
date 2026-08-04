@@ -429,6 +429,9 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         package_fee_amount=getattr(row, "package_fee_amount", None),
         is_archived=row.is_archived,
         is_paused=bool(getattr(row, "is_paused", False)),
+        skip_partner_invoice_confirmation=bool(
+            getattr(row, "skip_partner_invoice_confirmation", False)
+        ),
         records_language=getattr(row, "records_language", "ENG") or "ENG",
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -871,6 +874,9 @@ async def create_client_project(
             package_fee_amount=package_fee if body.project_type == ProjectType.hour_package else None,
             is_archived=body.is_archived,
             is_paused=bool(getattr(body, "is_paused", False)),
+            skip_partner_invoice_confirmation=bool(
+                getattr(body, "skip_partner_invoice_confirmation", False)
+            ),
             records_language=body.records_language.value,
         )
         await session.flush()
@@ -1032,6 +1038,8 @@ async def patch_client_project(
                 status_code=400,
                 detail="Нельзя поставить на паузу архивный проект. Сначала восстановите его из архива.",
             )
+    if "skip_partner_invoice_confirmation" in patch:
+        patch["skip_partner_invoice_confirmation"] = bool(patch["skip_partner_invoice_confirmation"])
 
     if any(
         k in patch

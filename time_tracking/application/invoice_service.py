@@ -192,19 +192,25 @@ async def create_invoice(
     client = await session.get(TimeManagerClientModel, client_id)
     if not client:
         raise HTTPException(status_code=404, detail="Клиент не найден")
+    cur = (currency or client.currency or "USD").strip().upper()[:10] or "USD"
+    fx_book = await load_fx_rate_book(session)
+
+    eff_pid = (project_id or "").strip() or None
+    skip_partner_gate = False
     if project_id:
         proj = await session.get(TimeManagerClientProjectModel, project_id)
         if not proj or proj.client_id != client_id:
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
-    cur = (currency or client.currency or "USD").strip().upper()[:10] or "USD"
-    fx_book = await load_fx_rate_book(session)
+        skip_partner_gate = bool(getattr(proj, "skip_partner_invoice_confirmation", False))
 
-    needs_partner_confirmation = bool(time_entry_ids) or bool(expense_ids) or (
-        bool(lines) and len(lines) > 0 and bool((project_id or "").strip())
-    ) or (
-        partner_billing_period_from is not None and partner_billing_period_to is not None
+    needs_partner_confirmation = (not skip_partner_gate) and (
+        bool(time_entry_ids)
+        or bool(expense_ids)
+        or (bool(lines) and len(lines) > 0 and bool((project_id or "").strip()))
+        or (
+            partner_billing_period_from is not None and partner_billing_period_to is not None
+        )
     )
-    eff_pid = (project_id or "").strip() or None
     if needs_partner_confirmation:
         if not eff_pid and time_entry_ids:
             row = (
@@ -213,29 +219,36 @@ async def create_invoice(
                 )
             ).scalar_one_or_none()
             eff_pid = str(row).strip() if row is not None else None
-        if not eff_pid:
+            if eff_pid:
+                gate_proj = await session.get(TimeManagerClientProjectModel, eff_pid)
+                if gate_proj and bool(getattr(gate_proj, "skip_partner_invoice_confirmation", False)):
+                    skip_partner_gate = True
+                    needs_partner_confirmation = False
+        if needs_partner_confirmation and not eff_pid:
             raise HTTPException(
                 status_code=400,
                 detail="Укажите projectId для счёта с временем, расходами или строками по проекту",
             )
-        if partner_billing_period_from is None or partner_billing_period_to is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Укажите partnerBillingPeriodFrom и partnerBillingPeriodTo "
-                "(интервал биллинга должен полностью входить в уже подтверждённый партнёрами период по проекту)",
+        if needs_partner_confirmation:
+            if partner_billing_period_from is None or partner_billing_period_to is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Укажите partnerBillingPeriodFrom и partnerBillingPeriodTo "
+                    "(интервал биллинга должен полностью входить в уже подтверждённый партнёрами период по проекту)",
+                )
+            if partner_billing_period_to < partner_billing_period_from:
+                raise HTTPException(status_code=400, detail="partnerBillingPeriodTo не может быть раньше partnerBillingPeriodFrom")
+            await ensure_fully_confirmed_partner_period_or_403(
+                session,
+                project_id=eff_pid,
+                date_from=partner_billing_period_from,
+                date_to=partner_billing_period_to,
             )
-        if partner_billing_period_to < partner_billing_period_from:
-            raise HTTPException(status_code=400, detail="partnerBillingPeriodTo не может быть раньше partnerBillingPeriodFrom")
-        await ensure_fully_confirmed_partner_period_or_403(
-            session,
-            project_id=eff_pid,
-            date_from=partner_billing_period_from,
-            date_to=partner_billing_period_to,
-        )
 
     partner_preview = None
     if (
-        partner_billing_period_from is not None
+        (not skip_partner_gate)
+        and partner_billing_period_from is not None
         and partner_billing_period_to is not None
         and eff_pid
     ):

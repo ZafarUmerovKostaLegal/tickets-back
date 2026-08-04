@@ -426,6 +426,15 @@ async def apply_client_projects_is_paused_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_client_projects_skip_partner_invoice_confirmation_patch(conn: AsyncConnection) -> None:
+    """Exception projects: create invoices without fully_confirmed partner period."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_client_projects",
+        ("skip_partner_invoice_confirmation BOOLEAN NOT NULL DEFAULT FALSE",),
+    )
+
+
 async def apply_client_projects_billing_columns_patch(conn: AsyncConnection) -> None:
 
     await add_columns_if_missing(
@@ -1419,6 +1428,10 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("client_projects_hour_package", apply_client_projects_hour_package_patch),
     ("client_projects_records_language", apply_client_projects_records_language_patch),
     ("client_projects_is_paused", apply_client_projects_is_paused_patch),
+    (
+        "client_projects_skip_partner_invoice_confirmation",
+        apply_client_projects_skip_partner_invoice_confirmation_patch,
+    ),
     ("hourly_rates_applies_to_project", apply_hourly_rates_applies_to_project_patch),
     ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),
     ("time_tracking_teams", apply_time_tracking_teams_schema_patch),

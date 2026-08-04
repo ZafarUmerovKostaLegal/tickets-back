@@ -727,7 +727,14 @@ class ClientProjectRepository:
             send_budget_alerts=src.send_budget_alerts,
             budget_alert_threshold_percent=src.budget_alert_threshold_percent,
             fixed_fee_amount=src.fixed_fee_amount,
+            package_hours_per_month=getattr(src, "package_hours_per_month", None),
+            package_fee_amount=getattr(src, "package_fee_amount", None),
             is_archived=False,
+            is_paused=False,
+            skip_partner_invoice_confirmation=bool(
+                getattr(src, "skip_partner_invoice_confirmation", False)
+            ),
+            records_language=getattr(src, "records_language", "ENG") or "ENG",
         )
         await self._session.flush()
         ctr = ClientTaskRepository(self._session)
@@ -814,6 +821,7 @@ class ClientProjectRepository:
         package_fee_amount: Decimal | None = None,
         is_archived: bool = False,
         is_paused: bool = False,
+        skip_partner_invoice_confirmation: bool = False,
         records_language: str = "ENG",
     ) -> TimeManagerClientProjectModel:
         rv = report_visibility if report_visibility in _REPORT_VISIBILITY else "managers_only"
@@ -848,6 +856,7 @@ class ClientProjectRepository:
             package_fee_amount=package_fee_amount,
             is_archived=bool(is_archived),
             is_paused=bool(is_paused) and not bool(is_archived),
+            skip_partner_invoice_confirmation=bool(skip_partner_invoice_confirmation),
             records_language=rl,
             created_at=_now_utc(),
             updated_at=None,
@@ -913,6 +922,8 @@ class ClientProjectRepository:
             row.is_archived = bool(patch["is_archived"])
         if "is_paused" in patch:
             row.is_paused = bool(patch["is_paused"]) and not bool(row.is_archived)
+        if "skip_partner_invoice_confirmation" in patch:
+            row.skip_partner_invoice_confirmation = bool(patch["skip_partner_invoice_confirmation"])
         if "records_language" in patch and patch["records_language"] is not None:
             rl = str(patch["records_language"]).strip().upper()
             if rl in _RECORDS_LANGUAGES:
