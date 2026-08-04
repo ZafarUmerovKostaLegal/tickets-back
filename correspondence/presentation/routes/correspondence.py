@@ -118,7 +118,7 @@ async def _validate_partner(partner_user_id: int, authorization: Optional[str]) 
     profile = await fetch_user_by_id(settings.auth_service_url, authorization, partner_user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Партнёр не найден")
-    if not is_partner_org_role(profile.get("role")):
+    if not is_partner_org_role(profile.get("role"), profile.get("position")):
         raise HTTPException(status_code=400, detail="Выбранный пользователь не является партнёром")
 
 
@@ -177,7 +177,7 @@ def _assert_author_or_manage(row: CorrespondenceDocumentModel, user: dict) -> No
 
 def _assert_assigned_partner(row: CorrespondenceDocumentModel, user: dict) -> None:
     uid = int(user["id"])
-    if row.partner_user_id == uid and is_partner_org_role(user.get("role")):
+    if row.partner_user_id == uid and is_partner_org_role(user.get("role"), user.get("position")):
         return
     raise HTTPException(status_code=403, detail="Только назначенный партнёр может выполнить это действие")
 
@@ -193,6 +193,7 @@ async def list_correspondence(
     limit: int = Query(8, ge=1, le=200),
     include_archived: bool = Query(False, alias="includeArchived"),
     registered_only: bool = Query(False, alias="registeredOnly"),
+    partner_user_id: Optional[int] = Query(None, alias="partnerUserId"),
     user: dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     session: AsyncSession = Depends(get_session),
@@ -215,6 +216,7 @@ async def list_correspondence(
         skip=skip,
         limit=limit,
         registered_only=registered_only,
+        partner_user_id=partner_user_id,
     )
     settings = get_settings()
     ids: set[int] = set()
@@ -241,12 +243,19 @@ async def correspondence_stats(
 ):
     check_view_role(user)
     repo = CorrespondenceRepository(session)
-    s = await repo.get_stats()
+    partner_uid: int | None = None
+    if is_partner_org_role(user.get("role"), user.get("position")):
+        try:
+            partner_uid = int(user["id"])
+        except (KeyError, TypeError, ValueError):
+            partner_uid = None
+    s = await repo.get_stats(partner_user_id=partner_uid)
     return StatsOut(
         incoming_total=s["incoming_total"],
         outgoing_total=s["outgoing_total"],
         approval_total=s["approval_total"],
         incoming_new_total=s["incoming_new_total"],
+        partner_attention_total=s.get("partner_attention_total", 0),
     )
 
 
@@ -328,6 +337,18 @@ async def register_incoming(
     )
     await session.commit()
     row = await repo.get_by_id(doc_id, load_attachments=True)
+    assert row is not None
+    settings = get_settings()
+    await send_system_notification(
+        settings,
+        recipient_user_id=partner_user_id,
+        title="Новое входящее письмо",
+        description=(
+            f"«{row.subject}» — {row.counterparty} ({reg_no}). "
+            "Откройте раздел корреспонденции."
+        ),
+        notification_type="correspondence_incoming",
+    )
     return await _detail(row, authorization)
 
 

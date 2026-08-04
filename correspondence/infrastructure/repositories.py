@@ -124,6 +124,7 @@ class CorrespondenceRepository:
         skip: int,
         limit: int,
         registered_only: bool = False,
+        partner_user_id: int | None = None,
     ) -> tuple[list[CorrespondenceDocumentModel], int]:
         conds: list[Any] = []
         if direction:
@@ -136,6 +137,8 @@ class CorrespondenceRepository:
             conds.append(CorrespondenceDocumentModel.status.in_(statuses))
         if doc_types:
             conds.append(CorrespondenceDocumentModel.doc_type.in_(doc_types))
+        if partner_user_id is not None and partner_user_id > 0:
+            conds.append(CorrespondenceDocumentModel.partner_user_id == int(partner_user_id))
         if search and search.strip():
             qpat = f"%{search.strip()}%"
             conds.append(
@@ -163,13 +166,38 @@ class CorrespondenceRepository:
         rows = (await self._session.execute(q)).scalars().all()
         return list(rows), total
 
-    async def get_stats(self) -> dict[str, int]:
+    async def count_partner_attention(self, partner_user_id: int) -> int:
+        """Outgoing awaiting partner review + new incoming assigned to partner."""
+        if partner_user_id <= 0:
+            return 0
+        base = CorrespondenceDocumentModel.archived_at.is_(None)
+        assigned = CorrespondenceDocumentModel.partner_user_id == int(partner_user_id)
+        attention = or_(
+            and_(
+                CorrespondenceDocumentModel.direction == "outgoing",
+                CorrespondenceDocumentModel.status == "pending_review",
+            ),
+            and_(
+                CorrespondenceDocumentModel.direction == "incoming",
+                CorrespondenceDocumentModel.status == "new",
+            ),
+        )
+        q = select(func.count()).select_from(CorrespondenceDocumentModel).where(
+            and_(base, assigned, attention)
+        )
+        return int((await self._session.execute(q)).scalar() or 0)
+
+    async def get_stats(self, *, partner_user_id: int | None = None) -> dict[str, int]:
         base = CorrespondenceDocumentModel.archived_at.is_(None)
 
         async def _count(*extra) -> int:
             conds = [base, *extra]
             q = select(func.count()).select_from(CorrespondenceDocumentModel).where(and_(*conds))
             return int((await self._session.execute(q)).scalar() or 0)
+
+        partner_attention_total = 0
+        if partner_user_id is not None and partner_user_id > 0:
+            partner_attention_total = await self.count_partner_attention(partner_user_id)
 
         return {
             "incoming_total": await _count(CorrespondenceDocumentModel.direction == "incoming"),
@@ -184,6 +212,7 @@ class CorrespondenceRepository:
                 CorrespondenceDocumentModel.direction == "incoming",
                 CorrespondenceDocumentModel.status == "new",
             ),
+            "partner_attention_total": partner_attention_total,
         }
 
     async def update_document(

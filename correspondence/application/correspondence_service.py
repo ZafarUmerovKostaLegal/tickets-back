@@ -38,11 +38,13 @@ def _normalize_role_key(role: str | None) -> str:
     return (role or "").strip().casefold().replace("ё", "е")
 
 
-_PARTNER_ROLE_KEYS = frozenset({"партнер"})
-
-
-def is_partner_org_role(role: str | None) -> bool:
-    return _normalize_role_key(role) in _PARTNER_ROLE_KEYS
+def is_partner_org_role(role: str | None, position: str | None = None) -> bool:
+    """Match partner by role or position (RU/EN, substring — same idea as frontend)."""
+    kr = _normalize_role_key(role)
+    if "партнер" in kr or "partner" in kr:
+        return True
+    kp = _normalize_role_key(position)
+    return "партнер" in kp or "partner" in kp
 
 
 def normalize_doc_type(value: str | None) -> str:

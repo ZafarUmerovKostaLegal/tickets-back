@@ -29,6 +29,16 @@ def test_normalize_review_statuses():
     assert normalize_status("rejected") == "rejected"
 
 
+def test_is_partner_org_role_accepts_variants():
+    from application.correspondence_service import is_partner_org_role
+
+    assert is_partner_org_role("Партнёр")
+    assert is_partner_org_role("partner")
+    assert is_partner_org_role("Managing Partner")
+    assert is_partner_org_role("lawyer", "Партнер")
+    assert not is_partner_org_role("lawyer", "associate")
+
+
 def test_validate_pdf_magic():
     mime = validate_upload_content(b"%PDF-1.4 test", "application/octet-stream")
     assert mime == "application/pdf"
