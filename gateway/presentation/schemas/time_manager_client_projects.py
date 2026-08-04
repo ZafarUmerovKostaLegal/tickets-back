@@ -94,6 +94,11 @@ class TimeManagerClientProjectCreateBody(BaseModel):
     )
     is_archived: bool = Field(False, alias="isArchived")
     is_paused: bool = Field(False, alias="isPaused")
+    skip_partner_invoice_confirmation: bool = Field(
+        False,
+        alias="skipPartnerInvoiceConfirmation",
+        description="Проект-исключение: счёт без подтверждения партнёров.",
+    )
     initial_time_tracking_user_auth_ids: list[int] = Field(
         default_factory=list,
         alias="initialTimeTrackingUserAuthIds",
@@ -205,3 +210,8 @@ class TimeManagerClientProjectPatchBody(BaseModel):
     )
     is_archived: Optional[bool] = Field(None, alias="isArchived")
     is_paused: Optional[bool] = Field(None, alias="isPaused")
+    skip_partner_invoice_confirmation: Optional[bool] = Field(
+        None,
+        alias="skipPartnerInvoiceConfirmation",
+        description="Проект-исключение: счёт без подтверждения партнёров.",
+    )
