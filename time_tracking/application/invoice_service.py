@@ -171,6 +171,84 @@ def _sync_payment_status(inv: InvoiceModel) -> None:
         inv.status = "partial_paid"
 
 
+def format_invoice_total_display(amount: Decimal, currency: str) -> str:
+    """Match FE formatTimeReportAmount: ``USD 1,234.56``."""
+    cur = (currency or "USD").strip().upper()[:10] or "USD"
+    n = _money4(Decimal(str(amount)))
+    neg = n < 0
+    abs_n = abs(n)
+    # en-US thousands separators, always 2 dp
+    whole, frac = f"{abs_n:.2f}".split(".")
+    parts: list[str] = []
+    while whole:
+        parts.insert(0, whole[-3:])
+        whole = whole[:-3]
+    num = ",".join(parts) + "." + frac
+    return f"−{cur} {num}" if neg else f"{cur} {num}"
+
+
+def build_billed_amount_document_overrides(
+    *,
+    billed_amount: Decimal,
+    currency: str,
+    service_description: str | None,
+) -> dict[str, Any]:
+    """Legal-page-only pack + service line + total matching billed amount."""
+    total_fmt = format_invoice_total_display(billed_amount, currency)
+    desc = (service_description or "").strip()
+    out: dict[str, Any] = {
+        "v": 1,
+        "includedPageKeys": ["invoice"],
+        "cover": {"totalFormatted": total_fmt},
+    }
+    if desc:
+        out["legal"] = {"serviceDescriptionLine": desc[:2000]}
+    return out
+
+
+async def _apply_billed_amount_override(
+    session: AsyncSession,
+    repo: InvoiceRepository,
+    inv: InvoiceModel,
+    *,
+    billed_amount: Decimal,
+    service_description: str | None,
+    sort_order: int,
+) -> int:
+    """Zero money on linkage lines; add one manual billed line; set document overrides."""
+    await session.flush()
+    await session.refresh(inv, ["line_items"])
+    for ln in list(inv.line_items or []):
+        # Keep source_amount for audit; billed money lives on the manual line only.
+        ln.unit_amount = Decimal(0)
+        ln.line_total = Decimal(0)
+
+    desc = (service_description or "").strip() or "Legal services"
+    billed = _money4(billed_amount)
+    repo.add_line(
+        InvoiceLineItemModel(
+            id=str(uuid.uuid4()),
+            invoice_id=inv.id,
+            sort_order=sort_order,
+            line_kind="manual",
+            description=desc[:2000],
+            quantity=Decimal(1),
+            unit_amount=billed,
+            line_total=billed,
+            time_entry_id=None,
+            expense_request_id=None,
+        )
+    )
+    inv.document_overrides_json = _serialize_document_overrides(
+        build_billed_amount_document_overrides(
+            billed_amount=billed,
+            currency=inv.currency or "USD",
+            service_description=desc,
+        )
+    )
+    return sort_order + 1
+
+
 async def create_invoice(
     session: AsyncSession,
     *,
@@ -192,6 +270,8 @@ async def create_invoice(
     partner_billing_period_to: date | None = None,
     invoice_number: str | None = None,
     partner_confirmation_request_id: str | None = None,
+    billed_amount: Decimal | None = None,
+    service_description: str | None = None,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -282,6 +362,29 @@ async def create_invoice(
     dp = discount_percent if discount_percent is not None else client.discount_percent
     # Partner-confirmed invoices match report totals (pre-tax) unless caller sets tax explicitly.
     if partner_preview is not None and tax_percent is None and tax2_percent is None and discount_percent is None:
+        tp = Decimal(0)
+        t2p = Decimal(0)
+        dp = Decimal(0)
+
+    billed_override: Decimal | None = None
+    if billed_amount is not None:
+        billed_override = _money4(Decimal(str(billed_amount)))
+        if billed_override <= 0:
+            raise HTTPException(status_code=400, detail="billedAmount must be greater than 0")
+        has_closure = (
+            bool(time_entry_ids)
+            or bool(expense_ids)
+            or (
+                partner_billing_period_from is not None
+                and partner_billing_period_to is not None
+            )
+        )
+        if not has_closure:
+            raise HTTPException(
+                status_code=400,
+                detail="billedAmount требует timeEntryIds, expenseIds или partner billing period",
+            )
+        # Billed override is the client-facing total — keep tax/discount off so total == billed.
         tp = Decimal(0)
         t2p = Decimal(0)
         dp = Decimal(0)
@@ -421,10 +524,20 @@ async def create_invoice(
             session, repo, inv, package_months, sort_order, fx_book=fx_book,
         )
 
+    if billed_override is not None:
+        sort_order = await _apply_billed_amount_override(
+            session,
+            repo,
+            inv,
+            billed_amount=billed_override,
+            service_description=service_description,
+            sort_order=sort_order,
+        )
+
     await session.flush()
     await _recalc_invoice_from_lines(session, inv)
 
-    if partner_preview is not None:
+    if partner_preview is not None and billed_override is None:
         expected = _money4(partner_preview.expected_subtotal)
         actual = _money4(inv.subtotal)
         if abs(actual - expected) > Decimal("0.01"):

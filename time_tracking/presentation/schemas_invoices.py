@@ -58,6 +58,20 @@ class InvoiceCreateBody(BaseModel):
         alias="partnerConfirmationRequestId",
         description="ID запроса подтверждения партнёров, из которого создан счёт",
     )
+    billed_amount: Optional[Decimal] = Field(
+        None,
+        alias="billedAmount",
+        description=(
+            "Сумма к выставлению клиенту (валюта счёта). "
+            "Время/расходы закрываются как обычно, а total = эта сумма (одна manual-строка)."
+        ),
+    )
+    service_description: Optional[str] = Field(
+        None,
+        alias="serviceDescription",
+        max_length=2000,
+        description="Описание услуги на юридической странице счёта (при billedAmount)",
+    )
 
     @field_validator("invoice_number", mode="after")
     @classmethod
@@ -74,6 +88,23 @@ class InvoiceCreateBody(BaseModel):
             return None
         s = v.strip()
         return s or None
+
+    @field_validator("service_description", mode="after")
+    @classmethod
+    def _strip_service_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+    @field_validator("billed_amount", mode="after")
+    @classmethod
+    def _validate_billed_amount(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        if v is None:
+            return None
+        if v <= 0:
+            raise ValueError("billedAmount must be greater than 0")
+        return v
 
 
 class PartnerInvoicePreviewQuery(BaseModel):
