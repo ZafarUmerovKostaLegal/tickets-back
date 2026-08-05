@@ -218,8 +218,13 @@ async def _apply_billed_amount_override(
     """Zero money on linkage lines; add one manual billed line; set document overrides."""
     await session.flush()
     await session.refresh(inv, ["line_items"])
+    inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     for ln in list(inv.line_items or []):
-        # Keep source_amount for audit; billed money lives on the manual line only.
+        # Preserve worked amount in invoice currency (KPI «наработано») before zeroing totals.
+        worked = _money4(Decimal(str(ln.line_total or 0)))
+        if worked > 0:
+            ln.source_amount = worked
+            ln.source_currency = inv_ccy
         ln.unit_amount = Decimal(0)
         ln.line_total = Decimal(0)
 
@@ -242,7 +247,7 @@ async def _apply_billed_amount_override(
     inv.document_overrides_json = _serialize_document_overrides(
         build_billed_amount_document_overrides(
             billed_amount=billed,
-            currency=inv.currency or "USD",
+            currency=inv_ccy,
             service_description=desc,
         )
     )
