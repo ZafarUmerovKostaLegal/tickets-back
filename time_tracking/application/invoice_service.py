@@ -288,7 +288,15 @@ async def create_invoice(
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
         skip_partner_gate = bool(getattr(proj, "skip_partner_invoice_confirmation", False))
 
-    needs_partner_confirmation = (not skip_partner_gate) and (
+    # Pure custom-billed invoice: amount only, no report lines to close.
+    pure_billed = (
+        billed_amount is not None
+        and not time_entry_ids
+        and not expense_ids
+        and not lines
+    )
+
+    needs_partner_confirmation = (not skip_partner_gate) and (not pure_billed) and (
         bool(time_entry_ids)
         or bool(expense_ids)
         or (bool(lines) and len(lines) > 0 and bool((project_id or "").strip()))
@@ -333,6 +341,7 @@ async def create_invoice(
     partner_preview = None
     if (
         (not skip_partner_gate)
+        and (not pure_billed)
         and partner_billing_period_from is not None
         and partner_billing_period_to is not None
         and eff_pid
@@ -371,20 +380,8 @@ async def create_invoice(
         billed_override = _money4(Decimal(str(billed_amount)))
         if billed_override <= 0:
             raise HTTPException(status_code=400, detail="billedAmount must be greater than 0")
-        has_closure = (
-            bool(time_entry_ids)
-            or bool(expense_ids)
-            or (
-                partner_billing_period_from is not None
-                and partner_billing_period_to is not None
-            )
-        )
-        if not has_closure:
-            raise HTTPException(
-                status_code=400,
-                detail="billedAmount требует timeEntryIds, expenseIds или partner billing period",
-            )
         # Billed override is the client-facing total — keep tax/discount off so total == billed.
+        # Time/expense ids are optional: without them this is a pure manual billed invoice.
         tp = Decimal(0)
         t2p = Decimal(0)
         dp = Decimal(0)

@@ -93,6 +93,26 @@ def test_invoice_create_body_accepts_billed_amount():
     assert body.partner_billing_period_from == date(2026, 7, 1)
 
 
+def test_invoice_create_body_accepts_billed_amount_without_lines():
+    ensure_service_in_path("time_tracking")
+    from presentation.schemas_invoices import InvoiceCreateBody
+
+    body = InvoiceCreateBody.model_validate(
+        {
+            "clientId": "c1",
+            "projectId": "p1",
+            "issueDate": "2026-08-05",
+            "dueDate": "2026-09-20",
+            "billedAmount": "3000",
+            "serviceDescription": "Legal services rendered in August 2024",
+        }
+    )
+    assert body.billed_amount == Decimal("3000")
+    assert body.time_entry_ids is None
+    assert body.expense_ids is None
+    assert body.partner_billing_period_from is None
+
+
 def test_invoice_create_body_rejects_non_positive_billed_amount():
     ensure_service_in_path("time_tracking")
     from presentation.schemas_invoices import InvoiceCreateBody

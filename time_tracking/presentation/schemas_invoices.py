@@ -63,7 +63,8 @@ class InvoiceCreateBody(BaseModel):
         alias="billedAmount",
         description=(
             "Сумма к выставлению клиенту (валюта счёта). "
-            "Время/расходы закрываются как обычно, а total = эта сумма (одна manual-строка)."
+            "Можно без time/expense: тогда счёт = одна manual-строка. "
+            "Если time/expense переданы — они закрываются, а total = эта сумма."
         ),
     )
     service_description: Optional[str] = Field(
