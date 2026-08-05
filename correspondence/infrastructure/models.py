@@ -31,6 +31,11 @@ class CorrespondenceDocumentModel(Base):
         back_populates="document",
         cascade="all, delete-orphan",
     )
+    comments: Mapped[list["CorrespondenceDocumentCommentModel"]] = relationship(
+        "CorrespondenceDocumentCommentModel",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
 
 
 class CorrespondenceAttachmentModel(Base):
@@ -54,6 +59,26 @@ class CorrespondenceAttachmentModel(Base):
     document: Mapped["CorrespondenceDocumentModel"] = relationship(
         "CorrespondenceDocumentModel",
         back_populates="attachments",
+    )
+
+
+class CorrespondenceDocumentCommentModel(Base):
+    __tablename__ = "correspondence_document_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("correspondence_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    author_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    document: Mapped["CorrespondenceDocumentModel"] = relationship(
+        "CorrespondenceDocumentModel",
+        back_populates="comments",
     )
 
 

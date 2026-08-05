@@ -91,3 +91,25 @@ class RejectReviewBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     comment: str = Field(..., min_length=1)
+
+
+class CreateCommentBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    body: str = Field(..., min_length=1, max_length=4000)
+
+
+class CommentOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    body: str
+    author_user_id: int = Field(serialization_alias="authorUserId")
+    author_user: Optional[UserSnippetOut] = Field(None, serialization_alias="authorUser")
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class CommentListResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[CommentOut]

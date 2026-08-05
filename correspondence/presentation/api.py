@@ -44,6 +44,32 @@ async def lifespan(app: FastAPI):
                         "ADD COLUMN IF NOT EXISTS rejection_comment TEXT"
                     )
                 )
+                await conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS correspondence_document_comments (
+                            id VARCHAR(36) PRIMARY KEY,
+                            document_id VARCHAR(36) NOT NULL
+                                REFERENCES correspondence_documents (id) ON DELETE CASCADE,
+                            author_user_id INTEGER NOT NULL,
+                            body TEXT NOT NULL,
+                            created_at TIMESTAMPTZ NOT NULL
+                        )
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_corr_doc_comments_document_id "
+                        "ON correspondence_document_comments (document_id)"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_corr_doc_comments_document_created "
+                        "ON correspondence_document_comments (document_id, created_at)"
+                    )
+                )
             break
         except Exception as e:
             last_exc = e

@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from application.correspondence_service import format_registry_number
 from infrastructure.models import (
     CorrespondenceAttachmentModel,
+    CorrespondenceDocumentCommentModel,
     CorrespondenceDocumentModel,
     CorrespondenceRegistryCounterModel,
 )
@@ -273,3 +274,33 @@ class CorrespondenceRepository:
             )
         )
         return int((await self._session.execute(q)).scalar() or 0)
+
+    async def list_comments(self, document_id: str) -> list[CorrespondenceDocumentCommentModel]:
+        q = (
+            select(CorrespondenceDocumentCommentModel)
+            .where(CorrespondenceDocumentCommentModel.document_id == document_id)
+            .order_by(
+                CorrespondenceDocumentCommentModel.created_at.asc(),
+                CorrespondenceDocumentCommentModel.id.asc(),
+            )
+        )
+        return list((await self._session.execute(q)).scalars().all())
+
+    async def add_comment(
+        self,
+        *,
+        comment_id: str,
+        document_id: str,
+        author_user_id: int,
+        body: str,
+    ) -> CorrespondenceDocumentCommentModel:
+        row = CorrespondenceDocumentCommentModel(
+            id=comment_id,
+            document_id=document_id,
+            author_user_id=author_user_id,
+            body=body,
+            created_at=_utc_now(),
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return row

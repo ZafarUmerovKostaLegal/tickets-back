@@ -20,12 +20,19 @@ from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.file_storage import resolve_storage_path, save_correspondence_file
-from infrastructure.models import CorrespondenceAttachmentModel, CorrespondenceDocumentModel
+from infrastructure.models import (
+    CorrespondenceAttachmentModel,
+    CorrespondenceDocumentCommentModel,
+    CorrespondenceDocumentModel,
+)
 from infrastructure.notify import send_system_notification
 from infrastructure.repositories import CorrespondenceRepository
 from presentation.deps import check_manage_role, check_view_role, get_current_user
 from presentation.schemas import (
     AttachmentOut,
+    CommentListResponse,
+    CommentOut,
+    CreateCommentBody,
     DocumentDetailOut,
     DocumentListItemOut,
     DocumentListResponse,
@@ -110,6 +117,16 @@ async def _detail(
     return DocumentDetailOut(
         **li.model_dump(),
         attachments=[_attachment_out(a) for a in atts],
+    )
+
+
+def _comment_out(row: CorrespondenceDocumentCommentModel, profile: dict | None) -> CommentOut:
+    return CommentOut(
+        id=row.id,
+        body=row.body,
+        author_user_id=row.author_user_id,
+        author_user=_user_snippet(row.author_user_id, profile),
+        created_at=row.created_at,
     )
 
 
@@ -673,6 +690,76 @@ async def archive_correspondence(
     await session.commit()
     row = await repo.get_by_id(document_id, load_attachments=True)
     return await _detail(row, authorization)
+
+
+@router.get("/{document_id}/comments", response_model=CommentListResponse)
+async def list_document_comments(
+    document_id: str,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    comments = await repo.list_comments(document_id)
+    settings = get_settings()
+    author_ids = {c.author_user_id for c in comments}
+    profiles = await fetch_users_by_ids(settings.auth_service_url, authorization, author_ids) if author_ids else {}
+    return CommentListResponse(
+        items=[_comment_out(c, profiles.get(c.author_user_id)) for c in comments],
+    )
+
+
+@router.post("/{document_id}/comments", response_model=CommentOut, status_code=201)
+async def create_document_comment(
+    document_id: str,
+    body: CreateCommentBody,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Текст комментария обязателен")
+    if len(text) > 4000:
+        raise HTTPException(status_code=422, detail="Комментарий слишком длинный")
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    author_id = int(user["id"])
+    comment = await repo.add_comment(
+        comment_id=str(uuid.uuid4()),
+        document_id=document_id,
+        author_user_id=author_id,
+        body=text,
+    )
+    await session.commit()
+
+    notify_ids: set[int] = set()
+    if row.responsible_user_id and row.responsible_user_id != author_id:
+        notify_ids.add(row.responsible_user_id)
+    if row.partner_user_id and row.partner_user_id != author_id:
+        notify_ids.add(row.partner_user_id)
+    settings = get_settings()
+    preview = text if len(text) <= 160 else f"{text[:157]}…"
+    label = row.registry_number or row.subject or "документ"
+    for recipient_id in notify_ids:
+        await send_system_notification(
+            settings,
+            recipient_user_id=recipient_id,
+            title="Новый комментарий",
+            description=f"«{label}»: {preview}",
+            notification_type="correspondence_comment",
+        )
+
+    profiles = await fetch_users_by_ids(settings.auth_service_url, authorization, {author_id})
+    return _comment_out(comment, profiles.get(author_id))
 
 
 @router.post("/{document_id}/attachments", response_model=DocumentDetailOut)
