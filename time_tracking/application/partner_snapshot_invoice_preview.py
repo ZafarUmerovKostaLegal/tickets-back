@@ -30,7 +30,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.note_normalize import normalize_note_for_duplicate_key, notes_are_near_duplicate
-from application.invoice_fx import FxConversion, FxRateBook, convert_or_same, load_fx_rate_book
+from application.invoice_fx import (
+    FxConversion,
+    FxRateBook,
+    convert_expense_amount,
+    convert_or_same,
+    load_fx_rate_book,
+)
 from application.partner_confirmed_invoice_preview import (
     PartnerInvoicePreview,
     PartnerInvoicePreviewLine,
@@ -460,8 +466,8 @@ async def build_invoice_preview_from_snapshot_rows(
         eid = str(r["id"])
         if eid in exp_invoiced:
             continue
-        src_amt = _money4(Decimal(str(r.get("equivalent_amount", 0) or 0)))
-        conv = convert_or_same(book, src_amt, "USD", inv_ccy, on_date)
+        # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
+        conv = convert_expense_amount(book, r, inv_ccy, on_date)
         _record_fx(fx_used, conv)
         desc = str(r.get("description") or "Расход")[:2000]
         lines.append(

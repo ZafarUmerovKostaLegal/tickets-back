@@ -19,7 +19,12 @@ from application.entry_pricing import (
     _billable_rate_for_entry,
     billable_amount_respecting_package,
 )
-from application.invoice_fx import FxRateBook, convert_or_same, load_fx_rate_book
+from application.invoice_fx import (
+    FxRateBook,
+    convert_expense_amount,
+    convert_or_same,
+    load_fx_rate_book,
+)
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
     is_hour_package_project,
@@ -706,11 +711,10 @@ async def _append_expense_line(
         await session.flush()
     if inv.project_id and pid and str(pid) != str(inv.project_id):
         raise HTTPException(status_code=400, detail="Расход привязан к другому проекту")
-    src_total = _money4(Decimal(str(row.get("equivalent_amount", 0))))
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     book = fx_book or await load_fx_rate_book(session)
-    # Expense equivalent_amount is always USD
-    conv = convert_or_same(book, src_total, "USD", inv_ccy, inv.issue_date)
+    # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
+    conv = convert_expense_amount(book, row, inv_ccy, inv.issue_date)
     desc = str(row.get("description") or "Расход")[:2000]
     repo.add_line(
         InvoiceLineItemModel(

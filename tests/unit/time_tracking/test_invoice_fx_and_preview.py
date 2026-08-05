@@ -82,6 +82,61 @@ def test_fx_uses_latest_rate_on_or_before_date():
     assert late.converted_amount == Decimal("92.0000")
 
 
+def test_convert_expense_amount_uzs_invoice_uses_amount_uzs_as_is():
+    """Regression: UZS expense must not be rebuilt via USD→UZS at a newer FX rate."""
+    ensure_service_in_path("time_tracking")
+    from application.invoice_fx import FxRateBook, convert_expense_amount
+
+    book = FxRateBook()
+    # Different rate than the one used when the expense was booked (~11909.79).
+    book.add("USD", "UZS", date(2026, 8, 1), Decimal("12006.39"))
+    row = {
+        "amount_uzs": 12360000,
+        "equivalent_amount": 1037.81,
+        "expense_date": "2026-07-15",
+    }
+    conv = convert_expense_amount(book, row, "UZS", date(2026, 8, 5))
+    assert conv.source_currency == "UZS"
+    assert conv.target_currency == "UZS"
+    assert conv.converted_amount == Decimal("12360000.0000")
+    assert conv.fx_rate == Decimal(1)
+
+
+def test_convert_expense_amount_usd_invoice_from_uzs():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_fx import FxRateBook, convert_expense_amount
+
+    book = FxRateBook()
+    book.add("USD", "UZS", date(2026, 7, 1), Decimal("11909.79"))
+    row = {
+        "amount_uzs": 12360000,
+        "equivalent_amount": 1037.81,
+        "expense_date": "2026-07-15",
+    }
+    conv = convert_expense_amount(book, row, "USD", date(2026, 8, 5))
+    assert conv.source_currency == "UZS"
+    assert conv.source_amount == Decimal("12360000.0000")
+    assert conv.target_currency == "USD"
+    # Inverse of stored USD→UZS (not the locked equivalent_amount).
+    assert conv.converted_amount == Decimal("1037.7456")
+
+
+def test_convert_expense_amount_falls_back_to_usd_equivalent():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_fx import FxRateBook, convert_expense_amount
+
+    book = FxRateBook()
+    book.add("USD", "UZS", date(2026, 8, 1), Decimal("12000"))
+    row = {
+        "amount_uzs": 0,
+        "equivalent_amount": 100,
+        "expense_date": "2026-08-01",
+    }
+    conv = convert_expense_amount(book, row, "UZS", date(2026, 8, 5))
+    assert conv.source_currency == "USD"
+    assert conv.converted_amount == Decimal("1200000.0000")
+
+
 def test_partner_preview_dataclass_as_dict():
     ensure_service_in_path("time_tracking")
     from application.partner_confirmed_invoice_preview import (

@@ -15,7 +15,13 @@ from application.entry_pricing import (
     _billable_rate_for_entry,
     billable_amount_respecting_package,
 )
-from application.invoice_fx import FxConversion, FxRateBook, convert_or_same, load_fx_rate_book
+from application.invoice_fx import (
+    FxConversion,
+    FxRateBook,
+    convert_expense_amount,
+    convert_or_same,
+    load_fx_rate_book,
+)
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
     is_hour_package_project,
@@ -418,9 +424,8 @@ async def build_partner_confirmed_invoice_preview(
         eid = str(r["id"])
         if eid in exp_invoiced:
             continue
-        # Expenses are stored as USD equivalent
-        src_amt = _money4(Decimal(str(r.get("equivalent_amount", 0) or 0)))
-        conv = convert_or_same(book, src_amt, "USD", inv_ccy, on_date)
+        # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
+        conv = convert_expense_amount(book, r, inv_ccy, on_date)
         _record_fx(fx_used, conv)
         desc = str(r.get("description") or "Расход")[:2000]
         lines.append(
