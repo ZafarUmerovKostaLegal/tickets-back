@@ -7,6 +7,12 @@ JOB_POSITIONS: tuple[str, ...] = (
     "Contracts and BD Assistant",
     "Accountant",
     "Office Manager",
+    "Associate",
+    "Contracts Manager",
+    "Counsel",
+    "Junior Associate",
+    "Partner",
+    "Senior Associate",
     "Trainee",
 )
 
