@@ -7,6 +7,7 @@ JOB_POSITIONS: tuple[str, ...] = (
     "Contracts and BD Assistant",
     "Accountant",
     "Office Manager",
+    "Trainee",
 )
 
 
