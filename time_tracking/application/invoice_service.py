@@ -282,16 +282,27 @@ async def create_invoice(
     client = await session.get(TimeManagerClientModel, client_id)
     if not client:
         raise HTTPException(status_code=404, detail="Клиент не найден")
-    cur = (currency or client.currency or "USD").strip().upper()[:10] or "USD"
     fx_book = await load_fx_rate_book(session)
 
     eff_pid = (project_id or "").strip() or None
     skip_partner_gate = False
+    proj: TimeManagerClientProjectModel | None = None
     if project_id:
         proj = await session.get(TimeManagerClientProjectModel, project_id)
         if not proj or proj.client_id != client_id:
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
         skip_partner_gate = bool(getattr(proj, "skip_partner_invoice_confirmation", False))
+
+    # Prefer project currency → explicit request → client currency → USD.
+    # Project billing currency is the source of truth for project invoices.
+    project_ccy = (
+        (getattr(proj, "currency", None) or "").strip().upper()[:10] if proj is not None else ""
+    )
+    client_ccy = (client.currency or "").strip().upper()[:10]
+    explicit_ccy = (currency or "").strip().upper()[:10] if currency else ""
+    cur = project_ccy or explicit_ccy or client_ccy or "USD"
+    if not cur:
+        cur = "USD"
 
     # Pure custom-billed invoice: amount only, no report lines to close.
     pure_billed = (
