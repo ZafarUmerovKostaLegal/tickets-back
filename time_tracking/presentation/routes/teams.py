@@ -7,6 +7,7 @@ from starlette.responses import Response
 
 from application.access_control import ensure_can_list_teams, ensure_can_manage_teams
 from application.auth_user_directory import fetch_auth_user_partner_hints_by_id
+from application.auth_user_pii import hydrate_users_map
 from application.project_partner_requirement import user_satisfies_partner_rule
 from application.team_validation import dedupe_member_ids
 from infrastructure.database import get_session
@@ -88,6 +89,7 @@ async def _team_out(
     ur = TimeTrackingUserRepository(session)
     users = await ur.list_by_auth_user_ids(lookup_ids)
     by_id = {u.auth_user_id: u for u in users}
+    by_id = await hydrate_users_map(by_id)
     partner = by_id.get(int(team.partner_auth_user_id))
     partner_display_name = None
     if partner is not None:
