@@ -6,7 +6,7 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.kind_legend import (
@@ -96,6 +96,14 @@ class LeaveRequestOut(BaseModel):
 
 class LeaveRequestsListOut(BaseModel):
     items: list[LeaveRequestOut]
+
+
+class LeaveRequestsPendingBadgeOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    count: int
+    to_decide_count: int = Field(..., alias="toDecideCount")
+    mine_pending_count: int = Field(..., alias="minePendingCount")
 
 
 class VacationBalanceOut(BaseModel):
@@ -294,6 +302,40 @@ async def list_leave_requests(
     q = q.order_by(LeaveRequest.created_at.desc())
     r = await session.execute(q)
     return LeaveRequestsListOut(items=[_to_out(x) for x in r.scalars().all()])
+
+
+@router.get("/leave-requests/pending/badge", response_model=LeaveRequestsPendingBadgeOut)
+async def leave_requests_pending_badge(
+    employee: AuthUser = Depends(get_current_employee),
+    session: AsyncSession = Depends(get_session),
+):
+    to_decide = 0
+    if _is_partner(employee):
+        r = await session.execute(
+            select(func.count())
+            .select_from(LeaveRequest)
+            .where(
+                LeaveRequest.partner_user_id == employee.id,
+                LeaveRequest.status == LEAVE_STATUS_PENDING,
+            )
+        )
+        to_decide = int(r.scalar() or 0)
+
+    r_mine = await session.execute(
+        select(func.count())
+        .select_from(LeaveRequest)
+        .where(
+            LeaveRequest.employee_user_id == employee.id,
+            LeaveRequest.status == LEAVE_STATUS_PENDING,
+        )
+    )
+    mine_pending = int(r_mine.scalar() or 0)
+
+    return LeaveRequestsPendingBadgeOut(
+        count=to_decide,
+        to_decide_count=to_decide,
+        mine_pending_count=mine_pending,
+    )
 
 
 async def _load_request(session: AsyncSession, request_id: int) -> LeaveRequest:
