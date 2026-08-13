@@ -68,6 +68,8 @@ class StatsOut(BaseModel):
     approval_total: int = Field(serialization_alias="approvalTotal")
     incoming_new_total: int = Field(serialization_alias="incomingNewTotal")
     partner_attention_total: int = Field(0, serialization_alias="partnerAttentionTotal")
+    partner_outgoing_pending: int = Field(0, serialization_alias="partnerOutgoingPending")
+    partner_incoming_new: int = Field(0, serialization_alias="partnerIncomingNew")
 
 
 class DocumentPatchBody(BaseModel):

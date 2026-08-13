@@ -119,6 +119,14 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         alias="accessGrantedByAuthUserId",
         description="Кто выдал доступ (аудит).",
     )
+    initial_task_names: Optional[list[str]] = Field(
+        None,
+        alias="initialTaskNames",
+        description=(
+            "Имена задач из каталога по умолчанию. "
+            "None — полный набор; [] — без задач; иначе только указанные."
+        ),
+    )
 
     @model_validator(mode="after")
     def _initial_access_billable_lists(self) -> Self:

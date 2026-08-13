@@ -43,14 +43,29 @@ DEFAULT_PROJECT_TASK_SEED: tuple[tuple[str, bool, str, Decimal | None, str | Non
 _ZERO_RATE = Decimal("0")
 
 
-async def seed_default_common_tasks_for_project(session: AsyncSession, project_id: str) -> None:
+async def seed_default_common_tasks_for_project(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    only_names: set[str] | None = None,
+) -> None:
+    """Seed catalog default tasks.
+
+    only_names:
+      - None → seed the full default catalog (legacy behavior)
+      - set() → seed nothing
+      - non-empty set → seed only matching catalog names (case-insensitive)
+    """
     r = await session.execute(
         select(TimeManagerClientTaskModel.name).where(TimeManagerClientTaskModel.project_id == project_id)
     )
     existing = {str(x).strip().lower() for x in r.scalars().all()}
+    allow = None if only_names is None else {n.strip().lower() for n in only_names if n and str(n).strip()}
     repo = ClientTaskRepository(session)
     for name, billable, billing_mode, flat_amt, flat_cur in DEFAULT_PROJECT_TASK_SEED:
         key = name.strip().lower()
+        if allow is not None and key not in allow:
+            continue
         if key in existing:
             continue
         await repo.create(

@@ -273,6 +273,8 @@ async def correspondence_stats(
         approval_total=s["approval_total"],
         incoming_new_total=s["incoming_new_total"],
         partner_attention_total=s.get("partner_attention_total", 0),
+        partner_outgoing_pending=s.get("partner_outgoing_pending", 0),
+        partner_incoming_new=s.get("partner_incoming_new", 0),
     )
 
 

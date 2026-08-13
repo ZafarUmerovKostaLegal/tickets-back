@@ -14,3 +14,14 @@ def test_default_task_seed_includes_billable_and_non_billable():
     assert len(DEFAULT_PROJECT_TASK_SEED) >= 10
     flat = [row for row in DEFAULT_PROJECT_TASK_SEED if row[2] == "flat_fee"]
     assert flat
+
+
+@pytest.mark.unit
+def test_seed_only_names_filter_keys():
+    allow = {"accounting", "court hearing"}
+    filtered = [
+        name
+        for name, *_rest in DEFAULT_PROJECT_TASK_SEED
+        if name.strip().lower() in allow
+    ]
+    assert filtered == ["Court Hearing", "Accounting"]

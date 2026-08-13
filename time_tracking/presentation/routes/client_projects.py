@@ -880,7 +880,14 @@ async def create_client_project(
             records_language=body.records_language.value,
         )
         await session.flush()
-        await seed_default_common_tasks_for_project(session, str(row.id))
+        only_names = None
+        if body.initial_task_names is not None:
+            only_names = {str(n).strip() for n in body.initial_task_names if str(n).strip()}
+        await seed_default_common_tasks_for_project(
+            session,
+            str(row.id),
+            only_names=only_names,
+        )
         members = body.initial_project_access_members or []
         granted_on_create: list[int] = []
         initial: list[int] = []
