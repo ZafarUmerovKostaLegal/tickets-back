@@ -110,3 +110,15 @@ def ensure_not_moderating_own_expense(user: dict, created_by_user_id: int) -> No
             status_code=403,
             detail="Нельзя модерировать собственную заявку",
         )
+
+
+def ensure_reimbursement_payment_confirmer(user: dict) -> None:
+    """Reimbursable payout may only be confirmed by the designated payment confirmer."""
+    settings = get_settings()
+    expected = (settings.expense_payment_confirmer_email or "").strip().lower()
+    actual = str(user.get("email") or "").strip().lower()
+    if not expected or actual != expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Возмещение подтверждает только назначенный сотрудник (подтверждение оплаты)",
+        )

@@ -46,6 +46,7 @@ from presentation.deps import (
     check_view_role,
     created_by_filter_for_user,
     ensure_not_moderating_own_expense,
+    ensure_reimbursement_payment_confirmer,
     get_current_user,
     is_admin_editor,
     is_moderator,
@@ -493,6 +494,11 @@ async def list_expenses(
         description="company — без partner_expense; partner — только partner_expense",
     ),
     expense_type: Optional[str] = Query(None, alias="expenseType"),
+    exclude_expense_type: Optional[str] = Query(
+        None,
+        alias="excludeExpenseType",
+        description="Исключить тип (например client_expense на вкладке «Расходы компании»)",
+    ),
     expense_subtype: Optional[str] = Query(None, alias="expenseSubtype"),
     partner_user_id: Optional[int] = Query(None, alias="partnerUserId"),
     is_reimbursable: Optional[bool] = Query(None, alias="isReimbursable"),
@@ -544,6 +550,7 @@ async def list_expenses(
         status=status,
         scope=list_scope,
         expense_type=expense_type,
+        exclude_expense_type=exclude_expense_type,
         is_reimbursable=is_reimbursable,
         date_from=date_from,
         date_to=date_to,
@@ -1091,6 +1098,12 @@ async def pay_expense(
     await _ensure_access(row, user)
     if row.status != "approved":
         raise HTTPException(status_code=400, detail="Выплата только для approved")
+    if not row.is_reimbursable:
+        raise HTTPException(
+            status_code=400,
+            detail="«Возмещено» только для возмещаемых заявок; для невозмещаемых используйте «Не оплачено»",
+        )
+    ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     row.status = "paid"

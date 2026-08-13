@@ -88,6 +88,7 @@ class ExpenseRepository:
         status: str | None,
         scope: str | None,
         expense_type: str | None,
+        exclude_expense_type: str | None = None,
         is_reimbursable: bool | None,
         date_from: date | None,
         date_to: date | None,
@@ -123,6 +124,8 @@ class ExpenseRepository:
                 stmt = stmt.where(ExpenseRequestModel.expense_type != "partner_expense")
             if expense_type:
                 stmt = stmt.where(ExpenseRequestModel.expense_type == expense_type)
+            elif exclude_expense_type and exclude_expense_type.strip():
+                stmt = stmt.where(ExpenseRequestModel.expense_type != exclude_expense_type.strip())
             if partner_user_id is not None:
                 stmt = stmt.where(ExpenseRequestModel.partner_user_id == partner_user_id)
             if expense_subtype and expense_subtype.strip():
