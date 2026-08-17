@@ -10,4 +10,6 @@ warn_if_ws_internal_secret_empty(os.environ.get("WS_INTERNAL_SECRET"), service="
 warn_if_redis_url_unauthenticated(os.environ.get("REDIS_URL"), service="time_tracking")
 warn_if_database_url_uses_default_password(os.environ.get("DATABASE_URL"), service="time_tracking")
 
-from presentation.api import app
+from presentation.api import app as app
+
+__all__ = ["app"]

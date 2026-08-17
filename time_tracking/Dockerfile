@@ -20,4 +20,4 @@ EXPOSE 1241
 RUN chown -R appuser:root /app
 USER appuser
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1241", "--no-access-log", "--log-level", "info"]
+CMD ["uvicorn", "presentation.api:app", "--host", "0.0.0.0", "--port", "1241", "--no-access-log", "--log-level", "info"]
