@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from calendar import monthrange
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterable
@@ -187,22 +188,98 @@ def format_invoice_total_display(amount: Decimal, currency: str) -> str:
     return f"−{cur} {num}" if neg else f"{cur} {num}"
 
 
+def last_day_of_previous_month(on: date) -> date:
+    """CBU rate date for custom billed invoices: last day of month before issue date."""
+    y, m = on.year, on.month
+    if m == 1:
+        return date(y - 1, 12, 31)
+    last = monthrange(y, m - 1)[1]
+    return date(y, m - 1, last)
+
+
+def resolve_billed_amount_fx_display(
+    book: FxRateBook,
+    *,
+    billed_amount: Decimal,
+    currency: str,
+    issue_date: date | None,
+) -> dict[str, Any]:
+    """Alt amount (usually USD) + FX fields for legal invoice dual total.
+
+    Rate date = last day of the previous month relative to issue_date (CBU).
+    Always quotes against USD: ``1 USD = X QUOTE``.
+    """
+    inv_ccy = (currency or "USD").strip().upper()[:10] or "USD"
+    billed = _money4(billed_amount)
+    if issue_date is None:
+        return {}
+    rate_date = last_day_of_previous_month(issue_date)
+    try:
+        if inv_ccy == "USD":
+            # Show UZS equivalent in parentheses; rate 1 USD = … UZS
+            conv = convert_or_same(book, billed, "USD", "UZS", rate_date)
+            quote_ccy = "UZS"
+            rate = conv.fx_rate
+            alt_fmt = format_invoice_total_display(conv.converted_amount, quote_ccy)
+            source_ccy, source_amt = "USD", billed
+        else:
+            # Invoice in foreign/UZS → show USD equivalent; rate 1 USD = … inv_ccy
+            to_usd = convert_or_same(book, billed, inv_ccy, "USD", rate_date)
+            rate = book.rate("USD", inv_ccy, rate_date)
+            quote_ccy = inv_ccy
+            alt_fmt = format_invoice_total_display(to_usd.converted_amount, "USD")
+            source_ccy, source_amt = "USD", to_usd.converted_amount
+    except HTTPException:
+        return {}
+    except Exception:
+        return {}
+    if rate is None or rate <= 0:
+        return {}
+    rate_disp = format(rate.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP), "f")
+    rate_disp = rate_disp.rstrip("0").rstrip(".") if "." in rate_disp else rate_disp
+    return {
+        "fxAltAmountFormatted": alt_fmt,
+        "fxBaseCurrency": "USD",
+        "fxQuoteCurrency": quote_ccy,
+        "fxRate": rate_disp,
+        "fxRateDate": rate_date.isoformat(),
+        "lineSourceCurrency": source_ccy,
+        "lineSourceAmount": source_amt,
+        "lineFxRate": rate,
+    }
+
+
 def build_billed_amount_document_overrides(
     *,
     billed_amount: Decimal,
     currency: str,
     service_description: str | None,
+    fx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Legal-page-only pack + service line + total matching billed amount."""
     total_fmt = format_invoice_total_display(billed_amount, currency)
     desc = (service_description or "").strip()
+    legal: dict[str, Any] = {}
+    if desc:
+        legal["serviceDescriptionLine"] = desc[:2000]
+    if fx:
+        for key in (
+            "fxAltAmountFormatted",
+            "fxBaseCurrency",
+            "fxQuoteCurrency",
+            "fxRate",
+            "fxRateDate",
+        ):
+            val = fx.get(key)
+            if val is not None and str(val).strip() != "":
+                legal[key] = val
     out: dict[str, Any] = {
         "v": 1,
         "includedPageKeys": ["invoice"],
         "cover": {"totalFormatted": total_fmt},
     }
-    if desc:
-        out["legal"] = {"serviceDescriptionLine": desc[:2000]}
+    if legal:
+        out["legal"] = legal
     return out
 
 
@@ -214,6 +291,7 @@ async def _apply_billed_amount_override(
     billed_amount: Decimal,
     service_description: str | None,
     sort_order: int,
+    fx_book: FxRateBook | None = None,
 ) -> int:
     """Zero money on linkage lines; add one manual billed line; set document overrides."""
     await session.flush()
@@ -230,6 +308,20 @@ async def _apply_billed_amount_override(
 
     desc = (service_description or "").strip() or "Legal services"
     billed = _money4(billed_amount)
+    book = fx_book or await load_fx_rate_book(session)
+    issue = inv.issue_date if isinstance(inv.issue_date, date) else None
+    fx = resolve_billed_amount_fx_display(
+        book,
+        billed_amount=billed,
+        currency=inv_ccy,
+        issue_date=issue,
+    )
+    line_kwargs: dict[str, Any] = {}
+    if fx.get("lineSourceCurrency") and fx.get("lineSourceAmount") is not None:
+        line_kwargs["source_currency"] = str(fx["lineSourceCurrency"])
+        line_kwargs["source_amount"] = _money4(Decimal(str(fx["lineSourceAmount"])))
+        if fx.get("lineFxRate") is not None:
+            line_kwargs["fx_rate"] = Decimal(str(fx["lineFxRate"]))
     repo.add_line(
         InvoiceLineItemModel(
             id=str(uuid.uuid4()),
@@ -242,6 +334,7 @@ async def _apply_billed_amount_override(
             line_total=billed,
             time_entry_id=None,
             expense_request_id=None,
+            **line_kwargs,
         )
     )
     inv.document_overrides_json = _serialize_document_overrides(
@@ -249,6 +342,7 @@ async def _apply_billed_amount_override(
             billed_amount=billed,
             currency=inv_ccy,
             service_description=desc,
+            fx=fx or None,
         )
     )
     return sort_order + 1
@@ -295,12 +389,16 @@ async def create_invoice(
 
     # Prefer project currency → explicit request → client currency → USD.
     # Project billing currency is the source of truth for project invoices.
+    # Custom billedAmount may override with an explicit request currency.
     project_ccy = (
         (getattr(proj, "currency", None) or "").strip().upper()[:10] if proj is not None else ""
     )
     client_ccy = (client.currency or "").strip().upper()[:10]
     explicit_ccy = (currency or "").strip().upper()[:10] if currency else ""
-    cur = project_ccy or explicit_ccy or client_ccy or "USD"
+    if billed_amount is not None and explicit_ccy:
+        cur = explicit_ccy
+    else:
+        cur = project_ccy or explicit_ccy or client_ccy or "USD"
     if not cur:
         cur = "USD"
 
@@ -545,6 +643,7 @@ async def create_invoice(
             billed_amount=billed_override,
             service_description=service_description,
             sort_order=sort_order,
+            fx_book=fx_book,
         )
 
     await session.flush()
