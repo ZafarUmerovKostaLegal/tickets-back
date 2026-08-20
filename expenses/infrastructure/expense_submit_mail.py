@@ -870,7 +870,7 @@ async def notify_expense_author_decision(
     to_email: str,
     display_name: str | None,
     expense_id: str,
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected", "revision_required"],
     reject_reason: str | None,
 ) -> None:
 
@@ -895,6 +895,20 @@ async def notify_expense_author_decision(
         subject = f"Заявка {expense_id} утверждена"
         lead = f"Ваша заявка на расход <strong>{safe_id}</strong> <strong>утверждена</strong>."
         plain_lead = f"Ваша заявка на расход {expense_id} утверждена."
+    elif decision == "revision_required":
+        subject = f"Заявка {expense_id} возвращена на доработку"
+        lead = (
+            f"Ваша заявка на расход <strong>{safe_id}</strong> "
+            f"<strong>возвращена на доработку</strong>."
+        )
+        plain_lead = f"Ваша заявка на расход {expense_id} возвращена на доработку."
+        if reject_reason and str(reject_reason).strip():
+            r = html.escape(str(reject_reason).strip())
+            comment_html = (
+                f'<p style="margin:16px 0 0 0;color:#0f172a;font-size:14px;">'
+                f"<strong>Что исправить:</strong> {r}</p>"
+            )
+            plain_lead += f"\n\nЧто исправить: {str(reject_reason).strip()}"
     else:
         subject = f"Заявка {expense_id} отклонена"
         lead = f"Ваша заявка на расход <strong>{safe_id}</strong> <strong>отклонена</strong>."

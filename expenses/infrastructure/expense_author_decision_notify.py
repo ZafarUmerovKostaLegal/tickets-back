@@ -20,7 +20,7 @@ async def _run_author_decision_notification(
     authorization: Optional[str],
     author_user_id: int,
     expense_id: str,
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected", "revision_required"],
     reject_reason: str | None,
 ) -> None:
     if not settings.expense_notify_author_on_decision:
@@ -67,7 +67,7 @@ async def run_author_decision_notification_safe(
     authorization: Optional[str],
     author_user_id: int,
     expense_id: str,
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected", "revision_required"],
     reject_reason: str | None,
 ) -> None:
 

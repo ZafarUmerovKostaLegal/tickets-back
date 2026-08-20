@@ -1062,6 +1062,7 @@ async def revise_expense(
     row.updated_by_user_id = int(user["id"])
     row.updated_at = _utc_now()
     c = body.comment.strip()
+    row.rejection_reason = c
     await repo.add_status_history(
         expense_request_id=row.id,
         from_status=prev,
@@ -1074,11 +1075,19 @@ async def revise_expense(
         action="revision_required",
         field_name="status",
         old_value=prev,
-        new_value="revision_required",
+        new_value=f"revision_required: {c}",
         performed_by_user_id=int(user["id"]),
     )
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
+    await run_author_decision_notification_safe(
+        get_settings(),
+        authorization=authorization,
+        author_user_id=row.created_by_user_id,
+        expense_id=row.id,
+        decision="revision_required",
+        reject_reason=c,
+    )
     return await _detail_response(row, authorization)
 
 
