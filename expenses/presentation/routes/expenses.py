@@ -1103,7 +1103,9 @@ async def pay_expense(
             status_code=400,
             detail="«Возмещено» только для возмещаемых заявок; для невозмещаемых используйте «Не оплачено»",
         )
-    ensure_reimbursement_payment_confirmer(user)
+    payment_method = (row.payment_method or "").strip().lower()
+    if payment_method == "cash":
+        ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     row.status = "paid"
@@ -1137,6 +1139,101 @@ async def pay_expense(
         paid_by_display_name=str(user.get("display_name") or "").strip() or None,
         paid_by_email=str(user.get("email") or "").strip() or None,
     )
+    return await _detail_response(row, authorization)
+
+
+@router.post("/{expense_id}/unpay", response_model=ExpenseRequestDetailOut)
+async def unpay_expense(
+    expense_id: str,
+    body: ReviseBody,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    """paid → approved (ошибка выплаты). Права как у pay."""
+    check_moderate_role(user)
+    repo = ExpenseRepository(session)
+    row = await repo.get_by_id(expense_id, load_children=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    await _ensure_access(row, user)
+    if row.status != "paid":
+        raise HTTPException(status_code=400, detail="Отмена оплаты только для статуса paid")
+    if not row.is_reimbursable:
+        raise HTTPException(status_code=400, detail="Отмена оплаты только для возмещаемых заявок")
+    payment_method = (row.payment_method or "").strip().lower()
+    if payment_method == "cash":
+        ensure_reimbursement_payment_confirmer(user)
+    ensure_not_moderating_own_expense(user, row.created_by_user_id)
+    prev = row.status
+    comment = body.comment.strip()
+    row.status = "approved"
+    row.paid_at = None
+    row.paid_by_user_id = None
+    row.updated_by_user_id = int(user["id"])
+    row.updated_at = _utc_now()
+    await repo.add_status_history(
+        expense_request_id=row.id,
+        from_status=prev,
+        to_status="approved",
+        changed_by_user_id=int(user["id"]),
+        comment=comment,
+    )
+    await repo.add_audit(
+        expense_request_id=row.id,
+        action="unpaid",
+        field_name="status",
+        old_value=prev,
+        new_value=f"approved: {comment}",
+        performed_by_user_id=int(user["id"]),
+    )
+    await session.commit()
+    row = await repo.get_by_id(expense_id, load_children=True)
+    return await _detail_response(row, authorization)
+
+
+@router.post("/{expense_id}/unapprove", response_model=ExpenseRequestDetailOut)
+async def unapprove_expense(
+    expense_id: str,
+    body: ReviseBody,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    """approved → pending_approval (снять согласование)."""
+    check_moderate_role(user)
+    repo = ExpenseRepository(session)
+    row = await repo.get_by_id(expense_id, load_children=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    await _ensure_access(row, user)
+    if row.status != "approved":
+        raise HTTPException(status_code=400, detail="Снять согласование можно только у approved")
+    ensure_not_moderating_own_expense(user, row.created_by_user_id)
+    prev = row.status
+    comment = body.comment.strip()
+    row.status = "pending_approval"
+    row.approved_at = None
+    row.approved_by_user_id = None
+    row.updated_by_user_id = int(user["id"])
+    row.updated_at = _utc_now()
+    await repo.add_status_history(
+        expense_request_id=row.id,
+        from_status=prev,
+        to_status="pending_approval",
+        changed_by_user_id=int(user["id"]),
+        comment=comment,
+    )
+    await repo.add_audit(
+        expense_request_id=row.id,
+        action="unapproved",
+        field_name="status",
+        old_value=prev,
+        new_value=f"pending_approval: {comment}",
+        performed_by_user_id=int(user["id"]),
+    )
+    await session.commit()
+    row = await repo.get_by_id(expense_id, load_children=True)
     return await _detail_response(row, authorization)
 
 
