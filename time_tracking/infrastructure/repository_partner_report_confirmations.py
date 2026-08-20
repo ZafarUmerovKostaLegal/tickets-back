@@ -547,6 +547,30 @@ class PartnerReportConfirmationRepository:
         await self._s.flush()
         return row
 
+    async def get_comment(
+        self, request_id: str, comment_id: str
+    ) -> ReportPartnerConfirmationCommentModel | None:
+        rid = (request_id or "").strip()
+        cid = (comment_id or "").strip()
+        if not rid or not cid:
+            return None
+        q = select(ReportPartnerConfirmationCommentModel).where(
+            ReportPartnerConfirmationCommentModel.id == cid,
+            ReportPartnerConfirmationCommentModel.request_id == rid,
+        )
+        return (await self._s.execute(q)).scalar_one_or_none()
+
+    async def update_comment(
+        self,
+        row: ReportPartnerConfirmationCommentModel,
+        *,
+        text: str,
+    ) -> ReportPartnerConfirmationCommentModel:
+        row.text = text
+        row.updated_at = _now_utc()
+        await self._s.flush()
+        return row
+
     async def comments_summary_by_request_ids(
         self, request_ids: list[str]
     ) -> dict[str, tuple[int, ReportPartnerConfirmationCommentModel | None]]:

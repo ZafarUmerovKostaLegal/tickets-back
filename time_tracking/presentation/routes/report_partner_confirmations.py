@@ -20,6 +20,7 @@ from application.partner_report_confirmation_service import (
     set_partner_confirmation_review_priority,
     submit_partner_report_confirmation,
     submit_partner_report_confirmation_from_preview,
+    update_partner_confirmation_comment,
 )
 from infrastructure.database import get_session
 from presentation.deps import require_bearer_user
@@ -294,6 +295,29 @@ async def partner_report_confirmation_comments_create(
         session,
         viewer,
         rid,
+        text=body.text,
+        authorization=authorization,
+    )
+
+
+@router.patch("/partner-confirmations/{request_id}/comments/{comment_id}")
+async def partner_report_confirmation_comments_update(
+    request_id: str,
+    comment_id: str,
+    body: PartnerConfirmationCommentCreateBody,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    rid = (request_id or "").strip()
+    cid = (comment_id or "").strip()
+    if not rid or not cid:
+        raise HTTPException(status_code=400, detail="request_id and comment_id required")
+    return await update_partner_confirmation_comment(
+        session,
+        viewer,
+        rid,
+        cid,
         text=body.text,
         authorization=authorization,
     )

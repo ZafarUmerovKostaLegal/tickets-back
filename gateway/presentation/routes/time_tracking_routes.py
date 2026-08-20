@@ -1554,6 +1554,21 @@ async def reports_partner_confirmation_comments_create(
     )
 
 
+@router.patch("/reports/partner-confirmations/{request_id}/comments/{comment_id}")
+async def reports_partner_confirmation_comments_update(
+    request_id: str,
+    comment_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_reports_view_role),
+):
+    return await _tt_json(
+        "PATCH",
+        f"/reports/partner-confirmations/{request_id}/comments/{comment_id}",
+        json=body,
+        timeout=30.0,
+    )
+
+
 @router.get("/reports/time/{group_by}")
 async def reports_time(
     group_by: str,

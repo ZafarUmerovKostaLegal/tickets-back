@@ -136,11 +136,13 @@ async def _reconcile_all_completable_pending(
 
 
 def _comment_to_out(c) -> dict:
+    updated = getattr(c, "updated_at", None)
     return {
         "id": c.id,
         "authUserId": int(c.auth_user_id),
         "text": c.text,
         "createdAt": c.created_at.isoformat(),
+        "updatedAt": updated.isoformat() if updated is not None else None,
     }
 
 
@@ -858,6 +860,41 @@ async def create_partner_confirmation_comment(
         request_id=rid, auth_user_id=vid, text=body_text
     )
     await session.commit()
+    return _comment_to_out(row)
+
+
+async def update_partner_confirmation_comment(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    comment_id: str,
+    *,
+    text: str,
+    authorization: str | None,
+) -> dict:
+    rid = (request_id or "").strip()
+    cid = (comment_id or "").strip()
+    if not rid or not cid:
+        raise HTTPException(status_code=400, detail="request_id and comment_id required")
+    body_text = _normalize_comment_text(text)
+    vid = _viewer_id(viewer)
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    if not await _viewer_can_access_confirmation_request(
+        session, viewer, req, authorization=authorization
+    ):
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    _ensure_commentable_request_status(getattr(req, "status", None))
+    row = await conf_repo.get_comment(rid, cid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Комментарий не найден")
+    if int(row.auth_user_id) != vid and not _viewer_can_see_all_confirmations(viewer):
+        raise HTTPException(status_code=403, detail="Можно редактировать только свой комментарий")
+    row = await conf_repo.update_comment(row, text=body_text)
+    await session.commit()
+    invalidate_partner_confirmation_read_caches()
     return _comment_to_out(row)
 
 
