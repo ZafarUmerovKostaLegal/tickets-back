@@ -19,6 +19,7 @@ from infrastructure.auth_lookup import AuthUser
 from infrastructure.config import get_settings
 from infrastructure.models import (
     LEAVE_STATUS_APPROVED,
+    LEAVE_STATUS_CANCELLED,
     LEAVE_STATUS_DECLINED,
     LEAVE_STATUS_PENDING,
     AbsenceDay,
@@ -233,6 +234,47 @@ async def _materialize_absence_days(
             )
         cur = cur + timedelta(days=1)
     await session.flush()
+
+
+WITHDRAW_REASON = "Отозвана сотрудником"
+CANCEL_AFTER_APPROVE_REASON = "Отменена сотрудником после согласования"
+
+
+async def clear_absence_days(session: AsyncSession, req: LeaveRequest) -> None:
+    await session.execute(
+        delete(AbsenceDay).where(AbsenceDay.leave_request_id == req.id)
+    )
+    await session.flush()
+
+
+async def cancel_leave_request(
+    session: AsyncSession,
+    req: LeaveRequest,
+    *,
+    cancelled_by_user_id: int,
+    reason: str | None,
+) -> LeaveRequest:
+    """Отзыв pending-заявки или отмена уже одобренной.
+
+    У одобренной заявки дни уже материализованы в графике — их нужно убрать,
+    иначе отсутствие останется висеть в календаре после отмены.
+    """
+    if req.status not in (LEAVE_STATUS_PENDING, LEAVE_STATUS_APPROVED):
+        raise ValueError("Отменить можно только заявку на рассмотрении или одобренную")
+    was_approved = req.status == LEAVE_STATUS_APPROVED
+    now = _utc_now()
+    req.status = LEAVE_STATUS_CANCELLED
+    req.decision_at = now
+    req.decision_reason = (reason or "").strip()[:2000] or (
+        CANCEL_AFTER_APPROVE_REASON if was_approved else WITHDRAW_REASON
+    )
+    req.decided_by_user_id = int(cancelled_by_user_id)
+    req.updated_at = now
+    session.add(req)
+    if was_approved:
+        await clear_absence_days(session, req)
+    await session.flush()
+    return req
 
 
 async def cleanup_pdf(req: LeaveRequest) -> None:

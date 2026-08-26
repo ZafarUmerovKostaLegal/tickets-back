@@ -18,7 +18,9 @@ from application.kind_legend import (
 from backend_common.media_path import safe_media_path
 from application.leave_request_service import (
     apply_decision,
+    cancel_leave_request,
     create_leave_request,
+    delete_leave_request,
     render_and_attach_pdf,
 )
 from application.vacation_balance import get_vacation_balance
@@ -26,7 +28,11 @@ from infrastructure.auth_lookup import AuthUser, get_me, get_user_public, list_p
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.email_action_token import verify_email_action_token
-from infrastructure.email_send import send_decision_to_employee, send_leave_request_to_partner
+from infrastructure.email_send import (
+    send_cancellation_to_partner,
+    send_decision_to_employee,
+    send_leave_request_to_partner,
+)
 from infrastructure.models import (
     LEAVE_STATUS_APPROVED,
     LEAVE_STATUS_CANCELLED,
@@ -143,6 +149,12 @@ class CreateLeaveRequestBody(BaseModel):
 
 class DecisionBody(BaseModel):
     decision_reason: str | None = Field(None, max_length=2000, alias="decisionReason")
+
+
+class CancelBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: str | None = Field(None, max_length=2000)
 
 
 def _to_out(req: LeaveRequest) -> LeaveRequestOut:
@@ -486,21 +498,81 @@ async def decline_request(
     return _to_out(req)
 
 
+@router.post("/leave-requests/{request_id}/withdraw", response_model=LeaveRequestOut)
+async def withdraw_request(
+    request_id: int,
+    body: CancelBody | None = None,
+    employee: AuthUser = Depends(get_current_employee),
+    session: AsyncSession = Depends(get_session),
+):
+    """Отзыв заявки автором до решения партнёра."""
+    req = await _load_request(session, request_id)
+    if req.employee_user_id != employee.id:
+        raise HTTPException(status_code=403, detail="Отозвать можно только свою заявку")
+    if req.status != LEAVE_STATUS_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail="Отозвать можно только заявку на рассмотрении",
+        )
+    req = await cancel_leave_request(
+        session,
+        req,
+        cancelled_by_user_id=employee.id,
+        reason=body.reason if body else None,
+    )
+    await session.commit()
+    await send_cancellation_to_partner(req, before_decision=True)
+    return _to_out(req)
+
+
+@router.post("/leave-requests/{request_id}/cancel", response_model=LeaveRequestOut)
+async def cancel_approved_request(
+    request_id: int,
+    body: CancelBody | None = None,
+    employee: AuthUser = Depends(get_current_employee),
+    session: AsyncSession = Depends(get_session),
+):
+    """Отмена уже согласованного отсутствия: дни убираются из графика."""
+    req = await _load_request(session, request_id)
+    if req.employee_user_id != employee.id:
+        raise HTTPException(status_code=403, detail="Отменить можно только свою заявку")
+    if req.status == LEAVE_STATUS_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail="Заявка ещё на рассмотрении — её можно отозвать",
+        )
+    if req.status != LEAVE_STATUS_APPROVED:
+        raise HTTPException(
+            status_code=409,
+            detail="Отменить можно только одобренную заявку",
+        )
+    req = await cancel_leave_request(
+        session,
+        req,
+        cancelled_by_user_id=employee.id,
+        reason=body.reason if body else None,
+    )
+    await session.commit()
+    await send_cancellation_to_partner(req, before_decision=False)
+    return _to_out(req)
+
+
 @router.delete("/leave-requests/{request_id}", status_code=204)
-async def cancel_request(
+async def delete_request(
     request_id: int,
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
+    """Полное удаление заявки автором: запись, её PDF и дни в графике."""
     req = await _load_request(session, request_id)
     if req.employee_user_id != employee.id:
-        raise HTTPException(status_code=403, detail="Отменить можно только свою заявку")
-    if req.status != LEAVE_STATUS_PENDING:
-        raise HTTPException(status_code=409, detail="Можно отменить только pending-заявку")
-    req.status = LEAVE_STATUS_CANCELLED
-    req.decision_at = datetime.now(timezone.utc)
-    req.decision_reason = "Отменена сотрудником"
-    session.add(req)
+        raise HTTPException(status_code=403, detail="Удалить можно только свою заявку")
+    if req.status not in (LEAVE_STATUS_CANCELLED, LEAVE_STATUS_DECLINED):
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала отзовите или отмените заявку, потом её можно удалить",
+        )
+    await delete_leave_request(session, req)
     await session.commit()
 
 
