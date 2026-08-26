@@ -541,9 +541,10 @@ async def _decide(
 ) -> LeaveRequestOut:
     """Решение по заявке: ступень определяется её текущим статусом.
 
-    pending → решает курирующий партнёр, согласие уводит заявку на финальное
-    подтверждение управляющего партнёра; pending_final → решает управляющий
-    партнёр, и только его согласие открывает дни в графике.
+    pending → решает курирующий партнёр. Если это сам управляющий партнёр,
+    согласие сразу утверждает заявку; иначе заявка уходит на pending_final.
+    pending_final → решает управляющий партнёр, и только его согласие
+    открывает дни в графике.
     """
     req = await _load_request(session, request_id)
     if req.status == LEAVE_STATUS_PENDING:
@@ -691,11 +692,16 @@ async def delete_request(
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
-    """Полное удаление заявки автором: запись, её PDF и дни в графике."""
+    """Полное удаление: запись, PDF и дни в графике.
+
+    Автор может удалить только отозванную или отклонённую заявку.
+    Партнёр (и управляющий партнёр) может удалить любую заявку.
+    """
     req = await _load_request(session, request_id)
-    if req.employee_user_id != employee.id:
+    partner = _is_partner(employee) or _is_managing_partner(employee)
+    if req.employee_user_id != employee.id and not partner:
         raise HTTPException(status_code=403, detail="Удалить можно только свою заявку")
-    if req.status not in (LEAVE_STATUS_CANCELLED, LEAVE_STATUS_DECLINED):
+    if not partner and req.status not in (LEAVE_STATUS_CANCELLED, LEAVE_STATUS_DECLINED):
         raise HTTPException(
             status_code=409,
             detail="Сначала отзовите или отмените заявку, потом её можно удалить",

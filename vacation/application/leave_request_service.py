@@ -16,7 +16,7 @@ from application.vacation_balance import (
 )
 from backend_common.media_path import safe_media_path
 from infrastructure.auth_lookup import AuthUser
-from infrastructure.config import get_settings
+from infrastructure.config import get_settings, is_managing_partner_email
 from infrastructure.models import (
     LEAVE_STATUS_APPROVED,
     LEAVE_STATUS_CANCELLED,
@@ -199,18 +199,34 @@ async def apply_partner_decision(
 ) -> LeaveRequest:
     """Первая ступень: решение курирующего партнёра.
 
-    Согласие не открывает отпуск сразу — заявка уходит на обязательное
-    финальное подтверждение управляющему партнёру, поэтому дни в графике
-    здесь не создаются.
+    Если выбранный партнёр — сам управляющий, промежуточной ступени нет:
+    согласие сразу утверждает заявку и открывает дни в графике.
+    Иначе согласие только уводит заявку на обязательное финальное
+    подтверждение, без записей в графике.
     """
     if req.status != LEAVE_STATUS_PENDING:
         return req
     now = _utc_now()
-    req.status = LEAVE_STATUS_PENDING_FINAL if approve else LEAVE_STATUS_DECLINED
+    reason = (decision_reason or "").strip()[:2000] or None
     req.decision_at = now
-    req.decision_reason = (decision_reason or "").strip()[:2000] or None
+    req.decision_reason = reason
     req.decided_by_user_id = int(decided_by_user_id)
     req.updated_at = now
+    if not approve:
+        req.status = LEAVE_STATUS_DECLINED
+        session.add(req)
+        await session.flush()
+        return req
+    if is_managing_partner_email(req.partner_email):
+        req.status = LEAVE_STATUS_APPROVED
+        req.final_decision_at = now
+        req.final_decision_reason = reason
+        req.final_decided_by_user_id = int(decided_by_user_id)
+        session.add(req)
+        await _materialize_absence_days(session, req)
+        await session.flush()
+        return req
+    req.status = LEAVE_STATUS_PENDING_FINAL
     session.add(req)
     await session.flush()
     return req

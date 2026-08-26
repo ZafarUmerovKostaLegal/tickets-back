@@ -111,3 +111,10 @@ def resolve_database_url(settings: Settings) -> str:
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def is_managing_partner_email(email: str | None) -> bool:
+    """Совпадает ли адрес с управляющим партнёром (вторая ступень / адресат PDF)."""
+    configured = (get_settings().managing_partner_email or "").strip().casefold()
+    mine = (email or "").strip().casefold()
+    return bool(configured and mine and configured == mine)

@@ -93,6 +93,49 @@ async def test_partner_approval_waits_for_managing_partner(session: AsyncSession
 
 
 @pytest.mark.asyncio
+async def test_managing_partner_as_supervising_approves_immediately(session: AsyncSession):
+    req = await _make_request(session)
+    req.partner_email = "aakhmadjonov@kostalegal.com"
+    req.partner_full_name = "Azizbek Akhmadjonov"
+    req.partner_user_id = MANAGING_PARTNER_ID
+    await session.flush()
+
+    out = await apply_partner_decision(
+        session,
+        req,
+        decided_by_user_id=MANAGING_PARTNER_ID,
+        approve=True,
+        decision_reason="Ок",
+    )
+
+    assert out.status == LEAVE_STATUS_APPROVED
+    assert out.final_decision_at is not None
+    assert out.final_decided_by_user_id == MANAGING_PARTNER_ID
+    assert out.decision_reason == "Ок"
+    assert out.final_decision_reason == "Ок"
+    assert len(await _absence_days(session, req.id)) == 3
+
+
+@pytest.mark.asyncio
+async def test_managing_partner_as_supervising_decline_annuls(session: AsyncSession):
+    req = await _make_request(session)
+    req.partner_email = "aakhmadjonov@kostalegal.com"
+    await session.flush()
+
+    out = await apply_partner_decision(
+        session,
+        req,
+        decided_by_user_id=MANAGING_PARTNER_ID,
+        approve=False,
+        decision_reason="Нет",
+    )
+
+    assert out.status == LEAVE_STATUS_DECLINED
+    assert out.final_decision_at is None
+    assert await _absence_days(session, req.id) == []
+
+
+@pytest.mark.asyncio
 async def test_partner_decline_annuls_request(session: AsyncSession):
     req = await _make_request(session)
 

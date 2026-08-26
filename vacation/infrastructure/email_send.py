@@ -11,7 +11,7 @@ from urllib.parse import quote
 import aiosmtplib
 
 from application.kind_legend import KIND_LABELS_RU
-from infrastructure.config import Settings, get_settings
+from infrastructure.config import Settings, get_settings, is_managing_partner_email
 from infrastructure.email_action_token import STAGE_FINAL, STAGE_PARTNER, sign_email_action_token
 from infrastructure.models import LEAVE_STATUS_APPROVED, LeaveRequest
 
@@ -277,14 +277,24 @@ async def _send_for_decision(
 
 async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> bool:
     """Первая ступень: заявка уходит курирующему партнёру, выбранному сотрудником."""
+    direct_final = is_managing_partner_email(req.partner_email)
     return await _send_for_decision(
         req,
         pdf_bytes,
         to_email=req.partner_email or "",
         stage=STAGE_PARTNER,
         subject=f"Заявка на отсутствие #{req.id} — {KIND_LABELS_RU.get(req.kind_code, '—')}",
-        eyebrow="Согласование отсутствия · курирующий партнёр",
-        note=None,
+        eyebrow=(
+            "Согласование отсутствия · управляющий партнёр"
+            if direct_final
+            else "Согласование отсутствия · курирующий партнёр"
+        ),
+        note=(
+            "Вас выбрали курирующим партнёром. Вы же управляющий партнёр — "
+            "ваше решение сразу финальное, после утверждения дни попадут в график."
+            if direct_final
+            else None
+        ),
     )
 
 
