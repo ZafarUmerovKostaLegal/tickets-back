@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     mail_from: str = Field(default="", validation_alias="VACATION_MAIL_FROM")
     mail_bcc: str = Field(default="", validation_alias="VACATION_MAIL_BCC")
 
+    # Управляющий партнёр: обязательная вторая ступень согласования заявок и
+    # адресат заявления в PDF.
+    managing_partner_email: str = Field(
+        default="aakhmadjonov@kostalegal.com",
+        validation_alias="VACATION_MANAGING_PARTNER_EMAIL",
+    )
+    managing_partner_name: str = Field(
+        default="Azizbek Akhmadjonov",
+        validation_alias="VACATION_MANAGING_PARTNER_NAME",
+    )
+
     email_action_secret: str = Field(default="", validation_alias="VACATION_EMAIL_ACTION_SECRET")
     email_action_ttl_seconds: int = Field(default=14 * 24 * 3600, validation_alias="VACATION_EMAIL_ACTION_TTL_SECONDS")
     email_action_confirm_step: bool = Field(default=True, validation_alias="VACATION_EMAIL_ACTION_CONFIRM_STEP")

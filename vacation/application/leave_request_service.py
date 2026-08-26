@@ -22,6 +22,7 @@ from infrastructure.models import (
     LEAVE_STATUS_CANCELLED,
     LEAVE_STATUS_DECLINED,
     LEAVE_STATUS_PENDING,
+    LEAVE_STATUS_PENDING_FINAL,
     AbsenceDay,
     LeaveRequest,
     ScheduleEmployee,
@@ -30,6 +31,8 @@ from infrastructure.pdf_generation import render_leave_request_pdf
 
 _log = logging.getLogger("vacation.leave_request")
 _ANNUAL_KIND = KIND_BY_KEY["annual_vacation"]
+# Версия шаблона заявления. 1 — в шапке всегда управляющий партнёр фирмы.
+LEAVE_PDF_DOC_VERSION = 1
 
 
 def _utc_now() -> datetime:
@@ -164,6 +167,7 @@ async def render_and_attach_pdf(
     try:
         key = save_pdf_to_media(req, pdf_bytes)
         req.pdf_storage_key = key
+        req.pdf_doc_version = LEAVE_PDF_DOC_VERSION
         req.updated_at = _utc_now()
         session.add(req)
         await session.flush()
@@ -173,7 +177,19 @@ async def render_and_attach_pdf(
     return pdf_bytes
 
 
-async def apply_decision(
+async def ensure_current_pdf(session: AsyncSession, req: LeaveRequest) -> bool:
+    """Пересобирает устаревший документ заявки; True — если PDF перегенерирован.
+
+    Нужно для заявок, чьи PDF были сохранены до того, как в шапке заявления
+    стали печатать управляющего партнёра.
+    """
+    if (req.pdf_doc_version or 0) >= LEAVE_PDF_DOC_VERSION:
+        return False
+    await render_and_attach_pdf(session, req)
+    return True
+
+
+async def apply_partner_decision(
     session: AsyncSession,
     req: LeaveRequest,
     *,
@@ -181,13 +197,41 @@ async def apply_decision(
     approve: bool,
     decision_reason: str | None,
 ) -> LeaveRequest:
+    """Первая ступень: решение курирующего партнёра.
+
+    Согласие не открывает отпуск сразу — заявка уходит на обязательное
+    финальное подтверждение управляющему партнёру, поэтому дни в графике
+    здесь не создаются.
+    """
     if req.status != LEAVE_STATUS_PENDING:
         return req
     now = _utc_now()
-    req.status = LEAVE_STATUS_APPROVED if approve else LEAVE_STATUS_DECLINED
+    req.status = LEAVE_STATUS_PENDING_FINAL if approve else LEAVE_STATUS_DECLINED
     req.decision_at = now
     req.decision_reason = (decision_reason or "").strip()[:2000] or None
     req.decided_by_user_id = int(decided_by_user_id)
+    req.updated_at = now
+    session.add(req)
+    await session.flush()
+    return req
+
+
+async def apply_final_decision(
+    session: AsyncSession,
+    req: LeaveRequest,
+    *,
+    decided_by_user_id: int | None,
+    approve: bool,
+    decision_reason: str | None,
+) -> LeaveRequest:
+    """Вторая ступень: решение управляющего партнёра, после него дни идут в график."""
+    if req.status != LEAVE_STATUS_PENDING_FINAL:
+        return req
+    now = _utc_now()
+    req.status = LEAVE_STATUS_APPROVED if approve else LEAVE_STATUS_DECLINED
+    req.final_decision_at = now
+    req.final_decision_reason = (decision_reason or "").strip()[:2000] or None
+    req.final_decided_by_user_id = int(decided_by_user_id) if decided_by_user_id is not None else None
     req.updated_at = now
     session.add(req)
     if approve:
@@ -259,8 +303,8 @@ async def cancel_leave_request(
     У одобренной заявки дни уже материализованы в графике — их нужно убрать,
     иначе отсутствие останется висеть в календаре после отмены.
     """
-    if req.status not in (LEAVE_STATUS_PENDING, LEAVE_STATUS_APPROVED):
-        raise ValueError("Отменить можно только заявку на рассмотрении или одобренную")
+    if req.status not in (LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL, LEAVE_STATUS_APPROVED):
+        raise ValueError("Отменить можно только заявку на согласовании или одобренную")
     was_approved = req.status == LEAVE_STATUS_APPROVED
     now = _utc_now()
     req.status = LEAVE_STATUS_CANCELLED

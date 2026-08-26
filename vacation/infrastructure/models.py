@@ -16,6 +16,8 @@ from infrastructure.orm_base import Base
 
 
 LEAVE_STATUS_PENDING = "pending"
+# Курирующий партнёр согласовал, ждём финального решения управляющего партнёра.
+LEAVE_STATUS_PENDING_FINAL = "pending_final"
 LEAVE_STATUS_APPROVED = "approved"
 LEAVE_STATUS_DECLINED = "declined"
 LEAVE_STATUS_CANCELLED = "cancelled"
@@ -99,11 +101,18 @@ class LeaveRequest(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default=LEAVE_STATUS_PENDING, index=True)
+    # Решение курирующего партнёра (первая ступень).
     decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Решение управляющего партнёра (вторая, обязательная ступень).
+    final_decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    final_decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_decided_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     pdf_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Версия шаблона заявления, по которой собран сохранённый PDF.
+    pdf_doc_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
     email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

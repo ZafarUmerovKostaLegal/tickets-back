@@ -8,7 +8,8 @@ from application.kind_legend import KIND_BY_KEY
 from application.leave_request_service import (
     CANCEL_AFTER_APPROVE_REASON,
     WITHDRAW_REASON,
-    apply_decision,
+    apply_final_decision,
+    apply_partner_decision,
     cancel_leave_request,
     delete_leave_request,
 )
@@ -24,6 +25,7 @@ from infrastructure.orm_base import Base
 
 EMPLOYEE_ID = 42
 PARTNER_ID = 7
+MANAGING_PARTNER_ID = 3
 
 
 @pytest.fixture
@@ -59,6 +61,24 @@ async def _make_request(session: AsyncSession, *, status: str = LEAVE_STATUS_PEN
     return req
 
 
+async def _approve_fully(session: AsyncSession, req: LeaveRequest) -> LeaveRequest:
+    """Проводит заявку через обе ступени согласования."""
+    await apply_partner_decision(
+        session,
+        req,
+        decided_by_user_id=PARTNER_ID,
+        approve=True,
+        decision_reason=None,
+    )
+    return await apply_final_decision(
+        session,
+        req,
+        decided_by_user_id=MANAGING_PARTNER_ID,
+        approve=True,
+        decision_reason=None,
+    )
+
+
 async def _absence_days(session: AsyncSession, request_id: int) -> list[AbsenceDay]:
     rows = await session.execute(
         select(AbsenceDay).where(AbsenceDay.leave_request_id == request_id)
@@ -81,13 +101,7 @@ async def test_withdraw_pending_marks_cancelled(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_cancel_approved_removes_schedule_days(session: AsyncSession):
     req = await _make_request(session)
-    await apply_decision(
-        session,
-        req,
-        decided_by_user_id=PARTNER_ID,
-        approve=True,
-        decision_reason=None,
-    )
+    await _approve_fully(session, req)
     assert req.status == LEAVE_STATUS_APPROVED
     assert len(await _absence_days(session, req.id)) == 3
 
@@ -123,13 +137,7 @@ async def test_cancel_rejects_final_status(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_delete_removes_request_and_days(session: AsyncSession):
     req = await _make_request(session)
-    await apply_decision(
-        session,
-        req,
-        decided_by_user_id=PARTNER_ID,
-        approve=True,
-        decision_reason=None,
-    )
+    await _approve_fully(session, req)
     request_id = req.id
 
     await delete_leave_request(session, req)

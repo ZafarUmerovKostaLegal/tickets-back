@@ -26,12 +26,15 @@ from infrastructure.config import get_settings
 from infrastructure.models import (
     LEAVE_STATUS_APPROVED,
     LEAVE_STATUS_PENDING,
+    LEAVE_STATUS_PENDING_FINAL,
     AbsenceDay,
     LeaveRequest,
     ScheduleEmployee,
 )
 
 ANNUAL_VACATION_KIND = KIND_BY_KEY["annual_vacation"]  # 1
+# Обе ступени согласования держат дни в резерве до финального решения.
+IN_PROGRESS_STATUSES = (LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL)
 
 
 def count_calendar_days_inclusive(d_from: date, d_to: date) -> int:
@@ -228,7 +231,7 @@ async def get_vacation_balance(
         session,
         employee_user_id=employee_user_id,
         year=year,
-        statuses=(LEAVE_STATUS_PENDING,),
+        statuses=IN_PROGRESS_STATUSES,
     )
 
     remaining = max(0, entitled - used - pending)
@@ -244,7 +247,7 @@ async def get_vacation_balance(
         employee_user_id=employee_user_id,
         year=year,
         min_continuous=min_cont,
-        statuses=(LEAVE_STATUS_APPROVED, LEAVE_STATUS_PENDING),
+        statuses=(LEAVE_STATUS_APPROVED, *IN_PROGRESS_STATUSES),
     )
     # Manual days (no leave request) count toward flexible pool until 14 is satisfied.
     if not continuous_ok:

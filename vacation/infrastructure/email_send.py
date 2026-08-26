@@ -12,8 +12,8 @@ import aiosmtplib
 
 from application.kind_legend import KIND_LABELS_RU
 from infrastructure.config import Settings, get_settings
-from infrastructure.email_action_token import sign_email_action_token
-from infrastructure.models import LeaveRequest
+from infrastructure.email_action_token import STAGE_FINAL, STAGE_PARTNER, sign_email_action_token
+from infrastructure.models import LEAVE_STATUS_APPROVED, LeaveRequest
 
 _log = logging.getLogger("vacation.email_send")
 
@@ -50,15 +50,20 @@ def email_action_ready(settings: Settings) -> bool:
     return not email_action_missing(settings)
 
 
-def _action_urls(settings: Settings, request_id: int) -> tuple[str | None, str | None]:
+def _action_urls(
+    settings: Settings,
+    request_id: int,
+    *,
+    stage: str = STAGE_PARTNER,
+) -> tuple[str | None, str | None]:
     if email_action_missing(settings):
         return None, None
     sec = settings.email_action_secret.strip()
     base_api = settings.public_api_base_url.strip().rstrip("/")
     try:
         ttl = int(settings.email_action_ttl_seconds)
-        t_ap = sign_email_action_token(sec, request_id=request_id, action="approve", ttl_seconds=ttl)
-        t_rj = sign_email_action_token(sec, request_id=request_id, action="decline", ttl_seconds=ttl)
+        t_ap = sign_email_action_token(sec, request_id=request_id, action="approve", ttl_seconds=ttl, stage=stage)
+        t_rj = sign_email_action_token(sec, request_id=request_id, action="decline", ttl_seconds=ttl, stage=stage)
     except ValueError as exc:
         _log.warning("email action token failed: %s", exc)
         return None, None
@@ -82,7 +87,15 @@ def _button_html(href: str, label: str, bg: str) -> str:
     )
 
 
-def _build_html(req: LeaveRequest, approve_url: str | None, decline_url: str | None, open_link: str | None) -> str:
+def _build_html(
+    req: LeaveRequest,
+    approve_url: str | None,
+    decline_url: str | None,
+    open_link: str | None,
+    *,
+    eyebrow: str = "Согласование отсутствия",
+    note: str | None = None,
+) -> str:
     kind_ru = KIND_LABELS_RU.get(req.kind_code, "—")
     employee = html.escape(req.employee_full_name or "—")
     if req.employee_email:
@@ -93,6 +106,12 @@ def _build_html(req: LeaveRequest, approve_url: str | None, decline_url: str | N
         f'<p style="margin:8px 0 0 0;font-size:13px;color:#475569;">Комментарий сотрудника: '
         f'{html.escape(reason)}</p>'
         if reason
+        else ""
+    )
+    note_html = (
+        f'<p style="margin:0 0 10px 0;padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;'
+        f'border-radius:10px;font-size:13px;color:#1e3a8a;">{html.escape(note)}</p>'
+        if note
         else ""
     )
     actions = ""
@@ -130,8 +149,9 @@ def _build_html(req: LeaveRequest, approve_url: str | None, decline_url: str | N
   <tr><td align="center">
     <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;padding:24px;">
       <tr><td>
-        <p style="margin:0 0 6px 0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">Согласование отсутствия</p>
+        <p style="margin:0 0 6px 0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">{html.escape(eyebrow)}</p>
         <h1 style="margin:0 0 12px 0;font-size:20px;color:#0f172a;">{html.escape(kind_ru)}</h1>
+        {note_html}
         <p style="margin:0 0 6px 0;font-size:14px;color:#0f172a;"><b>Сотрудник:</b> {employee}</p>
         <p style="margin:0 0 6px 0;font-size:14px;color:#0f172a;"><b>Период:</b> {period}</p>
         {reason_html}
@@ -147,10 +167,17 @@ def _build_html(req: LeaveRequest, approve_url: str | None, decline_url: str | N
 </body></html>"""
 
 
-def _plain_text(req: LeaveRequest, approve_url: str | None, decline_url: str | None) -> str:
+def _plain_text(
+    req: LeaveRequest,
+    approve_url: str | None,
+    decline_url: str | None,
+    *,
+    note: str | None = None,
+) -> str:
     kind_ru = KIND_LABELS_RU.get(req.kind_code, "—")
     lines = [
         f"Заявка на отсутствие #{req.id}",
+        *([note] if note else []),
         f"Сотрудник: {req.employee_full_name or '—'} <{req.employee_email or ''}>",
         f"Вид: {kind_ru}",
         f"Период: {req.date_from.isoformat()} — {req.date_to.isoformat()} ({req.days_count} дн.)",
@@ -163,7 +190,16 @@ def _plain_text(req: LeaveRequest, approve_url: str | None, decline_url: str | N
     return "\n".join(lines)
 
 
-async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> bool:
+async def _send_for_decision(
+    req: LeaveRequest,
+    pdf_bytes: bytes | None,
+    *,
+    to_email: str,
+    stage: str,
+    subject: str,
+    eyebrow: str,
+    note: str | None,
+) -> bool:
     settings = get_settings()
     if not smtp_ready(settings):
         _log.warning(
@@ -172,11 +208,12 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
             req.id,
         )
         return False
-    if not (req.partner_email or "").strip():
-        _log.warning("vacation mail: у партнёра #%s нет email", req.partner_user_id)
+    recipient = (to_email or "").strip()
+    if not recipient:
+        _log.warning("vacation mail: нет адресата для ступени %s, request_id=%s", stage, req.id)
         return False
 
-    approve_url, decline_url = _action_urls(settings, req.id)
+    approve_url, decline_url = _action_urls(settings, req.id, stage=stage)
     if not approve_url or not decline_url:
         missing = email_action_missing(settings)
         _log.warning(
@@ -189,9 +226,8 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
     if base_front:
         open_link = f"{base_front}/vacations/requests/{req.id}"
 
-    subject = f"Заявка на отсутствие #{req.id} — {KIND_LABELS_RU.get(req.kind_code, '—')}"
-    html_body = _build_html(req, approve_url, decline_url, open_link)
-    text_body = _plain_text(req, approve_url, decline_url)
+    html_body = _build_html(req, approve_url, decline_url, open_link, eyebrow=eyebrow, note=note)
+    text_body = _plain_text(req, approve_url, decline_url, note=note)
 
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
@@ -200,7 +236,7 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
         _log.warning("vacation mail: пустой отправитель — задайте VACATION_MAIL_FROM или VACATION_SMTP_USER")
         return False
     msg["From"] = from_addr
-    to_list = [req.partner_email.strip()]
+    to_list = [recipient]
     bcc_list = [x.strip() for x in (settings.mail_bcc or "").split(",") if x.strip()]
     msg["To"] = ", ".join(to_list)
     if bcc_list:
@@ -211,15 +247,16 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
     alt.attach(MIMEText(html_body, "html", "utf-8"))
     msg.attach(alt)
 
-    pdf_part = MIMEBase("application", "pdf")
-    pdf_part.set_payload(pdf_bytes)
-    encoders.encode_base64(pdf_part)
-    pdf_part.add_header(
-        "Content-Disposition",
-        "attachment",
-        filename=f"leave_request_{req.id}.pdf",
-    )
-    msg.attach(pdf_part)
+    if pdf_bytes:
+        pdf_part = MIMEBase("application", "pdf")
+        pdf_part.set_payload(pdf_bytes)
+        encoders.encode_base64(pdf_part)
+        pdf_part.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=f"leave_request_{req.id}.pdf",
+        )
+        msg.attach(pdf_part)
 
     try:
         await aiosmtplib.send(
@@ -234,14 +271,122 @@ async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> 
     except Exception as exc:
         _log.error("vacation mail: ошибка SMTP request_id=%s: %r", req.id, exc)
         return False
-    _log.info("vacation mail sent: request_id=%s to=%s", req.id, to_list + bcc_list)
+    _log.info("vacation mail sent: request_id=%s stage=%s to=%s", req.id, stage, to_list + bcc_list)
     return True
 
 
-async def send_cancellation_to_partner(req: LeaveRequest, *, before_decision: bool) -> bool:
-    """Сообщает партнёру, что сотрудник отозвал заявку или отменил согласованное отсутствие."""
+async def send_leave_request_to_partner(req: LeaveRequest, pdf_bytes: bytes) -> bool:
+    """Первая ступень: заявка уходит курирующему партнёру, выбранному сотрудником."""
+    return await _send_for_decision(
+        req,
+        pdf_bytes,
+        to_email=req.partner_email or "",
+        stage=STAGE_PARTNER,
+        subject=f"Заявка на отсутствие #{req.id} — {KIND_LABELS_RU.get(req.kind_code, '—')}",
+        eyebrow="Согласование отсутствия · курирующий партнёр",
+        note=None,
+    )
+
+
+async def send_leave_request_to_managing_partner(req: LeaveRequest, pdf_bytes: bytes | None) -> bool:
+    """Вторая ступень: обязательное финальное подтверждение управляющего партнёра."""
     settings = get_settings()
-    if not smtp_ready(settings) or not (req.partner_email or "").strip():
+    partner = (req.partner_full_name or "").strip() or "Курирующий партнёр"
+    return await _send_for_decision(
+        req,
+        pdf_bytes,
+        to_email=settings.managing_partner_email,
+        stage=STAGE_FINAL,
+        subject=f"Финальное согласование заявки #{req.id} — {KIND_LABELS_RU.get(req.kind_code, '—')}",
+        eyebrow="Согласование отсутствия · управляющий партнёр",
+        note=(
+            f"{partner} согласовал заявку. Требуется ваше финальное подтверждение — "
+            "только после него дни попадут в график отсутствий."
+        ),
+    )
+
+
+async def send_partner_approval_to_employee(req: LeaveRequest) -> bool:
+    """Сообщает сотруднику, что первая ступень пройдена и заявка ушла управляющему партнёру."""
+    settings = get_settings()
+    if not smtp_ready(settings) or not (req.employee_email or "").strip():
+        return False
+    kind_ru = KIND_LABELS_RU.get(req.kind_code, "—")
+    partner = (req.partner_full_name or "").strip() or "Курирующий партнёр"
+    managing = (settings.managing_partner_name or "").strip() or "управляющий партнёр"
+    period_iso = f"{req.date_from.isoformat()} — {req.date_to.isoformat()}"
+    period_ru = f"{req.date_from.strftime('%d.%m.%Y')} — {req.date_to.strftime('%d.%m.%Y')}"
+    subject = f"Заявка #{req.id} согласована курирующим партнёром"
+    text_body = (
+        f"{partner} согласовал вашу заявку #{req.id} ({kind_ru}) на период {period_iso}.\n"
+        f"Заявка отправлена на финальное подтверждение: {managing}.\n\n— Kosta Legal · vacation"
+    )
+    html_body = (
+        f"<p><b>{html.escape(partner)}</b> согласовал вашу заявку <b>#{req.id}</b> "
+        f"({html.escape(kind_ru)}) на период {period_ru}.</p>"
+        f"<p>Заявка отправлена на финальное подтверждение: <b>{html.escape(managing)}</b>.</p>"
+    )
+    return await _send_simple(
+        settings,
+        to_email=req.employee_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        log_scope="stage mail",
+        request_id=req.id,
+    )
+
+
+async def _send_simple(
+    settings: Settings,
+    *,
+    to_email: str,
+    subject: str,
+    text_body: str,
+    html_body: str,
+    log_scope: str,
+    request_id: int,
+) -> bool:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    from_addr = (settings.mail_from or settings.smtp_user or "").strip()
+    if not from_addr:
+        return False
+    msg["From"] = from_addr
+    msg["To"] = to_email.strip()
+    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.smtp_host.strip(),
+            port=int(settings.smtp_port),
+            username=settings.smtp_user.strip(),
+            password=settings.smtp_password,
+            start_tls=bool(settings.smtp_use_tls),
+        )
+    except Exception as exc:
+        _log.error("vacation %s: ошибка SMTP request_id=%s: %r", log_scope, request_id, exc)
+        return False
+    return True
+
+
+async def send_cancellation_to_partner(
+    req: LeaveRequest,
+    *,
+    before_decision: bool,
+    also_managing_partner: bool = False,
+) -> bool:
+    """Сообщает согласующим, что сотрудник отозвал заявку или отменил согласованное отсутствие."""
+    settings = get_settings()
+    if not smtp_ready(settings):
+        return False
+    recipients = [x for x in ((req.partner_email or "").strip(),) if x]
+    if also_managing_partner:
+        managing_email = (settings.managing_partner_email or "").strip()
+        if managing_email and managing_email.casefold() not in {x.casefold() for x in recipients}:
+            recipients.append(managing_email)
+    if not recipients:
         return False
     kind_ru = KIND_LABELS_RU.get(req.kind_code, "—")
     action_ru = "отозвал заявку" if before_decision else "отменил согласованное отсутствие"
@@ -272,69 +417,52 @@ async def send_cancellation_to_partner(req: LeaveRequest, *, before_decision: bo
             else ""
         )
     )
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    from_addr = (settings.mail_from or settings.smtp_user or "").strip()
-    if not from_addr:
-        return False
-    msg["From"] = from_addr
-    msg["To"] = req.partner_email.strip()
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    try:
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.smtp_host.strip(),
-            port=int(settings.smtp_port),
-            username=settings.smtp_user.strip(),
-            password=settings.smtp_password,
-            start_tls=bool(settings.smtp_use_tls),
+    sent = False
+    for recipient in recipients:
+        ok = await _send_simple(
+            settings,
+            to_email=recipient,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            log_scope="cancel mail",
+            request_id=req.id,
         )
-    except Exception as exc:
-        _log.error("vacation cancel mail: ошибка SMTP request_id=%s: %r", req.id, exc)
-        return False
-    return True
+        sent = sent or ok
+    return sent
 
 
 async def send_decision_to_employee(req: LeaveRequest) -> bool:
     settings = get_settings()
     if not smtp_ready(settings) or not (req.employee_email or "").strip():
         return False
-    decision_ru = "утверждена" if req.status == "approved" else "отклонена"
+    approved = req.status == LEAVE_STATUS_APPROVED
+    decision_ru = "утверждена" if approved else "отклонена"
+    # Отклонить могли на любой ступени: финальные поля заполнены только у второй.
+    final_stage = req.final_decision_at is not None
+    managing = (settings.managing_partner_name or "").strip() or "управляющий партнёр"
+    partner = (req.partner_full_name or "").strip() or "курирующий партнёр"
+    by_ru = managing if final_stage else partner
+    reason = (req.final_decision_reason if final_stage else req.decision_reason) or ""
     subject = f"Заявка #{req.id} {decision_ru}"
-    reason_block = ""
-    if req.decision_reason:
-        reason_block = f"\n\nКомментарий: {req.decision_reason}"
+    reason_block = f"\n\nКомментарий: {reason}" if reason else ""
     text_body = (
         f"Ваша заявка #{req.id} ({KIND_LABELS_RU.get(req.kind_code, '—')}) "
-        f"на период {req.date_from.isoformat()} — {req.date_to.isoformat()} {decision_ru}."
+        f"на период {req.date_from.isoformat()} — {req.date_to.isoformat()} {decision_ru}: {by_ru}."
         f"{reason_block}\n\n— Kosta Legal · vacation"
     )
     html_body = (
         f"<p>Ваша заявка <b>#{req.id}</b> ({html.escape(KIND_LABELS_RU.get(req.kind_code, '—'))}) "
         f"на период {req.date_from.strftime('%d.%m.%Y')} — {req.date_to.strftime('%d.%m.%Y')} "
-        f"<b>{decision_ru}</b>.</p>"
-        + (f"<p>Комментарий: {html.escape(req.decision_reason or '')}</p>" if req.decision_reason else "")
+        f"<b>{decision_ru}</b>: {html.escape(by_ru)}.</p>"
+        + (f"<p>Комментарий: {html.escape(reason)}</p>" if reason else "")
     )
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    from_addr = (settings.mail_from or settings.smtp_user or "").strip()
-    if not from_addr:
-        return False
-    msg["From"] = from_addr
-    msg["To"] = req.employee_email.strip()
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    try:
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.smtp_host.strip(),
-            port=int(settings.smtp_port),
-            username=settings.smtp_user.strip(),
-            password=settings.smtp_password,
-            start_tls=bool(settings.smtp_use_tls),
-        )
-    except Exception as exc:
-        _log.error("vacation decision mail: ошибка SMTP request_id=%s: %r", req.id, exc)
-        return False
-    return True
+    return await _send_simple(
+        settings,
+        to_email=req.employee_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        log_scope="decision mail",
+        request_id=req.id,
+    )

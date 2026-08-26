@@ -29,6 +29,18 @@ async def apply_vacation_auth_user_and_absence_fks(conn: AsyncConnection) -> Non
         await conn.execute(text(stmt))
 
 
+async def apply_leave_request_final_decision(conn: AsyncConnection) -> None:
+    """Вторая ступень согласования: решение управляющего партнёра."""
+    for stmt in (
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS final_decision_at TIMESTAMPTZ",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS final_decision_reason TEXT",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS final_decided_by_user_id INTEGER",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS pdf_doc_version INTEGER NOT NULL DEFAULT 0",
+    ):
+        await conn.execute(text(stmt))
+
+
 REGISTERED_VACATION_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("vacation_auth_user_and_absence_fks", apply_vacation_auth_user_and_absence_fks),
+    ("vacation_leave_request_final_decision", apply_leave_request_final_decision),
 ]

@@ -17,20 +17,29 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
+STAGE_PARTNER = "partner"
+STAGE_FINAL = "final"
+_STAGES = (STAGE_PARTNER, STAGE_FINAL)
+
+
 def sign_email_action_token(
     secret: str,
     *,
     request_id: int,
     action: str,
     ttl_seconds: int,
+    stage: str = STAGE_PARTNER,
 ) -> str:
     if not secret or not secret.strip():
         raise ValueError("VACATION_EMAIL_ACTION_SECRET is not set")
     if action not in ("approve", "decline"):
         raise ValueError("action must be 'approve' or 'decline'")
+    if stage not in _STAGES:
+        raise ValueError("stage must be 'partner' or 'final'")
     payload: dict[str, Any] = {
         "rid": int(request_id),
         "act": action,
+        "stg": stage,
         "exp": int(time.time()) + int(ttl_seconds),
     }
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -57,4 +66,9 @@ def verify_email_action_token(secret: str, token: str) -> dict[str, Any]:
         raise ValueError("Token expired")
     if payload.get("act") not in ("approve", "decline"):
         raise ValueError("Bad action in token")
+    # Ссылки, выпущенные до появления второй ступени, относятся к решению партнёра.
+    stage = payload.get("stg") or STAGE_PARTNER
+    if stage not in _STAGES:
+        raise ValueError("Bad stage in token")
+    payload["stg"] = stage
     return payload

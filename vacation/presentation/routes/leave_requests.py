@@ -17,27 +17,32 @@ from application.kind_legend import (
 )
 from backend_common.media_path import safe_media_path
 from application.leave_request_service import (
-    apply_decision,
+    apply_final_decision,
+    apply_partner_decision,
     cancel_leave_request,
     create_leave_request,
     delete_leave_request,
+    ensure_current_pdf,
     render_and_attach_pdf,
 )
 from application.vacation_balance import get_vacation_balance
 from infrastructure.auth_lookup import AuthUser, get_me, get_user_public, list_partners
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.email_action_token import verify_email_action_token
+from infrastructure.email_action_token import STAGE_FINAL, verify_email_action_token
 from infrastructure.email_send import (
     send_cancellation_to_partner,
     send_decision_to_employee,
+    send_leave_request_to_managing_partner,
     send_leave_request_to_partner,
+    send_partner_approval_to_employee,
 )
 from infrastructure.models import (
     LEAVE_STATUS_APPROVED,
     LEAVE_STATUS_CANCELLED,
     LEAVE_STATUS_DECLINED,
     LEAVE_STATUS_PENDING,
+    LEAVE_STATUS_PENDING_FINAL,
     LeaveRequest,
 )
 
@@ -55,6 +60,13 @@ async def get_current_employee(
 
 def _is_partner(user: AuthUser) -> bool:
     return (user.role or "").strip() in ("Партнер", "Партнёр")
+
+
+def _is_managing_partner(user: AuthUser) -> bool:
+    """Управляющий партнёр — вторая, обязательная ступень согласования."""
+    configured = (get_settings().managing_partner_email or "").strip().casefold()
+    email = (user.email or "").strip().casefold()
+    return bool(configured) and email == configured
 
 
 class LeaveKindOut(BaseModel):
@@ -95,6 +107,10 @@ class LeaveRequestOut(BaseModel):
     reason: str | None = None
     decision_at: datetime | None = Field(None, alias="decisionAt")
     decision_reason: str | None = Field(None, alias="decisionReason")
+    final_decision_at: datetime | None = Field(None, alias="finalDecisionAt")
+    final_decision_reason: str | None = Field(None, alias="finalDecisionReason")
+    managing_partner_full_name: str | None = Field(None, alias="managingPartnerFullName")
+    managing_partner_email: str | None = Field(None, alias="managingPartnerEmail")
     pdf_url: str | None = Field(None, alias="pdfUrl")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
@@ -161,6 +177,7 @@ def _to_out(req: LeaveRequest) -> LeaveRequestOut:
     pdf_url = (
         f"/api/v1/vacations/leave-requests/{req.id}/pdf" if req.pdf_storage_key else None
     )
+    settings = get_settings()
     return LeaveRequestOut(
         id=req.id,
         status=req.status,
@@ -179,6 +196,10 @@ def _to_out(req: LeaveRequest) -> LeaveRequestOut:
         reason=req.reason,
         decision_at=req.decision_at,
         decision_reason=req.decision_reason,
+        final_decision_at=req.final_decision_at,
+        final_decision_reason=req.final_decision_reason,
+        managing_partner_full_name=(settings.managing_partner_name or "").strip() or None,
+        managing_partner_email=(settings.managing_partner_email or "").strip() or None,
         pdf_url=pdf_url,
         created_at=req.created_at,
         updated_at=req.updated_at,
@@ -290,17 +311,27 @@ async def post_leave_request(
 @router.get("/leave-requests", response_model=LeaveRequestsListOut)
 async def list_leave_requests(
     scope: Literal["mine", "to_decide", "all"] = Query("mine"),
-    status: Literal["pending", "approved", "declined", "cancelled", "any"] = Query("any"),
+    status: Literal["pending", "pending_final", "approved", "declined", "cancelled", "any"] = Query("any"),
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
     q = select(LeaveRequest)
+    managing = _is_managing_partner(employee)
     if scope == "mine":
         q = q.where(LeaveRequest.employee_user_id == employee.id)
     elif scope == "to_decide":
-        if not _is_partner(employee):
+        if not _is_partner(employee) and not managing:
             raise HTTPException(status_code=403, detail="Только партнёры могут видеть заявки на согласование")
-        q = q.where(LeaveRequest.partner_user_id == employee.id)
+        if managing:
+            # Управляющий партнёр решает вторую ступень по всем заявкам фирмы.
+            q = q.where(
+                or_(
+                    LeaveRequest.partner_user_id == employee.id,
+                    LeaveRequest.status == LEAVE_STATUS_PENDING_FINAL,
+                )
+            )
+        else:
+            q = q.where(LeaveRequest.partner_user_id == employee.id)
     else:
         if not _is_partner(employee):
             q = q.where(
@@ -332,13 +363,20 @@ async def leave_requests_pending_badge(
             )
         )
         to_decide = int(r.scalar() or 0)
+    if _is_managing_partner(employee):
+        r_final = await session.execute(
+            select(func.count())
+            .select_from(LeaveRequest)
+            .where(LeaveRequest.status == LEAVE_STATUS_PENDING_FINAL)
+        )
+        to_decide += int(r_final.scalar() or 0)
 
     r_mine = await session.execute(
         select(func.count())
         .select_from(LeaveRequest)
         .where(
             LeaveRequest.employee_user_id == employee.id,
-            LeaveRequest.status == LEAVE_STATUS_PENDING,
+            LeaveRequest.status.in_((LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL)),
         )
     )
     mine_pending = int(r_mine.scalar() or 0)
@@ -347,6 +385,15 @@ async def leave_requests_pending_badge(
         count=to_decide,
         to_decide_count=to_decide,
         mine_pending_count=mine_pending,
+    )
+
+
+def _can_read_request(req: LeaveRequest, user: AuthUser) -> bool:
+    return (
+        req.employee_user_id == user.id
+        or req.partner_user_id == user.id
+        or _is_partner(user)
+        or _is_managing_partner(user)
     )
 
 
@@ -376,8 +423,10 @@ async def email_action(
         )
     rid = int(payload["rid"])
     act = payload["act"]
+    stage = payload["stg"]
     req = await _load_request(session, rid)
-    if req.status != LEAVE_STATUS_PENDING:
+    expected_status = LEAVE_STATUS_PENDING_FINAL if stage == STAGE_FINAL else LEAVE_STATUS_PENDING
+    if req.status != expected_status:
         return HTMLResponse(
             content=(
                 f"<html><body><h2>Заявка #{rid} уже обработана</h2>"
@@ -399,21 +448,49 @@ async def email_action(
 </div></body></html>""",
             status_code=200,
         )
-    req = await apply_decision(
-        session,
-        req,
-        decided_by_user_id=req.partner_user_id,
-        approve=(act == "approve"),
-        decision_reason="Решение через e-mail",
-    )
-    await session.commit()
-    await send_decision_to_employee(req)
-    msg = "утверждена" if req.status == LEAVE_STATUS_APPROVED else "отклонена"
+    approve = act == "approve"
+    if stage == STAGE_FINAL:
+        req = await apply_final_decision(
+            session,
+            req,
+            # Ссылка из письма не даёт токена управляющего партнёра — автора решения не пишем.
+            decided_by_user_id=None,
+            approve=approve,
+            decision_reason="Финальное решение через e-mail",
+        )
+        await session.commit()
+        await send_decision_to_employee(req)
+        note = "Сотруднику отправлено уведомление."
+    else:
+        req = await apply_partner_decision(
+            session,
+            req,
+            decided_by_user_id=req.partner_user_id,
+            approve=approve,
+            decision_reason="Решение через e-mail",
+        )
+        pdf_bytes: bytes | None = None
+        if req.status == LEAVE_STATUS_PENDING_FINAL:
+            pdf_bytes = await render_and_attach_pdf(session, req)
+        await session.commit()
+        if req.status == LEAVE_STATUS_PENDING_FINAL:
+            await send_leave_request_to_managing_partner(req, pdf_bytes)
+            await send_partner_approval_to_employee(req)
+            note = "Заявка отправлена на финальное подтверждение управляющему партнёру."
+        else:
+            await send_decision_to_employee(req)
+            note = "Сотруднику отправлено уведомление."
+    if req.status == LEAVE_STATUS_APPROVED:
+        msg = "утверждена"
+    elif req.status == LEAVE_STATUS_PENDING_FINAL:
+        msg = "согласована"
+    else:
+        msg = "отклонена"
     return HTMLResponse(
         content=(
             f"<html><body style='font-family:Segoe UI,Arial,sans-serif;padding:24px;'>"
             f"<h2>Заявка #{rid} {msg}</h2>"
-            f"<p>Сотруднику отправлено уведомление.</p>"
+            f"<p>{note}</p>"
             f"</body></html>"
         ),
         status_code=200,
@@ -427,7 +504,7 @@ async def get_leave_request(
     session: AsyncSession = Depends(get_session),
 ):
     req = await _load_request(session, request_id)
-    if req.employee_user_id != employee.id and req.partner_user_id != employee.id and not _is_partner(employee):
+    if not _can_read_request(req, employee):
         raise HTTPException(status_code=403, detail="Нет доступа к заявке")
     return _to_out(req)
 
@@ -439,15 +516,77 @@ async def get_leave_request_pdf(
     session: AsyncSession = Depends(get_session),
 ):
     req = await _load_request(session, request_id)
-    if req.employee_user_id != employee.id and req.partner_user_id != employee.id and not _is_partner(employee):
+    if not _can_read_request(req, employee):
         raise HTTPException(status_code=403, detail="Нет доступа к заявке")
     if not req.pdf_storage_key:
         raise HTTPException(status_code=404, detail="PDF не сформирован")
+    # Заявления, сохранённые старым шаблоном, пересобираем — в шапке должен
+    # стоять управляющий партнёр.
+    if await ensure_current_pdf(session, req):
+        await session.commit()
     settings = get_settings()
     target = safe_media_path(settings.media_path, req.pdf_storage_key)
     if target is None or not target.is_file():
         raise HTTPException(status_code=404, detail="PDF файл недоступен")
     return FileResponse(target, media_type="application/pdf", filename=f"leave_request_{req.id}.pdf")
+
+
+async def _decide(
+    session: AsyncSession,
+    request_id: int,
+    employee: AuthUser,
+    *,
+    approve: bool,
+    decision_reason: str | None,
+) -> LeaveRequestOut:
+    """Решение по заявке: ступень определяется её текущим статусом.
+
+    pending → решает курирующий партнёр, согласие уводит заявку на финальное
+    подтверждение управляющего партнёра; pending_final → решает управляющий
+    партнёр, и только его согласие открывает дни в графике.
+    """
+    req = await _load_request(session, request_id)
+    if req.status == LEAVE_STATUS_PENDING:
+        if req.partner_user_id != employee.id:
+            raise HTTPException(status_code=403, detail="Решение может принять только курирующий партнёр")
+        req = await apply_partner_decision(
+            session,
+            req,
+            decided_by_user_id=employee.id,
+            approve=approve,
+            decision_reason=decision_reason,
+        )
+        pdf_bytes: bytes | None = None
+        if req.status == LEAVE_STATUS_PENDING_FINAL:
+            # Документ пересобираем, чтобы у управляющего партнёра был
+            # актуальный PDF с его ФИО в шапке заявления.
+            pdf_bytes = await render_and_attach_pdf(session, req)
+        await session.commit()
+        if req.status == LEAVE_STATUS_PENDING_FINAL:
+            await send_leave_request_to_managing_partner(req, pdf_bytes)
+            await send_partner_approval_to_employee(req)
+        else:
+            await send_decision_to_employee(req)
+        return _to_out(req)
+
+    if req.status == LEAVE_STATUS_PENDING_FINAL:
+        if not _is_managing_partner(employee):
+            raise HTTPException(
+                status_code=403,
+                detail="Финальное решение принимает управляющий партнёр",
+            )
+        req = await apply_final_decision(
+            session,
+            req,
+            decided_by_user_id=employee.id,
+            approve=approve,
+            decision_reason=decision_reason,
+        )
+        await session.commit()
+        await send_decision_to_employee(req)
+        return _to_out(req)
+
+    raise HTTPException(status_code=409, detail=f"Заявка уже {req.status}")
 
 
 @router.post("/leave-requests/{request_id}/approve", response_model=LeaveRequestOut)
@@ -457,21 +596,13 @@ async def approve_request(
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
-    req = await _load_request(session, request_id)
-    if req.partner_user_id != employee.id:
-        raise HTTPException(status_code=403, detail="Решение может принять только выбранный партнёр")
-    if req.status != LEAVE_STATUS_PENDING:
-        raise HTTPException(status_code=409, detail=f"Заявка уже {req.status}")
-    req = await apply_decision(
+    return await _decide(
         session,
-        req,
-        decided_by_user_id=employee.id,
+        request_id,
+        employee,
         approve=True,
         decision_reason=body.decision_reason,
     )
-    await session.commit()
-    await send_decision_to_employee(req)
-    return _to_out(req)
 
 
 @router.post("/leave-requests/{request_id}/decline", response_model=LeaveRequestOut)
@@ -481,21 +612,13 @@ async def decline_request(
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
-    req = await _load_request(session, request_id)
-    if req.partner_user_id != employee.id:
-        raise HTTPException(status_code=403, detail="Решение может принять только выбранный партнёр")
-    if req.status != LEAVE_STATUS_PENDING:
-        raise HTTPException(status_code=409, detail=f"Заявка уже {req.status}")
-    req = await apply_decision(
+    return await _decide(
         session,
-        req,
-        decided_by_user_id=employee.id,
+        request_id,
+        employee,
         approve=False,
         decision_reason=body.decision_reason,
     )
-    await session.commit()
-    await send_decision_to_employee(req)
-    return _to_out(req)
 
 
 @router.post("/leave-requests/{request_id}/withdraw", response_model=LeaveRequestOut)
@@ -505,15 +628,16 @@ async def withdraw_request(
     employee: AuthUser = Depends(get_current_employee),
     session: AsyncSession = Depends(get_session),
 ):
-    """Отзыв заявки автором до решения партнёра."""
+    """Отзыв заявки автором, пока она не прошла обе ступени согласования."""
     req = await _load_request(session, request_id)
     if req.employee_user_id != employee.id:
         raise HTTPException(status_code=403, detail="Отозвать можно только свою заявку")
-    if req.status != LEAVE_STATUS_PENDING:
+    if req.status not in (LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL):
         raise HTTPException(
             status_code=409,
-            detail="Отозвать можно только заявку на рассмотрении",
+            detail="Отозвать можно только заявку на согласовании",
         )
+    was_pending_final = req.status == LEAVE_STATUS_PENDING_FINAL
     req = await cancel_leave_request(
         session,
         req,
@@ -521,7 +645,11 @@ async def withdraw_request(
         reason=body.reason if body else None,
     )
     await session.commit()
-    await send_cancellation_to_partner(req, before_decision=True)
+    await send_cancellation_to_partner(
+        req,
+        before_decision=True,
+        also_managing_partner=was_pending_final,
+    )
     return _to_out(req)
 
 
@@ -536,10 +664,10 @@ async def cancel_approved_request(
     req = await _load_request(session, request_id)
     if req.employee_user_id != employee.id:
         raise HTTPException(status_code=403, detail="Отменить можно только свою заявку")
-    if req.status == LEAVE_STATUS_PENDING:
+    if req.status in (LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL):
         raise HTTPException(
             status_code=409,
-            detail="Заявка ещё на рассмотрении — её можно отозвать",
+            detail="Заявка ещё на согласовании — её можно отозвать",
         )
     if req.status != LEAVE_STATUS_APPROVED:
         raise HTTPException(

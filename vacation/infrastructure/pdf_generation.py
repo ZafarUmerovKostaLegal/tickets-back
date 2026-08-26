@@ -17,6 +17,7 @@ from application.leave_pdf_copy import (
     MANAGING_PARTNER_NAME,
     employee_role_genitive,
 )
+from infrastructure.config import get_settings
 from infrastructure.models import LeaveRequest
 
 _FONT_REG = "LeavePdfRegular"
@@ -84,8 +85,9 @@ def _date_phrase(d: date) -> str:
 
 
 def _partner_dative(_req: LeaveRequest) -> str:
-    """В шапке заявления всегда управляющий партнёр фирмы."""
-    return MANAGING_PARTNER_NAME
+    """В шапке заявления всегда управляющий партнёр фирмы, а не курирующий."""
+    configured = (get_settings().managing_partner_name or "").strip()
+    return configured or MANAGING_PARTNER_NAME
 
 
 def _employee_role_label(req: LeaveRequest) -> str:
