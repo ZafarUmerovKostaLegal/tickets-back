@@ -55,8 +55,6 @@ services:
       - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
       - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
       - VACATION_EMAIL_ACTION_SECRET=${VACATION_EMAIL_ACTION_SECRET:-}
-      - VACATION_MANAGING_PARTNER_EMAIL=${VACATION_MANAGING_PARTNER_EMAIL:-aakhmadjonov@kostalegal.com}
-      - "VACATION_MANAGING_PARTNER_NAME=${VACATION_MANAGING_PARTNER_NAME:-Azizbek Akhmadjonov}"
 
   call_schedule:
     restart: unless-stopped
