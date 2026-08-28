@@ -47,7 +47,6 @@ from presentation.deps import (
     check_view_role,
     created_by_filter_for_user,
     ensure_not_moderating_own_expense,
-    ensure_reimbursement_payment_confirmer,
     get_current_user,
     is_admin_editor,
     is_moderator,
@@ -1129,8 +1128,6 @@ async def pay_expense(
             status_code=400,
             detail="Возмещение сотруднику — для расходов с личной карты или наличных; оплата поставщику — только для возмещаемых клиентом заявок",
         )
-    if personal_payout:
-        ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     row.status = "paid"
@@ -1187,8 +1184,6 @@ async def unpay_expense(
     personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
     if not personal_payout and not row.is_reimbursable:
         raise HTTPException(status_code=400, detail="Отмена выплаты только для возмещения сотруднику или оплаты возмещаемых клиентом заявок")
-    if personal_payout:
-        ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     comment = body.comment.strip()
