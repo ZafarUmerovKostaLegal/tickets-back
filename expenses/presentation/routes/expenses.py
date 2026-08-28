@@ -14,6 +14,7 @@ from starlette.responses import FileResponse
 
 from application.expense_service import (
     calc_equivalent,
+    is_employee_personal_funds_payout,
     is_partner_expense,
     is_partner_org_role,
     validate_expense_subtype_rules,
@@ -339,6 +340,7 @@ def _list_item(
         closed_at=row.closed_at,
         withdrawn_at=row.withdrawn_at,
         attachments_count=n,
+        has_reimbursement_card=bool((row.reimbursement_card_number or "").strip()),
     )
 
 
@@ -502,6 +504,12 @@ async def list_expenses(
     expense_subtype: Optional[str] = Query(None, alias="expenseSubtype"),
     partner_user_id: Optional[int] = Query(None, alias="partnerUserId"),
     is_reimbursable: Optional[bool] = Query(None, alias="isReimbursable"),
+    payment_method: Optional[str] = Query(None, alias="paymentMethod"),
+    awaiting_payment: Optional[bool] = Query(
+        None,
+        alias="awaitingPayment",
+        description="Исключить выплаты сотруднику с личной карты (cash), кроме partner_expense",
+    ),
     date_from: Optional[date] = Query(None, alias="dateFrom"),
     date_to: Optional[date] = Query(None, alias="dateTo"),
     department_id: Optional[str] = Query(None, alias="departmentId"),
@@ -552,6 +560,8 @@ async def list_expenses(
         expense_type=expense_type,
         exclude_expense_type=exclude_expense_type,
         is_reimbursable=is_reimbursable,
+        payment_method=payment_method,
+        awaiting_payment=bool(awaiting_payment),
         date_from=date_from,
         date_to=date_to,
         department_id=department_id,
@@ -963,7 +973,7 @@ async def approve_expense(
         decision="approved",
         reject_reason=None,
     )
-    if row.is_reimbursable:
+    if is_employee_personal_funds_payout(row.payment_method, row.expense_type):
         author_profile = await fetch_user_by_id(
             get_settings().auth_service_url,
             authorization,
@@ -1107,13 +1117,13 @@ async def pay_expense(
     await _ensure_access(row, user)
     if row.status != "approved":
         raise HTTPException(status_code=400, detail="Выплата только для approved")
-    if not row.is_reimbursable:
+    personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
+    if not personal_payout and not row.is_reimbursable:
         raise HTTPException(
             status_code=400,
-            detail="«Возмещено» только для возмещаемых заявок; для невозмещаемых используйте «Не оплачено»",
+            detail="Возмещение сотруднику — для расходов с личной карты или наличных; оплата поставщику — только для возмещаемых клиентом заявок",
         )
-    payment_method = (row.payment_method or "").strip().lower()
-    if payment_method == "cash":
+    if personal_payout:
         ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
@@ -1168,10 +1178,10 @@ async def unpay_expense(
     await _ensure_access(row, user)
     if row.status != "paid":
         raise HTTPException(status_code=400, detail="Отмена оплаты только для статуса paid")
-    if not row.is_reimbursable:
-        raise HTTPException(status_code=400, detail="Отмена оплаты только для возмещаемых заявок")
-    payment_method = (row.payment_method or "").strip().lower()
-    if payment_method == "cash":
+    personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
+    if not personal_payout and not row.is_reimbursable:
+        raise HTTPException(status_code=400, detail="Отмена выплаты только для возмещения сотруднику или оплаты возмещаемых клиентом заявок")
+    if personal_payout:
         ensure_reimbursement_payment_confirmer(user)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status

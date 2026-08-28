@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from application.expense_service import (
+    is_employee_personal_funds_payout,
     is_partner_expense,
     normalize_payment_method,
     normalize_reimbursement_card_number,
@@ -17,6 +18,13 @@ from application.expense_service import (
 def test_is_partner_expense():
     assert is_partner_expense("partner_expense") is True
     assert is_partner_expense(" food ") is False
+
+
+def test_employee_personal_funds_payout_is_cash_company_spend():
+    assert is_employee_personal_funds_payout("cash", "services") is True
+    assert is_employee_personal_funds_payout("cash", "partner_expense") is False
+    assert is_employee_personal_funds_payout("transfer", "services") is False
+    assert is_employee_personal_funds_payout("card", "client_expense") is False
 
 
 def test_is_partner_org_role():

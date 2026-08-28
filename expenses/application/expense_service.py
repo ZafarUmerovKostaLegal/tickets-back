@@ -128,6 +128,16 @@ def validate_payment_details(
     return method, None
 
 
+def is_employee_personal_funds_payout(
+    payment_method: str | None,
+    expense_type: str | None = None,
+) -> bool:
+    """Employee paid from cash / personal card — company must pay them back."""
+    if (expense_type or "").strip() == "partner_expense":
+        return False
+    return (payment_method or "").strip().lower() == "cash"
+
+
 def validate_submit_fields(
     *,
     description: str,

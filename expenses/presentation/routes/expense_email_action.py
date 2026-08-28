@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
+from application.expense_service import is_employee_personal_funds_payout
 from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.expense_author_decision_notify import run_author_decision_notification_safe
@@ -212,7 +213,7 @@ async def expense_email_action(
             decision="approved",
             reject_reason=None,
         )
-        if row.is_reimbursable:
+        if is_employee_personal_funds_payout(row.payment_method, row.expense_type):
             await run_payment_confirmation_notification_safe(
                 settings,
                 expense_id=row.id,

@@ -102,6 +102,8 @@ class ExpenseRepository:
         scope_mode: str | None = None,
         partner_user_id: int | None = None,
         expense_subtype: str | None = None,
+        payment_method: str | None = None,
+        awaiting_payment: bool = False,
     ) -> tuple[list[ExpenseRequestModel], int, Decimal, Decimal]:
         q = select(ExpenseRequestModel)
         cnt = select(func.count()).select_from(ExpenseRequestModel)
@@ -132,6 +134,18 @@ class ExpenseRepository:
                 stmt = stmt.where(ExpenseRequestModel.expense_subtype == expense_subtype.strip())
             if is_reimbursable is not None:
                 stmt = stmt.where(ExpenseRequestModel.is_reimbursable == is_reimbursable)
+            if payment_method and payment_method.strip():
+                stmt = stmt.where(ExpenseRequestModel.payment_method == payment_method.strip().lower())
+            if awaiting_payment:
+                # Vendor/bank queue: approved reimbursable spend that is not
+                # an employee personal-card payout (cash, except partner_expense).
+                stmt = stmt.where(
+                    or_(
+                        ExpenseRequestModel.expense_type == "partner_expense",
+                        ExpenseRequestModel.payment_method.is_(None),
+                        func.lower(ExpenseRequestModel.payment_method) != "cash",
+                    )
+                )
             if date_from:
                 stmt = stmt.where(ExpenseRequestModel.expense_date >= date_from)
             if date_to:

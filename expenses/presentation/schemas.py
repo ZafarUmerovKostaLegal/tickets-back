@@ -139,6 +139,7 @@ class ExpenseRequestListItemOut(BaseModel):
     attachments_count: int = Field(0, serialization_alias="attachmentsCount")
     payment_document_uploaded: bool = Field(False, serialization_alias="paymentDocumentUploaded")
     payment_receipt_uploaded: bool = Field(False, serialization_alias="paymentReceiptUploaded")
+    has_reimbursement_card: bool = Field(False, serialization_alias="hasReimbursementCard")
 
 
 class ExpenseRequestDetailOut(ExpenseRequestListItemOut):
