@@ -104,6 +104,7 @@ class ExpenseRepository:
         expense_subtype: str | None = None,
         payment_method: str | None = None,
         awaiting_payment: bool = False,
+        awaiting_reimbursement: bool = False,
     ) -> tuple[list[ExpenseRequestModel], int, Decimal, Decimal]:
         q = select(ExpenseRequestModel)
         cnt = select(func.count()).select_from(ExpenseRequestModel)
@@ -146,6 +147,9 @@ class ExpenseRepository:
                         func.lower(ExpenseRequestModel.payment_method) != "cash",
                     )
                 )
+            if awaiting_reimbursement:
+                stmt = stmt.where(func.lower(ExpenseRequestModel.payment_method) == "cash")
+                stmt = stmt.where(ExpenseRequestModel.expense_type != "partner_expense")
             if date_from:
                 stmt = stmt.where(ExpenseRequestModel.expense_date >= date_from)
             if date_to:

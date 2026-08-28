@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     )
 
     expense_payment_confirmer_email: str = Field(
-        default="aakhmadjonov@kostalegal.com",
+        default="aakhmadjonov@kostalegal.com,testeracc@kostalegal.com",
         validation_alias=AliasChoices("EXPENSE_PAYMENT_CONFIRMER_EMAIL"),
     )
     expense_notify_payment_confirmer: bool = Field(

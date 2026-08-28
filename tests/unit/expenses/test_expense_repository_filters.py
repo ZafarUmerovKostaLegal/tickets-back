@@ -109,3 +109,32 @@ async def test_awaiting_payment_excludes_employee_cash_payouts():
     assert "expense_requests.expense_type = 'partner_expense'" in sql
     assert "expense_requests.payment_method IS NULL" in sql
     assert "lower(expense_requests.payment_method) != 'cash'" in sql
+
+
+@pytest.mark.asyncio
+async def test_awaiting_reimbursement_keeps_employee_cash_payouts():
+    session = AsyncMock()
+    session.execute.side_effect = [_result_rows(), _result_count(), _result_sums()]
+
+    await ExpenseRepository(session).list_requests(
+        created_by_user_id=None,
+        status="approved",
+        scope=None,
+        expense_type=None,
+        is_reimbursable=None,
+        date_from=None,
+        date_to=None,
+        department_id=None,
+        project_id=None,
+        search=None,
+        sort_by="createdAt",
+        sort_order="desc",
+        skip=0,
+        limit=50,
+        awaiting_reimbursement=True,
+    )
+
+    query = session.execute.await_args_list[0].args[0]
+    sql = str(query.compile(compile_kwargs={"literal_binds": True}))
+    assert "lower(expense_requests.payment_method) = 'cash'" in sql
+    assert "expense_requests.expense_type != 'partner_expense'" in sql

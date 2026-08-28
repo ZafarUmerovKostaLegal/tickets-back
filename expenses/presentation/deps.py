@@ -112,13 +112,38 @@ def ensure_not_moderating_own_expense(user: dict, created_by_user_id: int) -> No
         )
 
 
-def ensure_reimbursement_payment_confirmer(user: dict) -> None:
-    """Reimbursable payout may only be confirmed by the designated payment confirmer."""
+DEFAULT_PAYMENT_CONFIRMER_EMAILS = (
+    "aakhmadjonov@kostalegal.com",
+    "testeracc@kostalegal.com",
+)
+
+
+def parse_payment_confirmer_emails(raw: str | None) -> set[str]:
+    text = (raw or "").replace(";", ",")
+    emails = {part.strip().lower() for part in text.split(",") if part.strip()}
+    emails.update(DEFAULT_PAYMENT_CONFIRMER_EMAILS)
+    return emails
+
+
+def is_reimbursement_payment_confirmer(user: dict) -> bool:
     settings = get_settings()
-    expected = (settings.expense_payment_confirmer_email or "").strip().lower()
     actual = str(user.get("email") or "").strip().lower()
-    if not expected or actual != expected:
-        raise HTTPException(
-            status_code=403,
-            detail="Возмещение подтверждает только назначенный сотрудник (подтверждение оплаты)",
-        )
+    display = str(user.get("display_name") or user.get("displayName") or "").strip().lower()
+    allowed = parse_payment_confirmer_emails(settings.expense_payment_confirmer_email)
+    allowed_locals = {email.split("@", 1)[0] for email in allowed}
+    if actual:
+        if actual in allowed or actual.split("@", 1)[0] in allowed_locals:
+            return True
+    if display and (display in allowed or display in allowed_locals):
+        return True
+    return False
+
+
+def ensure_reimbursement_payment_confirmer(user: dict) -> None:
+    """Employee personal-card payout may only be confirmed by designated users."""
+    if is_reimbursement_payment_confirmer(user):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Возмещение подтверждает только назначенный сотрудник (подтверждение оплаты)",
+    )

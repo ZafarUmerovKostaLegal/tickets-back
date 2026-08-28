@@ -59,44 +59,54 @@ async def _run_payment_confirmation_notification(
 ) -> None:
     if not settings.expense_notify_payment_confirmer:
         return
-    confirmer_email = (settings.expense_payment_confirmer_email or "").strip()
-    if not confirmer_email:
+    confirmer_raw = (settings.expense_payment_confirmer_email or "").replace(";", ",")
+    confirmer_emails = [part.strip() for part in confirmer_raw.split(",") if part.strip()]
+    if not confirmer_emails:
         _log.warning("expense payment confirmation notify: confirmer email is empty")
         return
 
-    try:
-        await notify_expense_payment_confirmation_requested(
-            settings,
-            to_email=confirmer_email,
-            expense_id=expense_id,
-            amount_uzs=amount_uzs,
-            description=description,
-            author_name=author_name,
-        )
-    except Exception:
-        _log.exception("expense payment confirmation email failed expense_id=%s", expense_id)
+    for confirmer_email in confirmer_emails:
+        try:
+            await notify_expense_payment_confirmation_requested(
+                settings,
+                to_email=confirmer_email,
+                expense_id=expense_id,
+                amount_uzs=amount_uzs,
+                description=description,
+                author_name=author_name,
+            )
+        except Exception:
+            _log.exception(
+                "expense payment confirmation email failed expense_id=%s to=%s",
+                expense_id,
+                confirmer_email,
+            )
 
-    profile = await fetch_user_by_email_internal(
-        settings.auth_service_url,
-        confirmer_email,
-        internal_key=settings.ws_internal_secret,
-    )
-    if not profile or profile.get("id") is None:
-        _log.warning(
-            "expense payment system notify: user not found by email=%s expense_id=%s",
+        profile = await fetch_user_by_email_internal(
+            settings.auth_service_url,
             confirmer_email,
-            expense_id,
+            internal_key=settings.ws_internal_secret,
         )
-        return
-    try:
-        await _send_system_notification(
-            settings,
-            recipient_user_id=int(profile["id"]),
-            expense_id=expense_id,
-            amount_uzs=amount_uzs,
-        )
-    except Exception:
-        _log.exception("expense payment system notify failed expense_id=%s", expense_id)
+        if not profile or profile.get("id") is None:
+            _log.warning(
+                "expense payment system notify: user not found by email=%s expense_id=%s",
+                confirmer_email,
+                expense_id,
+            )
+            continue
+        try:
+            await _send_system_notification(
+                settings,
+                recipient_user_id=int(profile["id"]),
+                expense_id=expense_id,
+                amount_uzs=amount_uzs,
+            )
+        except Exception:
+            _log.exception(
+                "expense payment system notify failed expense_id=%s to=%s",
+                expense_id,
+                confirmer_email,
+            )
 
 
 async def run_payment_confirmation_notification_safe(
