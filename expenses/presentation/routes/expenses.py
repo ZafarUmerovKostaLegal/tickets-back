@@ -1598,6 +1598,7 @@ async def delete_attachment(
                 detail="Удаление документа для оплаты доступно до отметки оплаты (черновик, доработка, на согласовании, одобрено)",
             )
     storage_key = att_row.storage_key
+    remaining = [a for a in (row.attachments or []) if a.id != attachment_id]
     ok = await repo.delete_attachment(expense_id, attachment_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
@@ -1616,6 +1617,12 @@ async def delete_attachment(
         performed_by_user_id=int(user["id"]),
     )
     await session.commit()
-    await session.expire_all()
-    row = await repo.get_by_id(expense_id, load_children=True)
-    return await _detail_response(row, authorization)
+    row.attachments = remaining
+    try:
+        return await _detail_response(row, authorization)
+    except Exception:
+        _log.exception(
+            "expense attachment delete: ответ после удаления не собран expense_id=%s",
+            expense_id,
+        )
+        return _detail(row)
