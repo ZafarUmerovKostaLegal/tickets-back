@@ -397,6 +397,7 @@ class ExpenseRepository:
         if not row:
             return False
         await self._session.delete(row)
+        await self._session.flush()
         return True
 
     async def delete_request(self, expense_request_id: str) -> bool:

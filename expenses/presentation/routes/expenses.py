@@ -1616,5 +1616,6 @@ async def delete_attachment(
         performed_by_user_id=int(user["id"]),
     )
     await session.commit()
+    await session.expire_all()
     row = await repo.get_by_id(expense_id, load_children=True)
     return await _detail_response(row, authorization)
