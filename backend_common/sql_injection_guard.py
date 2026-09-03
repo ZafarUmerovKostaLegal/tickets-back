@@ -53,6 +53,16 @@ _PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def skip_body_sql_scan(path: str) -> bool:
+    """Inventory notes are free text (CPU lines, `B -- средний`, `/* Vega */`) and must not be blocked as SQLi."""
+    p = (path or "").split("?", 1)[0]
+    if p.startswith("/api/v1/inventory"):
+        return True
+    if p == "/items" or p.startswith("/items/"):
+        return True
+    return False
+
+
 def contains_sql_injection_pattern(value: str) -> bool:
 
     if not value or len(value) > 200_000:
@@ -130,6 +140,7 @@ class SqlInjectionGuardMiddleware(BaseHTTPMiddleware):
         if (
             _CHECK_BODY
             and request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and not skip_body_sql_scan(raw_path)
         ):
             ct = (request.headers.get("content-type") or "").lower()
             if "application/json" in ct:

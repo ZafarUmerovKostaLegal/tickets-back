@@ -82,6 +82,7 @@ class InventoryItemUpdate(BaseModel):
     description: Optional[str] = None
     category_id: Optional[int] = None
     serial_number: Optional[str] = None
+    inventory_number: Optional[str] = None
     equipment_class: Optional[EquipmentClass] = None
     status: Optional[str] = None
     purchase_date: Optional[datetime] = None

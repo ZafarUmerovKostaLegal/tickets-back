@@ -179,6 +179,7 @@ async def update_item(
         description=body.description,
         category_id=body.category_id,
         serial_number=body.serial_number,
+        inventory_number=body.inventory_number,
         status=body.status,
         purchase_date=body.purchase_date,
         warranty_until=body.warranty_until,

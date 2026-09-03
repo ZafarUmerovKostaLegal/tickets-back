@@ -250,6 +250,7 @@ class InventoryRepository(InventoryRepositoryPort):
         category_id: Optional[int] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        inventory_number: Optional[str] = None,
         equipment_class=UNSET,
         status: Optional[str] = None,
         purchase_date: Optional[datetime] = None,
@@ -271,6 +272,8 @@ class InventoryRepository(InventoryRepositoryPort):
             model.photo_path = photo_path
         if serial_number is not None:
             model.serial_number = serial_number
+        if inventory_number is not None:
+            model.inventory_number = inventory_number
         if equipment_class is not UNSET:
             model.equipment_class = equipment_class
         if status is not None:

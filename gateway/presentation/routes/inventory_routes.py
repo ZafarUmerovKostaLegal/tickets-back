@@ -42,6 +42,20 @@ async def _proxy_get(path: str, params: Optional[dict] = None):
     return r.json()
 
 
+async def _proxy_json(method: str, path: str, json: Optional[dict] = None, timeout: float = 15.0):
+    url = _inventory_url(path)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.request(method, url, json=json)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail="Inventory service unavailable") from e
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Inventory service error")
+    if r.status_code == 204:
+        return None
+    return r.json()
+
+
 async def _proxy_post_json(path: str, json: dict, user: dict = Depends(require_write_role)):
     url = _inventory_url(path)
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -183,12 +197,7 @@ async def create_item(
 
 @router.patch("/items/{item_uuid}")
 async def update_item(item_uuid: str, body: dict, user: dict = Depends(require_write_role)):
-    url = _inventory_url(f"/items/{item_uuid}")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.patch(url, json=body)
-    if r.status_code >= 400:
-        raise HTTPException(status_code=r.status_code, detail=r.text or "Inventory service error")
-    return r.json()
+    return await _proxy_json("PATCH", f"/items/{item_uuid}", json=body, timeout=15.0)
 
 
 @router.post("/items/{item_uuid}/photo")

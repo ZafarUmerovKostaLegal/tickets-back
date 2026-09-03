@@ -117,6 +117,7 @@ class InventoryRepositoryPort(ABC):
         category_id: Optional[int] = None,
         photo_path: Optional[str] = None,
         serial_number: Optional[str] = None,
+        inventory_number: Optional[str] = None,
         equipment_class=UNSET,
         status: Optional[str] = None,
         purchase_date: Optional[datetime] = None,

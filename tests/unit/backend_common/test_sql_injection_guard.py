@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend_common.sql_injection_guard import contains_sql_injection_pattern
+from backend_common.sql_injection_guard import contains_sql_injection_pattern, skip_body_sql_scan
 
 
 @pytest.mark.parametrize(
@@ -40,3 +40,11 @@ def test_allows_normal_text(safe: str) -> None:
 )
 def test_blocks_common_payloads(malicious: str) -> None:
     assert contains_sql_injection_pattern(malicious)
+
+
+def test_skips_body_scan_for_inventory_paths() -> None:
+    assert skip_body_sql_scan("/api/v1/inventory/items/abc")
+    assert skip_body_sql_scan("/items/abc")
+    assert skip_body_sql_scan("/items")
+    assert not skip_body_sql_scan("/api/v1/tickets")
+    assert not skip_body_sql_scan("/api/v1/expenses")
