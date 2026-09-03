@@ -60,6 +60,8 @@ def skip_body_sql_scan(path: str) -> bool:
         return True
     if p == "/items" or p.startswith("/items/"):
         return True
+    if "/attachments" in p and ("/expenses" in p or p.startswith("/api/v1/expenses")):
+        return True
     return False
 
 

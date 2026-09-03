@@ -73,6 +73,8 @@ _log = logging.getLogger(__name__)
 _MODERATION_MAIL_TIMEOUT_SEC = 90.0
 _PARTNER_RECORD_MAIL_TIMEOUT_SEC = 90.0
 
+_MAX_ATTACHMENTS_PER_EXPENSE = 10
+
 _ALLOWED_ATTACHMENT_KINDS = frozenset({"payment_document", "payment_receipt"})
 
 _AUTHOR_PAYMENT_DOC_STATUSES = frozenset({"draft", "revision_required", "pending_approval", "approved"})
@@ -1506,6 +1508,12 @@ async def upload_attachment(
     elif not is_admin_editor(user):
         raise HTTPException(status_code=400, detail="Вложения в этом статусе недоступны")
 
+    if len(row.attachments or []) >= _MAX_ATTACHMENTS_PER_EXPENSE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"К расходу можно прикрепить не больше {_MAX_ATTACHMENTS_PER_EXPENSE} файлов",
+        )
+
     content = await file.read()
     try:
         storage_key, safe_name = save_attachment(row.id, file.filename or "file", content)
@@ -1535,6 +1543,7 @@ async def upload_attachment(
     return await _detail_response(row, authorization)
 
 
+@router.post("/{expense_id}/attachments/{attachment_id}/delete", response_model=ExpenseRequestDetailOut)
 @router.delete("/{expense_id}/attachments/{attachment_id}", response_model=ExpenseRequestDetailOut)
 async def delete_attachment(
     expense_id: str,
@@ -1575,12 +1584,14 @@ async def delete_attachment(
             )
     if not is_admin_editor(user):
         ak = (att_row.attachment_kind or "").strip()
-        if ak == "payment_receipt":
+        if ak in ("payment_receipt", ""):
             if row.status not in _PAYMENT_RECEIPT_STATUSES:
                 raise HTTPException(
                     status_code=400,
                     detail="Удаление квитанции в этом статусе недоступно",
                 )
+        elif row.status == "paid":
+            pass
         elif row.status not in _AUTHOR_PAYMENT_DOC_STATUSES:
             raise HTTPException(
                 status_code=400,
