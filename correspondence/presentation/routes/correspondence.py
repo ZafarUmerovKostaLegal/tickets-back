@@ -1,9 +1,11 @@
+import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
@@ -20,6 +22,7 @@ from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.file_storage import resolve_storage_path, save_correspondence_file
+from infrastructure.office_to_pdf import convert_office_bytes_to_pdf, is_office_document
 from infrastructure.models import (
     CorrespondenceAttachmentModel,
     CorrespondenceDocumentCommentModel,
@@ -44,6 +47,7 @@ from presentation.schemas import (
 )
 
 router = APIRouter(prefix="/correspondence", tags=["correspondence"])
+_log = logging.getLogger(__name__)
 
 _INLINE_MIME_PREFIXES = ("image/", "application/pdf")
 
@@ -170,6 +174,51 @@ async def _save_uploads(
             attachment_kind=attachment_kind,
             uploaded_by_user_id=uploaded_by_user_id,
         )
+        await _maybe_store_pdf_preview(
+            repo,
+            document_id=document_id,
+            original_name=f.filename or "file",
+            original_mime=mime,
+            content=content,
+            attachment_kind=attachment_kind,
+            uploaded_by_user_id=uploaded_by_user_id,
+        )
+
+
+async def _maybe_store_pdf_preview(
+    repo: CorrespondenceRepository,
+    *,
+    document_id: str,
+    original_name: str,
+    original_mime: str,
+    content: bytes,
+    attachment_kind: str,
+    uploaded_by_user_id: int,
+) -> None:
+    if not is_office_document(original_name, original_mime):
+        return
+    try:
+        pdf_bytes = convert_office_bytes_to_pdf(content, original_name)
+    except Exception:
+        _log.exception("PDF preview was not stored for %s", original_name)
+        return
+    pdf_name = f"{Path(original_name).stem or 'letter'}.pdf"
+    pdf_id = str(uuid.uuid4())
+    try:
+        pdf_key = save_correspondence_file(document_id, pdf_id, pdf_name, pdf_bytes)
+    except ValueError as e:
+        _log.warning("PDF preview save failed: %s", e)
+        return
+    await repo.add_attachment(
+        attachment_id=pdf_id,
+        document_id=document_id,
+        file_name=pdf_name,
+        content_type="application/pdf",
+        size_bytes=len(pdf_bytes),
+        storage_key=pdf_key,
+        attachment_kind=attachment_kind,
+        uploaded_by_user_id=uploaded_by_user_id,
+    )
 
 
 def _assert_not_archived(row: CorrespondenceDocumentModel) -> None:
@@ -823,6 +872,52 @@ async def download_attachment_file(
         media_type=mime,
         filename=att.file_name,
         content_disposition_type=disp,
+    )
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/preview")
+async def preview_attachment_file(
+    document_id: str,
+    attachment_id: str,
+    user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Inline PDF/image for the document card. Word files are converted to PDF."""
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    att = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
+    if not att:
+        raise HTTPException(status_code=404, detail="Вложение не найдено")
+    path = resolve_storage_path(att.storage_key)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
+    mime = (att.content_type or "application/octet-stream").strip().lower()
+    name = (att.file_name or "").lower()
+    if mime.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+        return FileResponse(path, media_type=att.content_type or "image/jpeg", filename=att.file_name, content_disposition_type="inline")
+    if mime == "application/pdf" or name.endswith(".pdf"):
+        return FileResponse(path, media_type="application/pdf", filename=att.file_name, content_disposition_type="inline")
+    if not is_office_document(att.file_name, att.content_type):
+        raise HTTPException(status_code=415, detail="Предпросмотр для этого типа файла недоступен")
+    cache_path = path.with_suffix(path.suffix + ".preview.pdf")
+    if cache_path.is_file() and cache_path.stat().st_size > 0:
+        return FileResponse(cache_path, media_type="application/pdf", filename=f"{Path(att.file_name).stem}.pdf", content_disposition_type="inline")
+    try:
+        pdf_bytes = convert_office_bytes_to_pdf(path.read_bytes(), att.file_name)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e) or "Не удалось преобразовать в PDF") from e
+    try:
+        cache_path.write_bytes(pdf_bytes)
+    except OSError:
+        _log.warning("could not cache preview pdf for %s", att.id)
+    pdf_name = f"{Path(att.file_name).stem or 'letter'}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{pdf_name}"'},
     )
 
 
