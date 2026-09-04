@@ -1126,11 +1126,6 @@ async def pay_expense(
     if row.status != "approved":
         raise HTTPException(status_code=400, detail="Выплата только для approved")
     personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
-    if not personal_payout and not row.is_reimbursable:
-        raise HTTPException(
-            status_code=400,
-            detail="Возмещение сотруднику — для расходов с личной карты или наличных; оплата поставщику — только для возмещаемых клиентом заявок",
-        )
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     row.status = "paid"
@@ -1197,9 +1192,6 @@ async def unpay_expense(
     await _ensure_access(row, user)
     if row.status != "paid":
         raise HTTPException(status_code=400, detail="Отмена оплаты только для статуса paid")
-    personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
-    if not personal_payout and not row.is_reimbursable:
-        raise HTTPException(status_code=400, detail="Отмена выплаты только для возмещения сотруднику или оплаты возмещаемых клиентом заявок")
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     comment = body.comment.strip()

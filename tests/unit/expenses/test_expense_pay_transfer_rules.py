@@ -15,3 +15,18 @@ def test_transfer_create_reimbursable_without_card_ok():
     assert body.payment_method == "transfer"
     assert body.reimbursement_card_number is None
     assert body.is_reimbursable is True
+
+
+def test_transfer_create_non_reimbursable_without_card_ok():
+    """Client-non-reimbursable vendor transfer is a valid create; pay is allowed for moderators."""
+    body = ExpenseCreateBody.model_validate({
+        "description": "Госпошлина перечислением",
+        "expenseDate": "2026-09-03",
+        "amountUzs": "924000",
+        "exchangeRate": "11813",
+        "expenseType": "client_expense",
+        "isReimbursable": False,
+        "paymentMethod": "transfer",
+    })
+    assert body.payment_method == "transfer"
+    assert body.is_reimbursable is False
