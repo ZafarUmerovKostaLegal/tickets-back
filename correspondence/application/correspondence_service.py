@@ -26,8 +26,8 @@ ALLOWED_MIME_TYPES = frozenset(
     }
 )
 
-# Registered workflow + partner review queue
-WORK_STATUS_GROUP = frozenset({"progress", "approval", "pending_review"})
+# Registered workflow + partner review queue (`new` is a legacy alias of progress)
+WORK_STATUS_GROUP = frozenset({"progress", "approval", "pending_review", "new"})
 REVIEW_EDITABLE_STATUSES = frozenset({"draft", "rejected"})
 UNREGISTERED_STATUSES = frozenset({"draft", "pending_review", "rejected"})
 

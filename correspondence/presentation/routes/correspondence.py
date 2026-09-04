@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -258,6 +258,16 @@ def _assert_assigned_partner(row: CorrespondenceDocumentModel, user: dict) -> No
     raise HTTPException(status_code=403, detail="Только назначенный партнёр может выполнить это действие")
 
 
+def _parse_query_date(value: Optional[str], field: str) -> date | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field} must be YYYY-MM-DD")
+
+
 @router.get("", response_model=DocumentListResponse)
 async def list_correspondence(
     direction: Optional[str] = Query(None),
@@ -270,6 +280,9 @@ async def list_correspondence(
     include_archived: bool = Query(False, alias="includeArchived"),
     registered_only: bool = Query(False, alias="registeredOnly"),
     partner_user_id: Optional[int] = Query(None, alias="partnerUserId"),
+    responsible_user_id: Optional[int] = Query(None, alias="responsibleUserId"),
+    date_from: Optional[str] = Query(None, alias="dateFrom"),
+    date_to: Optional[str] = Query(None, alias="dateTo"),
     user: dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     session: AsyncSession = Depends(get_session),
@@ -282,6 +295,10 @@ async def list_correspondence(
         doc_types = parse_doc_type_filter(doc_type)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    parsed_from = _parse_query_date(date_from, "dateFrom")
+    parsed_to = _parse_query_date(date_to, "dateTo")
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(status_code=400, detail="dateFrom cannot be after dateTo")
     repo = CorrespondenceRepository(session)
     rows, total = await repo.list_documents(
         direction=(direction.strip() if direction else None),
@@ -293,6 +310,9 @@ async def list_correspondence(
         limit=limit,
         registered_only=registered_only,
         partner_user_id=partner_user_id,
+        responsible_user_id=responsible_user_id,
+        date_from=parsed_from,
+        date_to=parsed_to,
     )
     settings = get_settings()
     ids: set[int] = set()
@@ -331,6 +351,7 @@ async def correspondence_stats(
         outgoing_total=s["outgoing_total"],
         approval_total=s["approval_total"],
         incoming_new_total=s["incoming_new_total"],
+        pending_review_total=s.get("pending_review_total", 0),
         partner_attention_total=s.get("partner_attention_total", 0),
         partner_outgoing_pending=s.get("partner_outgoing_pending", 0),
         partner_incoming_new=s.get("partner_incoming_new", 0),
@@ -398,7 +419,7 @@ async def register_incoming(
         registry_number=reg_no,
         direction="incoming",
         doc_type=dt,
-        status="new",
+        status="progress",
         counterparty=counterparty,
         subject=subject,
         comment=comment,
@@ -416,17 +437,6 @@ async def register_incoming(
     await session.commit()
     row = await repo.get_by_id(doc_id, load_attachments=True)
     assert row is not None
-    settings = get_settings()
-    await send_system_notification(
-        settings,
-        recipient_user_id=partner_user_id,
-        title="Новое входящее письмо",
-        description=(
-            f"«{row.subject}» — {row.counterparty} ({reg_no}). "
-            "Откройте раздел корреспонденции."
-        ),
-        notification_type="correspondence_incoming",
-    )
     return await _detail(row, authorization)
 
 
@@ -462,7 +472,7 @@ async def register_outgoing(
         registry_number=reg_no,
         direction="outgoing",
         doc_type=dt,
-        status="new",
+        status="progress",
         counterparty=counterparty,
         subject=subject,
         comment=comment,
@@ -607,7 +617,7 @@ async def approve_outgoing(
     reg_no = await repo.next_registry_number("outgoing", year)
     await repo.update_document(
         row,
-        status="new",
+        status="progress",
         registry_number=reg_no,
         set_registered_at=True,
         registered_at=now,

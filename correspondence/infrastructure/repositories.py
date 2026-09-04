@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -126,6 +126,9 @@ class CorrespondenceRepository:
         limit: int,
         registered_only: bool = False,
         partner_user_id: int | None = None,
+        responsible_user_id: int | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[CorrespondenceDocumentModel], int]:
         conds: list[Any] = []
         if direction:
@@ -140,6 +143,18 @@ class CorrespondenceRepository:
             conds.append(CorrespondenceDocumentModel.doc_type.in_(doc_types))
         if partner_user_id is not None and partner_user_id > 0:
             conds.append(CorrespondenceDocumentModel.partner_user_id == int(partner_user_id))
+        if responsible_user_id is not None and responsible_user_id > 0:
+            conds.append(CorrespondenceDocumentModel.responsible_user_id == int(responsible_user_id))
+        doc_ts = func.coalesce(
+            CorrespondenceDocumentModel.registered_at,
+            CorrespondenceDocumentModel.created_at,
+        )
+        if date_from is not None:
+            start = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
+            conds.append(doc_ts >= start)
+        if date_to is not None:
+            end = datetime(date_to.year, date_to.month, date_to.day, tzinfo=timezone.utc) + timedelta(days=1)
+            conds.append(doc_ts < end)
         if search and search.strip():
             qpat = f"%{search.strip()}%"
             conds.append(
@@ -147,6 +162,7 @@ class CorrespondenceRepository:
                     CorrespondenceDocumentModel.counterparty.ilike(qpat),
                     CorrespondenceDocumentModel.subject.ilike(qpat),
                     CorrespondenceDocumentModel.registry_number.ilike(qpat),
+                    CorrespondenceDocumentModel.comment.ilike(qpat),
                 )
             )
         where = and_(*conds) if conds else True
@@ -168,7 +184,7 @@ class CorrespondenceRepository:
         return list(rows), total
 
     async def count_partner_attention_split(self, partner_user_id: int) -> tuple[int, int]:
-        """(outgoing pending_review, incoming new) assigned to this partner."""
+        """(outgoing pending_review, unused incoming count). Badges are review-only."""
         if partner_user_id <= 0:
             return (0, 0)
         base = CorrespondenceDocumentModel.archived_at.is_(None)
@@ -184,11 +200,7 @@ class CorrespondenceRepository:
             CorrespondenceDocumentModel.direction == "outgoing",
             CorrespondenceDocumentModel.status == "pending_review",
         )
-        incoming = await _count(
-            CorrespondenceDocumentModel.direction == "incoming",
-            CorrespondenceDocumentModel.status == "new",
-        )
-        return (outgoing, incoming)
+        return (outgoing, 0)
 
     async def count_partner_attention(self, partner_user_id: int) -> int:
         outgoing, incoming = await self.count_partner_attention_split(partner_user_id)
@@ -203,9 +215,8 @@ class CorrespondenceRepository:
             return int((await self._session.execute(q)).scalar() or 0)
 
         partner_outgoing_pending = 0
-        partner_incoming_new = 0
         if partner_user_id is not None and partner_user_id > 0:
-            partner_outgoing_pending, partner_incoming_new = await self.count_partner_attention_split(
+            partner_outgoing_pending, _ = await self.count_partner_attention_split(
                 partner_user_id
             )
 
@@ -216,15 +227,15 @@ class CorrespondenceRepository:
                 CorrespondenceDocumentModel.registry_number.is_not(None),
             ),
             "approval_total": await _count(
-                CorrespondenceDocumentModel.status.in_(("approval", "pending_review")),
+                CorrespondenceDocumentModel.status == "approval",
             ),
-            "incoming_new_total": await _count(
-                CorrespondenceDocumentModel.direction == "incoming",
-                CorrespondenceDocumentModel.status == "new",
+            "pending_review_total": await _count(
+                CorrespondenceDocumentModel.status == "pending_review",
             ),
-            "partner_attention_total": partner_outgoing_pending + partner_incoming_new,
+            "incoming_new_total": 0,
+            "partner_attention_total": partner_outgoing_pending,
             "partner_outgoing_pending": partner_outgoing_pending,
-            "partner_incoming_new": partner_incoming_new,
+            "partner_incoming_new": 0,
         }
 
     async def update_document(

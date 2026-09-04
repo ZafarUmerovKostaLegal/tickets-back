@@ -18,7 +18,7 @@ def test_format_registry_number_outgoing():
 
 
 def test_parse_status_group_work():
-    assert parse_status_filter(None, "work") == ["approval", "pending_review", "progress"]
+    assert parse_status_filter(None, "work") == ["approval", "new", "pending_review", "progress"]
 
 
 def test_normalize_review_statuses():
