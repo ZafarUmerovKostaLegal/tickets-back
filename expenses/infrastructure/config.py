@@ -157,6 +157,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXPENSE_NOTIFY_AUTHOR_ON_PAID"),
     )
 
+    expense_notify_on_employee_reimbursed: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("EXPENSE_NOTIFY_ON_EMPLOYEE_REIMBURSED"),
+    )
+    expense_notify_reimbursement_to: str = Field(
+        default="oidrisova@kostalegal.com",
+        validation_alias=AliasChoices("EXPENSE_NOTIFY_REIMBURSEMENT_TO"),
+    )
+
     expense_auth_bearer_for_author_email: str = Field(
         default="",
         validation_alias=AliasChoices("EXPENSE_AUTH_BEARER_FOR_AUTHOR_EMAIL"),
@@ -217,6 +226,7 @@ class Settings(BaseSettings):
         "expense_email_action_confirm_step",
         "expense_notify_author_on_decision",
         "expense_notify_author_on_paid",
+        "expense_notify_on_employee_reimbursed",
         "expense_notify_payment_confirmer",
         mode="before",
     )

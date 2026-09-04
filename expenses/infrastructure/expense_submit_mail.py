@@ -1194,6 +1194,115 @@ async def notify_expense_author_paid(
     _log.info("expense author paid notify: отправлено expense_id=%s to=%s", expense_id, to)
 
 
+def _format_date_ru(d: date | datetime | None) -> str:
+    if d is None:
+        return "—"
+    if isinstance(d, datetime):
+        d = d.date()
+    return f"{d.day:02d}.{d.month:02d}.{d.year}"
+
+
+async def notify_expense_employee_reimbursed(
+    settings: Settings,
+    *,
+    to_email: str,
+    expense_id: str,
+    description: str | None,
+    amount_uzs: Decimal | None,
+    expense_date: date | datetime | None,
+    author_name: str | None,
+    paid_by_line: str | None,
+) -> None:
+    """Notify finance that an employee personal-funds expense was reimbursed."""
+    if not _smtp_ready(settings):
+        _log.warning(
+            "expense reimbursement notify: SMTP не настроен (%s), expense_id=%s",
+            ", ".join(_smtp_missing_env_names(settings)),
+            expense_id,
+        )
+        return
+    to = (to_email or "").strip()
+    if not to:
+        _log.warning("expense reimbursement notify: пустой email, expense_id=%s", expense_id)
+        return
+
+    safe_id = html.escape(expense_id)
+    safe_amount = html.escape(_format_money(amount_uzs))
+    safe_description = html.escape((description or "").strip() or "—").replace("\n", "<br/>")
+    safe_author = html.escape((author_name or "").strip() or "—")
+    safe_date = html.escape(_format_date_ru(expense_date))
+    safe_paid_by = html.escape((paid_by_line or "").strip() or "—")
+    open_link = _build_open_link(settings, expense_id)
+    link_html = ""
+    link_plain = ""
+    if open_link:
+        safe_link = html.escape(open_link, quote=True)
+        link_html = f"""
+<p style="margin:20px 0 0 0;">
+  <a href="{safe_link}" style="color:#2563eb;font-weight:600;">Открыть заявку в системе</a>
+</p>"""
+        link_plain = f"\n\nСсылка: {open_link}"
+
+    subject = f"Расход {expense_id} компенсирован сотруднику"
+    html_body = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"/></head>
+<body style="margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f8fafc;color:#0f172a;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f8fafc;padding:24px 12px;">
+  <tr><td align="center">
+    <table role="presentation" width="580" cellspacing="0" cellpadding="0" border="0" style="max-width:580px;background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:28px 24px;">
+      <tr><td>
+        <p style="margin:0 0 12px;font-size:18px;font-weight:700;">Расход компенсирован сотруднику</p>
+        <p style="margin:0 0 18px;color:#475569;line-height:1.55;">
+          Заявка <strong>{safe_id}</strong> отмечена как <strong>возмещённая</strong> (перевод сотруднику выполнен).
+        </p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f8fafc;border-radius:8px;overflow:hidden;margin-bottom:8px;">
+          {_detail_row("Заявка", safe_id)}
+          {_detail_row("Сотрудник", safe_author)}
+          {_detail_row("Описание", safe_description)}
+          {_detail_row("Дата расхода", safe_date)}
+          {_detail_row("Сумма (UZS)", safe_amount)}
+          {_detail_row("Компенсацию отметил(а)", safe_paid_by)}
+        </table>
+        {link_html}
+        <p style="margin:20px 0 0;font-size:13px;color:#64748b;">Kosta Legal · расходы</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>"""
+    plain_body = (
+        f"Расход {expense_id} компенсирован сотруднику.\n\n"
+        f"Сотрудник: {(author_name or '').strip() or '—'}\n"
+        f"Описание: {(description or '').strip() or '—'}\n"
+        f"Дата расхода: {_format_date_ru(expense_date)}\n"
+        f"Сумма (UZS): {_format_money(amount_uzs)}\n"
+        f"Компенсацию отметил(а): {(paid_by_line or '').strip() or '—'}"
+        f"{link_plain}"
+    )
+    from_addr = (settings.expense_mail_from or settings.smtp_user or "").strip()
+    if not from_addr:
+        _log.warning(
+            "expense reimbursement notify: пустой отправитель, expense_id=%s",
+            expense_id,
+        )
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.smtp_host.strip(),
+        port=int(settings.smtp_port),
+        username=settings.smtp_user.strip(),
+        password=settings.smtp_password,
+        start_tls=bool(settings.smtp_use_tls),
+    )
+    _log.info("expense reimbursement notify: отправлено expense_id=%s to=%s", expense_id, to)
+
+
 async def send_expense_smtp_test(settings: Settings) -> list[str]:
 
     if not _smtp_ready(settings):

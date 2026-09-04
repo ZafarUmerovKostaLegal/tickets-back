@@ -8,7 +8,11 @@ from typing import Literal, Optional
 
 from infrastructure.auth_users import fetch_user_by_id
 from infrastructure.config import Settings
-from infrastructure.expense_submit_mail import notify_expense_author_decision, notify_expense_author_paid
+from infrastructure.expense_submit_mail import (
+    notify_expense_author_decision,
+    notify_expense_author_paid,
+    notify_expense_employee_reimbursed,
+)
 
 _log = logging.getLogger(__name__)
 _TIMEOUT_SEC = 90.0
@@ -194,3 +198,98 @@ async def run_expense_paid_notification_safe(
         )
     except Exception:
         _log.exception("expense author paid notify failed expense_id=%s", expense_id)
+
+
+async def _run_employee_reimbursed_notification(
+    settings: Settings,
+    *,
+    authorization: Optional[str],
+    author_user_id: int,
+    expense_id: str,
+    description: str | None,
+    amount_uzs,
+    expense_date,
+    paid_by_user_id: int,
+    paid_by_display_name: str | None,
+    paid_by_email: str | None,
+) -> None:
+    if not settings.expense_notify_on_employee_reimbursed:
+        return
+    raw = (settings.expense_notify_reimbursement_to or "").replace(";", ",")
+    recipients = [part.strip() for part in raw.split(",") if part.strip()]
+    if not recipients:
+        _log.warning("expense reimbursement notify: список получателей пуст expense_id=%s", expense_id)
+        return
+
+    fb = (settings.expense_auth_bearer_for_author_email or "").strip() or None
+    profile = await fetch_user_by_id(
+        settings.auth_service_url,
+        authorization,
+        author_user_id,
+        fallback_bearer=fb,
+    )
+    author_name = None
+    if profile:
+        author_name = str(profile.get("display_name") or "").strip() or str(profile.get("email") or "").strip() or None
+    paid_by_line = _format_paid_by_line(
+        paid_by_user_id=paid_by_user_id,
+        paid_by_display_name=paid_by_display_name,
+        paid_by_email=paid_by_email,
+    )
+    for to_email in recipients:
+        try:
+            await notify_expense_employee_reimbursed(
+                settings,
+                to_email=to_email,
+                expense_id=expense_id,
+                description=description,
+                amount_uzs=amount_uzs,
+                expense_date=expense_date,
+                author_name=author_name,
+                paid_by_line=paid_by_line,
+            )
+        except Exception:
+            _log.exception(
+                "expense reimbursement notify failed expense_id=%s to=%s",
+                expense_id,
+                to_email,
+            )
+
+
+async def run_employee_reimbursed_notification_safe(
+    settings: Settings,
+    *,
+    authorization: Optional[str],
+    author_user_id: int,
+    expense_id: str,
+    description: str | None,
+    amount_uzs,
+    expense_date,
+    paid_by_user_id: int,
+    paid_by_display_name: str | None,
+    paid_by_email: str | None,
+) -> None:
+    try:
+        await asyncio.wait_for(
+            _run_employee_reimbursed_notification(
+                settings,
+                authorization=authorization,
+                author_user_id=author_user_id,
+                expense_id=expense_id,
+                description=description,
+                amount_uzs=amount_uzs,
+                expense_date=expense_date,
+                paid_by_user_id=paid_by_user_id,
+                paid_by_display_name=paid_by_display_name,
+                paid_by_email=paid_by_email,
+            ),
+            timeout=_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        _log.error(
+            "expense reimbursement notify: timeout after %ss expense_id=%s",
+            _TIMEOUT_SEC,
+            expense_id,
+        )
+    except Exception:
+        _log.exception("expense reimbursement notify failed expense_id=%s", expense_id)

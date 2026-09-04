@@ -28,6 +28,7 @@ from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.expense_author_decision_notify import (
     run_author_decision_notification_safe,
     run_expense_paid_notification_safe,
+    run_employee_reimbursed_notification_safe,
 )
 from infrastructure.expense_payment_confirmation_notify import (
     run_payment_confirmation_notification_safe,
@@ -1163,6 +1164,19 @@ async def pay_expense(
         paid_by_display_name=str(user.get("display_name") or "").strip() or None,
         paid_by_email=str(user.get("email") or "").strip() or None,
     )
+    if personal_payout:
+        await run_employee_reimbursed_notification_safe(
+            get_settings(),
+            authorization=authorization,
+            author_user_id=row.created_by_user_id,
+            expense_id=row.id,
+            description=row.description,
+            amount_uzs=row.amount_uzs,
+            expense_date=row.expense_date,
+            paid_by_user_id=int(user["id"]),
+            paid_by_display_name=str(user.get("display_name") or "").strip() or None,
+            paid_by_email=str(user.get("email") or "").strip() or None,
+        )
     return await _detail_response(row, authorization)
 
 
