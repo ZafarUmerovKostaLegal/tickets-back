@@ -52,6 +52,16 @@ _log = logging.getLogger(__name__)
 _INLINE_MIME_PREFIXES = ("image/", "application/pdf")
 
 
+def _inline_response(path, media_type: str) -> FileResponse:
+    """Avoid non-ASCII filenames in Content-Disposition (latin-1 headers → 500)."""
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename="preview",
+        content_disposition_type="inline",
+    )
+
+
 def _user_snippet(user_id: int, profile: dict | None) -> UserSnippetOut:
     p = profile or {}
     return UserSnippetOut(
@@ -897,27 +907,30 @@ async def preview_attachment_file(
     mime = (att.content_type or "application/octet-stream").strip().lower()
     name = (att.file_name or "").lower()
     if mime.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
-        return FileResponse(path, media_type=att.content_type or "image/jpeg", filename=att.file_name, content_disposition_type="inline")
+        return _inline_response(path, att.content_type or "image/jpeg")
     if mime == "application/pdf" or name.endswith(".pdf"):
-        return FileResponse(path, media_type="application/pdf", filename=att.file_name, content_disposition_type="inline")
+        return _inline_response(path, "application/pdf")
     if not is_office_document(att.file_name, att.content_type):
         raise HTTPException(status_code=415, detail="Предпросмотр для этого типа файла недоступен")
     cache_path = path.with_suffix(path.suffix + ".preview.pdf")
     if cache_path.is_file() and cache_path.stat().st_size > 0:
-        return FileResponse(cache_path, media_type="application/pdf", filename=f"{Path(att.file_name).stem}.pdf", content_disposition_type="inline")
+        return _inline_response(cache_path, "application/pdf")
     try:
         pdf_bytes = convert_office_bytes_to_pdf(path.read_bytes(), att.file_name)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e) or "Не удалось преобразовать в PDF") from e
+    except Exception as e:
+        _log.exception("preview convert failed for attachment %s", att.id)
+        raise HTTPException(
+            status_code=503,
+            detail="Не удалось преобразовать письмо в PDF. Скачайте исходный файл Word.",
+        ) from e
     try:
         cache_path.write_bytes(pdf_bytes)
     except OSError:
         _log.warning("could not cache preview pdf for %s", att.id)
-    pdf_name = f"{Path(att.file_name).stem or 'letter'}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{pdf_name}"'},
+        headers={"Content-Disposition": "inline; filename=preview.pdf"},
     )
 
 
