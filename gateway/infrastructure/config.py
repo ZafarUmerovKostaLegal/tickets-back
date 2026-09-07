@@ -73,6 +73,9 @@ class Settings(BaseSettings):
         le=86400,
     )
 
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-6-astra", validation_alias="OPENAI_MODEL")
+
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
 

@@ -39,6 +39,7 @@ from presentation.routes import (
     time_tracking_routes,
     time_tracking_users_hourly_alias,
     expenses_routes,
+    kosta_legal_ai_routes,
 )
 
 
@@ -156,3 +157,4 @@ app.include_router(attendance_routes.router)
 app.include_router(vacation_routes.router)
 app.include_router(time_tracking_routes.router)
 app.include_router(expenses_routes.router)
+app.include_router(kosta_legal_ai_routes.router)

@@ -35,6 +35,10 @@ jobs:
       - name: Start E2E stack
         run: docker compose -f docker-compose.e2e.yml up -d --wait --timeout 600
 
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs --no-color || true
+
       - name: Pytest integration
         run: pytest tests/integration -q --tb=short -m integration
         env:

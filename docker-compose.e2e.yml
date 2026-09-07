@@ -1,16 +1,38 @@
 name: kosta-e2e-stack
 
+# Subset of docker-compose.yml for CI. `extends` keeps parent depends_on, so
+# every referenced DB/service must be listed here, and gateway/contacts override
+# depends_on so the full prod graph is not required.
+
 services:
   users_db:
     extends:
       file: docker-compose.yml
       service: users_db
 
+  tickets_db:
+    extends:
+      file: docker-compose.yml
+      service: tickets_db
+
+  correspondence_db:
+    extends:
+      file: docker-compose.yml
+      service: correspondence_db
+
+  chat_db:
+    extends:
+      file: docker-compose.yml
+      service: chat_db
+
   auth:
     extends:
       file: docker-compose.yml
       service: auth
-    depends_on:
+    environment:
+      AUTH_SESSION_COOKIE_SECURE: "false"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+    depends_on: !override
       users_db:
         condition: service_healthy
 
@@ -18,24 +40,37 @@ services:
     extends:
       file: docker-compose.yml
       service: tickets
-    depends_on:
-      users_db:
+    depends_on: !override
+      tickets_db:
         condition: service_healthy
 
   correspondence:
     extends:
       file: docker-compose.yml
       service: correspondence
+    depends_on: !override
+      correspondence_db:
+        condition: service_healthy
+      auth:
+        condition: service_started
 
   contacts:
     extends:
       file: docker-compose.yml
       service: contacts
+    depends_on: !override
+      auth:
+        condition: service_healthy
 
   chat:
     extends:
       file: docker-compose.yml
       service: chat
+    depends_on: !override
+      chat_db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
 
   gateway:
     extends:
@@ -47,7 +82,7 @@ services:
       AUTH_SESSION_COOKIE_SECURE: "false"
       ATTENDANCE_RANGE_SNAPSHOT_ENABLED: "false"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
-    depends_on:
+    depends_on: !override
       users_db:
         condition: service_healthy
       auth:
@@ -60,3 +95,10 @@ services:
         condition: service_started
       chat:
         condition: service_started
+
+volumes:
+  media_storage:
+  users_db_data:
+  tickets_db_data:
+  correspondence_db_data:
+  chat_db_data:
