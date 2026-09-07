@@ -443,7 +443,7 @@ async def add_members(
         b = await repo.get_board_by_id(board_id)
         if not b or await repo.board_role(user_id, board_id) not in ("owner", "editor"):
             raise HTTPException(status_code=404, detail="Board not found")
-        raise HTTPException(status_code=400, detail="Members can only be added to shared boards")
+        raise HTTPException(status_code=400, detail="Cannot add members to this board")
     board = await repo.get_board_by_id(board_id)
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
@@ -772,6 +772,7 @@ async def patch_column_nested(
         title=patch.get("title"),
         color=patch.get("color"),
         is_collapsed=patch.get("is_collapsed"),
+        is_archived=patch.get("is_archived"),
     )
     if not col or col.board_id != board_id:
         raise HTTPException(status_code=404, detail="Column not found")

@@ -252,8 +252,20 @@ async def apply_todo_boards_multi_user_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_todo_board_columns_archived_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            ALTER TABLE todo_board_columns
+            ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
+    )
+
+
 REGISTERED_TODO_SCHEMA_PATCHES = (
     ("todo_board_columns_collapsed", apply_todo_board_columns_collapsed_patch),
     ("todo_kanban_extended", apply_todo_kanban_extended_patch),
     ("todo_boards_multi_user", apply_todo_boards_multi_user_patch),
+    ("todo_board_columns_archived", apply_todo_board_columns_archived_patch),
 )

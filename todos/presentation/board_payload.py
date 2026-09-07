@@ -70,6 +70,7 @@ class ColumnOut(BaseModel):
     position: int
     color: str
     is_collapsed: bool = False
+    is_archived: bool = False
     task_count: int
     cards: list[CardOut]
 
@@ -81,6 +82,7 @@ class BoardOut(BaseModel):
     visibility: str = "personal"
     color: str | None = None
     background_url: str | None
+    my_role: str | None = None
     board_labels: list[BoardLabelOut]
     columns: list[ColumnOut]
 
@@ -201,7 +203,7 @@ async def build_board_out(
     cols = await repo._columns_for_board(board.id)
     out_cols: list[ColumnOut] = []
     for col in cols:
-        cards = await repo._cards_for_column(col.id)
+        cards = await repo._cards_for_column_all(col.id)
         if viewer_user_id is not None and viewer_role == "participant":
             part_map_for_filter = await repo.batch_participant_ids([c.id for c in cards])
             cards = [
@@ -209,6 +211,7 @@ async def build_board_out(
                 for c in cards
                 if int(viewer_user_id) in set(part_map_for_filter.get(c.id, []))
             ]
+        visible_count = sum(1 for c in cards if not c.is_archived)
         card_ids = [c.id for c in cards]
         lbl_map = await repo.batch_card_label_payload(card_ids)
         chk_map = await repo.batch_checklist_items(card_ids)
@@ -274,7 +277,8 @@ async def build_board_out(
                 position=col.position,
                 color=col.color,
                 is_collapsed=col.is_collapsed,
-                task_count=len(cards),
+                is_archived=bool(col.is_archived),
+                task_count=visible_count,
                 cards=card_outs,
             )
         )
@@ -285,6 +289,7 @@ async def build_board_out(
         visibility=board.visibility,
         color=board.color,
         background_url=board.background_url,
+        my_role=viewer_role,
         board_labels=board_labels,
         columns=out_cols,
     )

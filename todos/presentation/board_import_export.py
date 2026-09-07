@@ -113,6 +113,7 @@ def board_out_to_export_dict(board: BoardOut) -> dict[str, Any]:
                 "title": col.title,
                 "color": col.color,
                 "is_collapsed": bool(col.is_collapsed),
+                "is_archived": bool(col.is_archived),
                 "cards": cards_payload,
             }
         )
@@ -381,6 +382,7 @@ async def import_normalized_board(
             position=col_idx,
             color=str(col.get("color") or COLUMN_COLORS[col_idx % len(COLUMN_COLORS)])[:32],
             is_collapsed=bool(col.get("is_collapsed")),
+            is_archived=bool(col.get("is_archived")),
             created_at=now,
             updated_at=None,
         )

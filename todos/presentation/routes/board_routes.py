@@ -46,6 +46,7 @@ class PatchColumnBody(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
     color: str | None = Field(None, max_length=32)
     is_collapsed: bool | None = Field(None, alias="isCollapsed")
+    is_archived: bool | None = Field(None, alias="isArchived")
 
 
 class ReorderColumnsBody(BaseModel):
@@ -248,6 +249,7 @@ async def patch_column(
         title=patch.get("title"),
         color=patch.get("color"),
         is_collapsed=patch.get("is_collapsed"),
+        is_archived=patch.get("is_archived"),
     )
     if not col:
         raise HTTPException(status_code=404, detail="Column not found")

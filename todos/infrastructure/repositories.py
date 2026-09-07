@@ -165,6 +165,7 @@ class KanbanRepository:
                     position=i,
                     color=col_color,
                     is_collapsed=False,
+                    is_archived=False,
                     created_at=now,
                     updated_at=None,
                 )
@@ -546,8 +547,12 @@ class KanbanRepository:
         instant: bool,
     ) -> AddBoardMembersResult | None:
         b = await self.require_board_write(actor_user_id, board_id)
-        if not b or b.archived_at is not None or b.visibility != BOARD_VIS_SHARED:
+        if not b or b.archived_at is not None:
             return None
+        if b.visibility != BOARD_VIS_SHARED:
+            b.visibility = BOARD_VIS_SHARED
+            b.updated_at = _utc_now()
+            self._session.add(b)
         now = _utc_now()
         result = AddBoardMembersResult()
         board_owner = b.user_id
@@ -850,6 +855,7 @@ class KanbanRepository:
             position=pos,
             color=(color or "#6b7280").strip()[:32],
             is_collapsed=bool(is_collapsed),
+            is_archived=False,
             created_at=now,
             updated_at=None,
         )
@@ -1309,6 +1315,7 @@ class KanbanRepository:
         title: str | None,
         color: str | None,
         is_collapsed: bool | None,
+        is_archived: bool | None = None,
     ) -> TodoColumnModel | None:
         col = await self.get_column_if_owned(user_id, column_id)
         if not col:
@@ -1320,6 +1327,8 @@ class KanbanRepository:
             col.color = color.strip()[:32]
         if is_collapsed is not None:
             col.is_collapsed = bool(is_collapsed)
+        if is_archived is not None:
+            col.is_archived = bool(is_archived)
         col.updated_at = now
         self._session.add(col)
         return col
