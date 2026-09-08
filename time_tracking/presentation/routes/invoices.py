@@ -150,6 +150,7 @@ async def partner_period_invoice_preview(
     currency: Optional[str] = Query(None),
     issue_date: Optional[date] = Query(None, alias="issueDate"),
     client_id: Optional[str] = Query(None, alias="clientId"),
+    partner_confirmation_request_id: Optional[str] = Query(None, alias="partnerConfirmationRequestId"),
     session: AsyncSession = Depends(get_session),
 ):
     """Invoice-ready subtotal for a partner-confirmed period (time + package + expenses, FX)."""
@@ -179,6 +180,7 @@ async def partner_period_invoice_preview(
         invoice_currency=inv_ccy,
         issue_date=issue_date or date_to,
         exclude_invoiced=True,
+        partner_confirmation_request_id=partner_confirmation_request_id,
     )
     return preview.as_dict()
 

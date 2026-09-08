@@ -10,7 +10,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterable
 
 from fastapi import HTTPException
-from sqlalchemy import and_, inspect as orm_inspect, select
+from sqlalchemy import and_, inspect as orm_inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -175,6 +175,58 @@ async def _recalc_invoice_from_lines(session: AsyncSession, inv: InvoiceModel) -
     paid = await InvoiceRepository(session).sum_payments(inv.id)
     inv.amount_paid = _money4(paid)
     _sync_payment_status(inv)
+
+
+_EMPTY_INVOICE_TOTAL = Decimal("0.01")
+
+
+async def _cancel_empty_partner_invoices(
+    session: AsyncSession,
+    *,
+    actor_auth_user_id: int,
+    partner_confirmation_request_id: str | None,
+    project_id: str | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> None:
+    """Empty partner drafts lock time entries as 'already invoiced' and keep showing 0.00."""
+    req = (partner_confirmation_request_id or "").strip()
+    pid = (project_id or "").strip()
+    match: list[Any] = []
+    if req:
+        match.append(InvoiceModel.partner_confirmation_request_id == req)
+    if pid and date_from is not None and date_to is not None:
+        match.append(
+            and_(
+                InvoiceModel.project_id == pid,
+                InvoiceModel.partner_billing_period_from == date_from,
+                InvoiceModel.partner_billing_period_to == date_to,
+            )
+        )
+    if not match:
+        return
+    rows = list(
+        (
+            await session.execute(
+                select(InvoiceModel).where(
+                    and_(InvoiceModel.status != "canceled", or_(*match))
+                )
+            )
+        ).scalars().all()
+    )
+    now = _now_utc()
+    repo = InvoiceRepository(session)
+    for inv in rows:
+        if _money4(inv.total_amount) > _EMPTY_INVOICE_TOTAL:
+            continue
+        if _money4(inv.amount_paid) > 0:
+            continue
+        inv.status = "canceled"
+        inv.canceled_at = now
+        inv.updated_at = now
+        await _audit(session, repo, inv.id, "canceled", actor_auth_user_id, {"reason": "empty_partner_rebuild"})
+    if rows:
+        await session.flush()
 
 
 def _sync_payment_status(inv: InvoiceModel) -> None:
@@ -475,6 +527,14 @@ async def create_invoice(
         and partner_billing_period_to is not None
         and eff_pid
     ):
+        await _cancel_empty_partner_invoices(
+            session,
+            actor_auth_user_id=actor_auth_user_id,
+            partner_confirmation_request_id=partner_confirmation_request_id,
+            project_id=eff_pid,
+            date_from=partner_billing_period_from,
+            date_to=partner_billing_period_to,
+        )
         partner_preview = await resolve_partner_invoice_preview(
             session,
             project_id=eff_pid,
@@ -592,14 +652,14 @@ async def create_invoice(
                     sort_order=sort_order,
                     line_kind=ln.line_kind,
                     description=(ln.description or "")[:2000],
-                    quantity=ln.quantity,
-                    unit_amount=ln.unit_amount,
-                    line_total=ln.line_total,
+                    quantity=to_decimal(ln.quantity),
+                    unit_amount=_money4(ln.unit_amount),
+                    line_total=_money4(ln.line_total),
                     time_entry_id=ln.time_entry_id,
                     expense_request_id=ln.expense_request_id,
                     source_currency=ln.source_currency,
-                    source_amount=ln.source_amount,
-                    fx_rate=ln.fx_rate,
+                    source_amount=_money4(ln.source_amount) if ln.source_amount is not None else None,
+                    fx_rate=to_decimal(ln.fx_rate) if ln.fx_rate is not None else None,
                 )
             )
             sort_order += 1
@@ -672,6 +732,32 @@ async def create_invoice(
         expected = _money4(partner_preview.expected_subtotal)
         actual = _money4(inv.subtotal)
         if actual <= 0 and expected > 0:
+            db_lines = await _invoice_lines_for_totals(session, inv)
+            preview_by_te = {
+                str(ln.time_entry_id): ln
+                for ln in partner_preview.lines
+                if ln.time_entry_id
+            }
+            for i, row in enumerate(db_lines):
+                if _money4(row.line_total) > 0:
+                    continue
+                src = None
+                te = str(row.time_entry_id or "").strip()
+                if te and te in preview_by_te:
+                    src = preview_by_te[te]
+                elif i < len(partner_preview.lines):
+                    src = partner_preview.lines[i]
+                if src is None or _money4(src.line_total) <= 0:
+                    continue
+                row.quantity = to_decimal(src.quantity)
+                row.unit_amount = _money4(src.unit_amount)
+                row.line_total = _money4(src.line_total)
+                if src.source_amount is not None:
+                    row.source_amount = _money4(src.source_amount)
+            await session.flush()
+            await _recalc_invoice_from_lines(session, inv)
+            actual = _money4(inv.subtotal)
+        if actual <= 0 and expected > 0:
             inv.subtotal = expected
             disc_amt, tax_amt, total = _compute_totals(expected, inv.discount_percent, inv.tax_percent, inv.tax2_percent)
             inv.discount_amount = disc_amt
@@ -693,15 +779,16 @@ async def create_invoice(
                     "preview": partner_preview.as_dict(),
                 },
             )
-        total_fmt = format_invoice_total_display(inv.total_amount, cur)
-        doc = _parse_document_overrides_json(getattr(inv, "document_overrides_json", None)) or {"v": 1}
-        if not isinstance(doc, dict):
-            doc = {"v": 1}
-        cover = dict(doc.get("cover") or {})
-        cover["totalFormatted"] = total_fmt
-        doc["v"] = 1
-        doc["cover"] = cover
-        inv.document_overrides_json = _serialize_document_overrides(doc)
+        if _money4(inv.total_amount) > _EMPTY_INVOICE_TOTAL:
+            total_fmt = format_invoice_total_display(inv.total_amount, cur)
+            doc = _parse_document_overrides_json(getattr(inv, "document_overrides_json", None)) or {"v": 1}
+            if not isinstance(doc, dict):
+                doc = {"v": 1}
+            cover = dict(doc.get("cover") or {})
+            cover["totalFormatted"] = total_fmt
+            doc["v"] = 1
+            doc["cover"] = cover
+            inv.document_overrides_json = _serialize_document_overrides(doc)
 
     await _audit(session, repo, iid, "created", actor_auth_user_id, {"invoiceNumber": number})
     return inv

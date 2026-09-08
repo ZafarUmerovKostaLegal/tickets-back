@@ -28,6 +28,14 @@ def _m4(v: object) -> Decimal:
     return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
+def _invoice_occupies_billable_lines():
+    """Zero-total drafts must not lock time/expenses — they were saved after a crash/zero persist."""
+    return and_(
+        InvoiceModel.status != "canceled",
+        func.coalesce(InvoiceModel.total_amount, 0) > 0,
+    )
+
+
 def _sync_orm_payment_status(inv: InvoiceModel) -> None:
 
     if inv.status in ("canceled", "draft"):
@@ -266,7 +274,7 @@ class InvoiceRepository:
 
         cond = [
             InvoiceLineItemModel.time_entry_id == time_entry_id,
-            InvoiceModel.status != "canceled",
+            _invoice_occupies_billable_lines(),
             InvoiceLineItemModel.time_entry_id.is_not(None),
         ]
         if exclude_invoice_id:
@@ -286,7 +294,7 @@ class InvoiceRepository:
     ) -> str | None:
         cond = [
             InvoiceLineItemModel.expense_request_id == expense_request_id,
-            InvoiceModel.status != "canceled",
+            _invoice_occupies_billable_lines(),
             InvoiceLineItemModel.expense_request_id.is_not(None),
         ]
         if exclude_invoice_id:
@@ -312,7 +320,7 @@ class InvoiceRepository:
                 .where(
                     and_(
                         InvoiceLineItemModel.time_entry_id.in_(batch),
-                        InvoiceModel.status != "canceled",
+                        _invoice_occupies_billable_lines(),
                     )
                 )
             )
@@ -331,7 +339,7 @@ class InvoiceRepository:
                 .where(
                     and_(
                         InvoiceLineItemModel.expense_request_id.in_(batch),
-                        InvoiceModel.status != "canceled",
+                        _invoice_occupies_billable_lines(),
                     )
                 )
             )
