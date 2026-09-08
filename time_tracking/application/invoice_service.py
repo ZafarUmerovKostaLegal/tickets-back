@@ -74,16 +74,16 @@ def _money4(v: object) -> Decimal:
 
 
 def _compute_totals(
-    subtotal_lines: Decimal,
-    discount_percent: Decimal | None,
-    tax_percent: Decimal | None,
-    tax2_percent: Decimal | None,
+    subtotal_lines: object,
+    discount_percent: object | None,
+    tax_percent: object | None,
+    tax2_percent: object | None,
 ) -> tuple[Decimal, Decimal, Decimal]:
 
     sub = _money4(subtotal_lines)
-    dp = discount_percent or Decimal(0)
-    t1 = tax_percent or Decimal(0)
-    t2 = tax2_percent or Decimal(0)
+    dp = to_decimal(discount_percent)
+    t1 = to_decimal(tax_percent)
+    t2 = to_decimal(tax2_percent)
     disc = _money4(sub * dp / Decimal(100))
     after = _money4(sub - disc)
     tax_amt = _money4(after * t1 / Decimal(100) + after * t2 / Decimal(100))
@@ -145,9 +145,24 @@ async def _audit(
     )
 
 
+async def _invoice_lines_for_totals(session: AsyncSession, inv: InvoiceModel) -> list[InvoiceLineItemModel]:
+    await session.flush()
+    rows = list(
+        (
+            await session.execute(
+                select(InvoiceLineItemModel)
+                .where(InvoiceLineItemModel.invoice_id == inv.id)
+                .order_by(InvoiceLineItemModel.sort_order, InvoiceLineItemModel.id)
+            )
+        ).scalars().all()
+    )
+    if rows:
+        return rows
+    return sorted(list(inv.line_items or []), key=lambda x: (x.sort_order, x.id))
+
+
 async def _recalc_invoice_from_lines(session: AsyncSession, inv: InvoiceModel) -> None:
-    await session.refresh(inv, ["line_items"])
-    lines = sorted(inv.line_items, key=lambda x: (x.sort_order, x.id))
+    lines = await _invoice_lines_for_totals(session, inv)
     subtotal = _money4(sum((_money4(x.line_total) for x in lines), Decimal(0)))
     disc_amt, tax_amt, total = _compute_totals(
         subtotal, inv.discount_percent, inv.tax_percent, inv.tax2_percent,
@@ -483,11 +498,15 @@ async def create_invoice(
     tp = tax_percent if tax_percent is not None else client.tax_percent
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
     dp = discount_percent if discount_percent is not None else client.discount_percent
-    # Partner-confirmed invoices match report totals (pre-tax) unless caller sets tax explicitly.
-    if partner_preview is not None and tax_percent is None and tax2_percent is None and discount_percent is None:
-        tp = Decimal(0)
-        t2p = Decimal(0)
-        dp = Decimal(0)
+    # Confirmed-report invoices: total = report (pre-tax). Front may send taxPercent: 0
+    # while omitting discountPercent — that used to keep the client's discount and zero the bill.
+    if partner_preview is not None:
+        if tax_percent is None:
+            tp = Decimal(0)
+        if tax2_percent is None:
+            t2p = Decimal(0)
+        if discount_percent is None:
+            dp = Decimal(0)
 
     billed_override: Decimal | None = None
     if billed_amount is not None:
@@ -652,6 +671,13 @@ async def create_invoice(
     if partner_preview is not None and billed_override is None:
         expected = _money4(partner_preview.expected_subtotal)
         actual = _money4(inv.subtotal)
+        if actual <= 0 and expected > 0:
+            inv.subtotal = expected
+            disc_amt, tax_amt, total = _compute_totals(expected, inv.discount_percent, inv.tax_percent, inv.tax2_percent)
+            inv.discount_amount = disc_amt
+            inv.tax_amount = tax_amt
+            inv.total_amount = total
+            actual = expected
         if abs(actual - expected) > Decimal("0.01"):
             raise HTTPException(
                 status_code=409,
@@ -667,6 +693,15 @@ async def create_invoice(
                     "preview": partner_preview.as_dict(),
                 },
             )
+        total_fmt = format_invoice_total_display(inv.total_amount, cur)
+        doc = _parse_document_overrides_json(getattr(inv, "document_overrides_json", None)) or {"v": 1}
+        if not isinstance(doc, dict):
+            doc = {"v": 1}
+        cover = dict(doc.get("cover") or {})
+        cover["totalFormatted"] = total_fmt
+        doc["v"] = 1
+        doc["cover"] = cover
+        inv.document_overrides_json = _serialize_document_overrides(doc)
 
     await _audit(session, repo, iid, "created", actor_auth_user_id, {"invoiceNumber": number})
     return inv
