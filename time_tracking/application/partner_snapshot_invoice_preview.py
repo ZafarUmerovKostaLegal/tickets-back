@@ -159,8 +159,20 @@ def _pick_num(d: dict[str, Any], *keys: str) -> Decimal | None:
             except Exception:
                 continue
         if isinstance(v, str) and v.strip():
+            raw = v.strip().replace(" ", "")
+            if ":" in raw and raw.count(":") <= 2:
+                parts = raw.split(":")
+                try:
+                    if len(parts) == 2:
+                        h, mi = int(parts[0]), int(parts[1])
+                        return Decimal(h) + (Decimal(mi) / Decimal(60))
+                    if len(parts) == 3:
+                        h, mi, se = int(parts[0]), int(parts[1]), int(parts[2])
+                        return Decimal(h) + (Decimal(mi) / Decimal(60)) + (Decimal(se) / Decimal(3600))
+                except Exception:
+                    pass
             try:
-                return Decimal(v.strip().replace(" ", "").replace(",", "."))
+                return Decimal(raw.replace(",", "."))
             except Exception:
                 continue
     return None

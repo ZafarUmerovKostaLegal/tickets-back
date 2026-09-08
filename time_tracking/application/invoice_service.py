@@ -521,8 +521,7 @@ async def create_invoice(
 
     partner_preview = None
     if (
-        (not skip_partner_gate)
-        and (not pure_billed)
+        (not pure_billed)
         and partner_billing_period_from is not None
         and partner_billing_period_to is not None
         and eff_pid
@@ -666,6 +665,21 @@ async def create_invoice(
         if not inv.project_id and eff_pid:
             inv.project_id = eff_pid
         await session.flush()
+        if partner_billing_period_from and partner_billing_period_to:
+            pid = (inv.project_id or eff_pid or "").strip()
+            if pid:
+                y, m = partner_billing_period_from.year, partner_billing_period_from.month
+                ey, em = partner_billing_period_to.year, partner_billing_period_to.month
+                while (y, m) <= (ey, em):
+                    package_months.add((pid, y, m))
+                    if m == 12:
+                        y, m = y + 1, 1
+                    else:
+                        m += 1
+            if package_months:
+                sort_order = await _ensure_package_fee_lines(
+                    session, repo, inv, package_months, sort_order, fx_book=fx_book,
+                )
     else:
         if time_entry_ids:
             for tid in time_entry_ids:
@@ -727,6 +741,19 @@ async def create_invoice(
 
     await session.flush()
     await _recalc_invoice_from_lines(session, inv)
+
+    if (
+        billed_override is None
+        and partner_billing_period_from is not None
+        and partner_billing_period_to is not None
+    ):
+        persisted = await _invoice_lines_for_totals(session, inv)
+        if not persisted:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось перенести строки подтверждённого отчёта в счёт. "
+                "Проверьте, что в отчёте есть время или расходы за период.",
+            )
 
     if partner_preview is not None and billed_override is None:
         expected = _money4(partner_preview.expected_subtotal)

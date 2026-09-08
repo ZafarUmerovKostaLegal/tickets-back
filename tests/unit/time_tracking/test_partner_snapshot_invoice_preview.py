@@ -59,6 +59,13 @@ def test_pick_num_keeps_decimal():
     assert m._pick_num({"hours": 2}, "hours") == Decimal("2")
 
 
+def test_pick_num_clock_hours():
+    m = _mod()
+    h = m._pick_num({"hours": "2:38"}, "hours")
+    assert h is not None
+    assert abs(h - (Decimal(2) + Decimal(38) / Decimal(60))) < Decimal("0.0001")
+
+
 def test_round2_primitive():
     m = _mod()
     # Проверка примитива округления денег до 2 знаков (не правило суммы отчёта:
