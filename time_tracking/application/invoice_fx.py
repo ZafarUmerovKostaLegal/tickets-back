@@ -16,6 +16,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models_invoices import InvoiceFxRateModel
+from application.money_amounts import to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,8 @@ def _norm_ccy(v: str | None) -> str:
     return (v or "USD").strip().upper()[:10] or "USD"
 
 
-def _money4(v: Decimal) -> Decimal:
-    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+def _money4(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
 def _d(v: Any) -> Decimal:

@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from application.money_amounts import to_decimal
 from application.sql_batches import iter_sql_in_batches
 from infrastructure.models_invoices import (
     InvoiceAuditLogModel,
@@ -23,8 +24,8 @@ from infrastructure.repository_shared import _now_utc
 _Q4 = Decimal("0.0001")
 
 
-def _m4(v: Decimal) -> Decimal:
-    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+def _m4(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
 def _sync_orm_payment_status(inv: InvoiceModel) -> None:

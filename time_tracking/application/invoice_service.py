@@ -37,7 +37,7 @@ from application.package_billing import (
 from application.partner_snapshot_invoice_preview import (
     resolve_partner_invoice_preview,
 )
-from application.money_amounts import money_product_hours_rate
+from application.money_amounts import money_product_hours_rate, to_decimal
 from application.time_rounding import invoice_hours_for_billing, invoice_rate_for_billing
 from application.task_billing import is_flat_fee_task
 from application.partner_report_confirmation_service import (
@@ -69,8 +69,8 @@ _INVOICABLE_EXPENSE_STATUSES = frozenset({"approved", "paid", "closed"})
 
 _Q4 = Decimal("0.0001")
 
-def _money4(v: Decimal) -> Decimal:
-    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+def _money4(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
 def _compute_totals(
@@ -148,7 +148,7 @@ async def _audit(
 async def _recalc_invoice_from_lines(session: AsyncSession, inv: InvoiceModel) -> None:
     await session.refresh(inv, ["line_items"])
     lines = sorted(inv.line_items, key=lambda x: (x.sort_order, x.id))
-    subtotal = _money4(sum(_money4(x.line_total) for x in lines))
+    subtotal = _money4(sum((_money4(x.line_total) for x in lines), Decimal(0)))
     disc_amt, tax_amt, total = _compute_totals(
         subtotal, inv.discount_percent, inv.tax_percent, inv.tax2_percent,
     )
@@ -235,7 +235,7 @@ def resolve_billed_amount_fx_display(
         return {}
     if rate is None or rate <= 0:
         return {}
-    rate_disp = format(rate.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP), "f")
+    rate_disp = format(to_decimal(rate).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP), "f")
     rate_disp = rate_disp.rstrip("0").rstrip(".") if "." in rate_disp else rate_disp
     return {
         "fxAltAmountFormatted": alt_fmt,
@@ -1355,7 +1355,7 @@ def invoice_to_dict(
         try:
             if "payments" not in orm_inspect(inv).unloaded:
                 plist = list(inv.payments or [])
-                amount_paid_override = _money4(sum(_money4(p.amount) for p in plist))
+                amount_paid_override = _money4(sum((_money4(p.amount) for p in plist), Decimal(0)))
         except Exception:
             amount_paid_override = None
     paid_display = (

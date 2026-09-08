@@ -37,6 +37,7 @@ from application.invoice_fx import (
     convert_or_same,
     load_fx_rate_book,
 )
+from application.money_amounts import to_decimal
 from application.partner_confirmed_invoice_preview import (
     PartnerInvoicePreview,
     PartnerInvoicePreviewLine,
@@ -58,12 +59,12 @@ _ZERO = Decimal(0)
 _INVOICABLE_EXPENSE_STATUSES = frozenset({"approved", "paid", "closed"})
 
 
-def _round2(v: Decimal) -> Decimal:
-    return v.quantize(_Q2, rounding=ROUND_HALF_UP)
+def _round2(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q2, rounding=ROUND_HALF_UP)
 
 
-def _money4(v: Decimal) -> Decimal:
-    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+def _money4(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
 def _norm_ccy(v: str | None) -> str:
@@ -116,8 +117,8 @@ def _row_duplicate_fingerprint(
         _pick_str(d, "note", "notes", "description"),
         _pick_str(d, "taskName", "task_name") or None,
     )
-    hours_key = str(hours.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
-    amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
+    hours_key = str(to_decimal(hours).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+    amount_key = str(to_decimal(amount).quantize(_Q2, rounding=ROUND_HALF_UP))
     return "\x1f".join(
         (
             (project_id or "").strip(),
@@ -150,6 +151,8 @@ def _pick_num(d: dict[str, Any], *keys: str) -> Decimal | None:
         v = d.get(k)
         if isinstance(v, bool):
             continue
+        if isinstance(v, Decimal):
+            return v
         if isinstance(v, (int, float)):
             try:
                 return Decimal(str(v))

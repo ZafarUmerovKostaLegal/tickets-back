@@ -22,6 +22,7 @@ from application.invoice_fx import (
     convert_or_same,
     load_fx_rate_book,
 )
+from application.money_amounts import to_decimal
 from application.package_billing import (
     compute_entry_splits_for_project_entries,
     is_hour_package_project,
@@ -47,8 +48,8 @@ _ZERO = Decimal(0)
 _INVOICABLE_EXPENSE_STATUSES = frozenset({"approved", "paid", "closed"})
 
 
-def _money4(v: Decimal) -> Decimal:
-    return v.quantize(_Q4, rounding=ROUND_HALF_UP)
+def _money4(v: object) -> Decimal:
+    return to_decimal(v).quantize(_Q4, rounding=ROUND_HALF_UP)
 
 
 def _norm_ccy(v: str | None) -> str:
@@ -84,7 +85,7 @@ def _entry_duplicate_fingerprint(
         getattr(task, "name", None),
     )
     hours_key = str(dec(e.hours).quantize(_Q6, rounding=ROUND_HALF_UP))
-    amount_key = str(amount.quantize(_Q2, rounding=ROUND_HALF_UP))
+    amount_key = str(to_decimal(amount).quantize(_Q2, rounding=ROUND_HALF_UP))
     return "\x1f".join(
         (
             (project_id or "").strip(),

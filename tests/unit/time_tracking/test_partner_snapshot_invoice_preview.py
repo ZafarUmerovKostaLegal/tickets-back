@@ -46,6 +46,19 @@ def test_effective_data_override_wins():
     assert d["note"] == "edited"
 
 
+def test_round2_accepts_int():
+    m = _mod()
+    assert m._round2(150) == Decimal("150.00")
+    assert m._round2(0) == Decimal("0.00")
+    assert m._money4(395) == Decimal("395.0000")
+
+
+def test_pick_num_keeps_decimal():
+    m = _mod()
+    assert m._pick_num({"amountToPay": Decimal("395.00")}, "amountToPay") == Decimal("395.00")
+    assert m._pick_num({"hours": 2}, "hours") == Decimal("2")
+
+
 def test_round2_primitive():
     m = _mod()
     # Проверка примитива округления денег до 2 знаков (не правило суммы отчёта:
