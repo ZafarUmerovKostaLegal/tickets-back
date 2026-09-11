@@ -66,3 +66,25 @@ def normalize_colleague(raw: dict[str, Any]) -> ColleagueOut | None:
         is_blocked=bool(raw.get("is_blocked") or raw.get("isBlocked")),
         is_archived=bool(raw.get("is_archived") or raw.get("isArchived")),
     )
+
+
+class InternalExtensionOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    full_name: str = Field(validation_alias=AliasChoices("fullName", "full_name"))
+    extension: str
+
+
+class InternalExtensionCreateBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    full_name: str = Field(..., min_length=1, max_length=200, validation_alias=AliasChoices("fullName", "full_name"))
+    extension: str = Field(..., min_length=1, max_length=32)
+
+
+class InternalExtensionPatchBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    full_name: str | None = Field(None, min_length=1, max_length=200, validation_alias=AliasChoices("fullName", "full_name"))
+    extension: str | None = Field(None, min_length=1, max_length=32)

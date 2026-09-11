@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.report_builder import load_week_submitted_user_dates, _load_initials_map
+from application.auth_user_pii import hydrate_tt_rows
 from application.team_workload_builder import build_team_workload_members_and_summary
 from application.team_workload_math import period_days_inclusive
 from infrastructure.database import get_session
@@ -34,7 +35,7 @@ async def get_team_workload(
     user_repo = TimeTrackingUserRepository(session)
     entry_repo = TimeEntryRepository(session)
 
-    users = await user_repo.list_users()
+    users = await hydrate_tt_rows(await user_repo.list_users())
     rows = [u for u in users if (include_archived or not u.is_archived) and not u.is_blocked]
 
     sums = await entry_repo.aggregate_by_user(date_from, date_to)

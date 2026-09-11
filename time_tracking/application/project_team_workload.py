@@ -4,6 +4,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.auth_user_pii import hydrate_tt_rows
 from application.team_workload_builder import build_team_workload_members_and_summary
 from application.team_workload_math import period_days_inclusive
 from infrastructure.repositories import (
@@ -41,7 +42,7 @@ async def compute_project_team_workload(
     )
     member_ids = sorted(set(from_access) | set(from_entries))
 
-    users = await user_repo.list_users()
+    users = await hydrate_tt_rows(await user_repo.list_users())
     by_id = {u.auth_user_id: u for u in users}
 
     sums = await entry_repo.aggregate_by_user_for_project(date_from, date_to, project_id)

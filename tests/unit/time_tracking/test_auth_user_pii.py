@@ -35,3 +35,11 @@ def test_hydrated_tt_user_overlays_auth_pii():
 def test_hydrate_tt_user_skips_manual():
     row = SimpleNamespace(auth_user_id=MANUAL_TT_USER_AUTH_ID_FLOOR, email="m@x")
     assert hydrate_tt_user(row, {}) is row
+
+
+def test_hydrate_tt_user_wraps_when_pii_missing():
+    row = SimpleNamespace(auth_user_id=39, email="auth-user-39@tt.local", display_name=None)
+    view = hydrate_tt_user(row, {})
+    assert view is not row
+    assert view.email == "auth-user-39@tt.local"
+    assert view.display_name is None

@@ -11,6 +11,7 @@ HIDDEN_LOCAL_PARTS = frozenset({"admin", "info"})
 HIDDEN_DISPLAY_NAMES = frozenset({"главный администратор"})
 
 MANAGE_ORG_ROLES = frozenset({"главный администратор", "администратор", "партнер", "партнёр"})
+INTERNAL_EXTENSION_WRITE_ROLES = MANAGE_ORG_ROLES | frozenset({"it отдел", "офис менеджер"})
 
 
 def _norm_role(role: str | None) -> str:
@@ -68,3 +69,14 @@ def require_client_contacts_manage(user: dict[str, Any] = Depends(get_current_us
     if _norm_role(user.get("role")) in MANAGE_ORG_ROLES:
         return user
     raise HTTPException(status_code=403, detail="Only administrators and partners can manage client contacts")
+
+
+def require_internal_extensions_manage(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if user.get("is_archived"):
+        raise HTTPException(status_code=403, detail="Archived users cannot manage the directory")
+    if _norm_role(user.get("role")) in INTERNAL_EXTENSION_WRITE_ROLES:
+        return user
+    raise HTTPException(
+        status_code=403,
+        detail="Менять внутренние номера могут администратор, IT отдел, офис-менеджер или партнёр",
+    )

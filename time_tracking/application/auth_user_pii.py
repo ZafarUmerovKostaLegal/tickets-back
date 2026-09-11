@@ -83,18 +83,19 @@ async def fetch_auth_pii_by_ids(auth_user_ids: list[int] | set[int]) -> dict[int
     if not secret or not base:
         return {}
     out: dict[int, AuthUserPii] = {}
+    batch_size = 80
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            for i in range(0, len(ids), 500):
-                batch = ids[i : i + 500]
+            for i in range(0, len(ids), batch_size):
+                batch = ids[i : i + batch_size]
                 r = await client.get(
                     f"{base}/internal/users/by-ids",
                     params={"ids": ",".join(str(x) for x in batch)},
                     headers={"X-Internal-Key": secret},
                 )
                 if r.status_code != 200:
-                    _log.debug("auth internal by-ids: HTTP %s", r.status_code)
-                    return out
+                    _log.warning("auth internal by-ids: HTTP %s (batch %s)", r.status_code, len(batch))
+                    continue
                 data = r.json()
                 if not isinstance(data, dict):
                     continue
@@ -131,6 +132,13 @@ def hydrate_tt_user(row: Any, pii_map: dict[int, AuthUserPii]) -> Any:
     if is_manual_tt_auth_user_id(uid):
         return row
     return HydratedTtUser(row, pii_map.get(uid))
+
+
+async def hydrate_tt_rows(rows: list[Any]) -> list[Any]:
+    if not rows:
+        return rows
+    pii = await fetch_auth_pii_by_ids([int(getattr(r, "auth_user_id", 0) or 0) for r in rows])
+    return [hydrate_tt_user(r, pii) for r in rows]
 
 
 async def hydrate_users_map(users_map: dict[int, Any]) -> dict[int, Any]:

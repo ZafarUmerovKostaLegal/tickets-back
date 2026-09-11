@@ -42,6 +42,10 @@ services:
 
   contacts:
     restart: unless-stopped
+    environment:
+      - DATABASE_URL=${CONTACTS_DATABASE_URL:-sqlite+aiosqlite:///./data/contacts.db}
+    volumes:
+      - contacts_data:/app/data
 
   correspondence:
     restart: unless-stopped

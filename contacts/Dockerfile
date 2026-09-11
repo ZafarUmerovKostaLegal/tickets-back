@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend_common ./backend_common
 COPY contacts/ ./
 
+RUN mkdir -p /app/data && chown -R appuser:root /app/data
+
 EXPOSE 1248
 
 RUN chown -R appuser:root /app

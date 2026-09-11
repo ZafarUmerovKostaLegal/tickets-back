@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     service_name: str = "contacts"
     auth_service_url: str = "http://auth:1236"
     time_tracking_service_url: str = "http://time_tracking:1241"
+    database_url: str = "sqlite+aiosqlite:///./data/contacts.db"
 
     @field_validator("auth_service_url", "time_tracking_service_url", mode="before")
     @classmethod

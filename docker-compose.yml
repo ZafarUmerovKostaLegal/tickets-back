@@ -105,6 +105,9 @@ services:
     environment:
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - TIME_TRACKING_SERVICE_URL=${TIME_TRACKING_SERVICE_URL:-http://time_tracking:1241}
+      - DATABASE_URL=${CONTACTS_DATABASE_URL:-sqlite+aiosqlite:///./data/contacts.db}
+    volumes:
+      - contacts_data:/app/data
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1248/health\", timeout=3)"' ]
       interval: 15s
@@ -818,3 +821,4 @@ volumes:
   chat_db_data:
   correspondence_db_data:
   call_schedule_db_data:
+  contacts_data:

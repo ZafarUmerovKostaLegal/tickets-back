@@ -9,7 +9,7 @@ from application.auth_user_directory import (
     fetch_auth_user_position,
     fetch_auth_user_positions_by_id,
 )
-from application.auth_user_pii import fetch_auth_pii_by_ids, hydrate_tt_user
+from application.auth_user_pii import fetch_auth_pii_by_ids, hydrate_tt_rows as _hydrate_tt_rows, hydrate_tt_user
 from application.access_control import (
     ensure_can_list_all_tt_users,
     ensure_can_view_colleague_directory,
@@ -83,13 +83,6 @@ def _user_response_directory(
             getattr(row, "can_transfer_time_without_project_access", False)
         ),
     )
-
-
-async def _hydrate_tt_rows(rows: list) -> list:
-    if not rows:
-        return rows
-    pii = await fetch_auth_pii_by_ids([int(r.auth_user_id) for r in rows])
-    return [hydrate_tt_user(r, pii) for r in rows]
 
 
 async def _hydrate_tt_row(row):
