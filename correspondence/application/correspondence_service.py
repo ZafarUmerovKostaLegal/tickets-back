@@ -27,6 +27,7 @@ ALLOWED_STATUSES = frozenset(
         "pending_review",
         "rejected",
         "new",
+        "received",
         "progress",
         "approval",
         "awaiting_signature",
@@ -49,10 +50,11 @@ ALLOWED_MIME_TYPES = frozenset(
 
 # Registered workflow + partner review queue (`new` is a legacy alias of progress)
 WORK_STATUS_GROUP = frozenset(
-    {"progress", "approval", "pending_review", "awaiting_signature", "new"}
+    {"progress", "approval", "pending_review", "awaiting_signature", "new", "received"}
 )
 REVIEW_EDITABLE_STATUSES = frozenset({"draft", "rejected"})
 UNREGISTERED_STATUSES = frozenset({"draft", "pending_review", "rejected"})
+INCOMING_ACK_STATUSES = frozenset({"new", "progress"})
 SIGNED_UPLOAD_STATUSES = frozenset({"awaiting_signature"})
 SIGNED_UPLOAD_MIMES = frozenset(
     {

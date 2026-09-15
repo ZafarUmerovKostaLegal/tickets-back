@@ -23,4 +23,20 @@ def _configure_logging() -> None:
 _configure_logging()
 warn_if_database_url_uses_default_password(os.environ.get("DATABASE_URL"), service="correspondence")
 
+from infrastructure.config import get_settings
+from infrastructure.correspondence_mail import smtp_ready, smtp_status_summary
+
+_settings = get_settings()
+if smtp_ready(_settings):
+    logging.getLogger(__name__).info(
+        "correspondence SMTP ready (%s)",
+        smtp_status_summary(_settings),
+    )
+else:
+    logging.getLogger(__name__).warning(
+        "correspondence SMTP NOT configured — email notify will be skipped (%s). "
+        "Pass EXPENSE_SMTP_* (or CORRESPONDENCE_SMTP_*) into the correspondence container.",
+        smtp_status_summary(_settings),
+    )
+
 from presentation.api import app

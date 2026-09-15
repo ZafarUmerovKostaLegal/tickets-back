@@ -24,6 +24,7 @@ def test_parse_status_group_work():
         "new",
         "pending_review",
         "progress",
+        "received",
     ]
 
 
@@ -33,6 +34,8 @@ def test_normalize_review_statuses():
     assert normalize_status("draft") == "draft"
     assert normalize_status("pending_review") == "pending_review"
     assert normalize_status("rejected") == "rejected"
+    assert normalize_status("received") == "received"
+    assert normalize_status("new") == "new"
 
 
 def test_is_partner_org_role_accepts_variants():

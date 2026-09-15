@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
+    INCOMING_ACK_STATUSES,
     REVIEW_EDITABLE_STATUSES,
     SIGNED_UPLOAD_STATUSES,
     is_partner_org_role,
@@ -738,6 +739,48 @@ async def reject_outgoing(
     return await _detail(row, authorization)
 
 
+@router.post("/{document_id}/acknowledge", response_model=DocumentDetailOut)
+async def acknowledge_incoming(
+    document_id: str,
+    user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Partner marks an incoming document as received (Просмотрено / Получено)."""
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    if row.direction != "incoming":
+        raise HTTPException(status_code=400, detail="Отметить получение можно только для входящих")
+    _assert_assigned_partner(row, user)
+    if row.status not in INCOMING_ACK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="Отметить получение можно только для нового входящего или документа в работе",
+        )
+    await repo.update_document(row, status="received")
+    await session.commit()
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    assert row is not None
+    settings = get_settings()
+    if row.responsible_user_id and row.responsible_user_id != int(user["id"]):
+        await send_system_notification(
+            settings,
+            recipient_user_id=row.responsible_user_id,
+            title="Входящее письмо получено партнёром",
+            description=(
+                f"«{row.subject}» — {row.counterparty}"
+                + (f" ({row.registry_number})" if row.registry_number else "")
+                + ". Партнёр отметил документ как полученный."
+            ),
+            notification_type="correspondence_received",
+        )
+    return await _detail(row, authorization)
+
+
 @router.patch("/{document_id}", response_model=DocumentDetailOut)
 async def patch_correspondence(
     document_id: str,
@@ -772,10 +815,10 @@ async def patch_correspondence(
             new_status = normalize_status(data["status"])
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        if new_status in ("draft", "pending_review", "rejected", "awaiting_signature"):
+        if new_status in ("draft", "pending_review", "rejected", "awaiting_signature", "received"):
             raise HTTPException(
                 status_code=422,
-                detail="Статусы согласования и подписи меняются через submit-review / approve / reject / загрузку подписанного скана",
+                detail="Статусы согласования, подписи и «получено» меняются через submit-review / approve / reject / acknowledge / загрузку подписанного скана",
             )
     new_resp = data.get("responsible_user_id")
     if new_resp is not None and int(new_resp) <= 0:

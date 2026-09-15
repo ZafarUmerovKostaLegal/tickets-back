@@ -26,6 +26,20 @@ def smtp_ready(settings: Settings) -> bool:
     )
 
 
+def smtp_status_summary(settings: Settings) -> str:
+    host = (settings.smtp_host or "").strip()
+    user = (settings.smtp_user or "").strip()
+    pwd = bool((settings.smtp_password or "").strip())
+    mail_from = (settings.mail_from or settings.smtp_user or "").strip()
+    return (
+        f"host={'set' if host else 'missing'}({host or '-'}) "
+        f"user={'set' if user else 'missing'} "
+        f"password={'set' if pwd else 'missing'} "
+        f"from={'set' if mail_from else 'missing'} "
+        f"port={settings.smtp_port} tls={bool(settings.smtp_use_tls)}"
+    )
+
+
 def _app_link(settings: Settings, *, kind: CorrMailKind = "review") -> str | None:
     base = (settings.public_app_url or "").strip().rstrip("/")
     if not base:
@@ -119,22 +133,53 @@ async def _send_smtp(
     html_body: str,
 ) -> None:
     if not smtp_ready(settings):
-        _log.warning("correspondence mail skipped: SMTP not configured")
+        _log.error(
+            "correspondence mail skipped: SMTP not configured (%s)",
+            smtp_status_summary(settings),
+        )
         return
     from_addr = (settings.mail_from or settings.smtp_user or "").strip()
+    if not from_addr:
+        _log.error(
+            "correspondence mail skipped: empty From (%s)",
+            smtp_status_summary(settings),
+        )
+        return
     msg = MIMEMultipart("alternative")
     msg["From"] = from_addr
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host.strip(),
-        port=int(settings.smtp_port),
-        username=settings.smtp_user.strip(),
-        password=settings.smtp_password,
-        start_tls=bool(settings.smtp_use_tls),
+    host = settings.smtp_host.strip()
+    port = int(settings.smtp_port)
+    use_tls = bool(settings.smtp_use_tls)
+    # Port 465 = implicit TLS; 587 = STARTTLS (same as expenses).
+    if port == 465:
+        await aiosmtplib.send(
+            msg,
+            hostname=host,
+            port=port,
+            username=settings.smtp_user.strip(),
+            password=settings.smtp_password,
+            use_tls=True,
+            start_tls=False,
+        )
+    else:
+        await aiosmtplib.send(
+            msg,
+            hostname=host,
+            port=port,
+            username=settings.smtp_user.strip(),
+            password=settings.smtp_password,
+            start_tls=use_tls,
+        )
+    _log.info(
+        "correspondence mail sent to=%s subject=%s host=%s port=%s",
+        to_email,
+        subject[:120],
+        host,
+        port,
     )
 
 
@@ -149,13 +194,25 @@ async def _send_to_user(
     registry_number: str | None = None,
     reject_comment: str | None = None,
 ) -> None:
+    if not (authorization or "").strip():
+        _log.error(
+            "correspondence mail: no Authorization to resolve recipient email user_id=%s kind=%s",
+            user_id,
+            kind,
+        )
+        return
     profile = await fetch_user_by_id(settings.auth_service_url, authorization, user_id)
     if not profile:
-        _log.warning("correspondence mail: no profile user_id=%s kind=%s", user_id, kind)
+        _log.error(
+            "correspondence mail: no profile user_id=%s kind=%s auth=%s",
+            user_id,
+            kind,
+            settings.auth_service_url,
+        )
         return
     email = (profile.get("email") or "").strip()
     if not email:
-        _log.warning("correspondence mail: no email user_id=%s kind=%s", user_id, kind)
+        _log.error("correspondence mail: no email user_id=%s kind=%s", user_id, kind)
         return
     mail_subject, text_body, html_body = _build_message(
         kind=kind,
@@ -202,4 +259,9 @@ async def notify_correspondence_mail_safe(
     except asyncio.TimeoutError:
         _log.error("correspondence mail timeout kind=%s user_id=%s", kind, recipient_user_id)
     except Exception:
-        _log.exception("correspondence mail failed kind=%s user_id=%s", kind, recipient_user_id)
+        _log.exception(
+            "correspondence mail failed kind=%s user_id=%s (%s)",
+            kind,
+            recipient_user_id,
+            smtp_status_summary(settings),
+        )
