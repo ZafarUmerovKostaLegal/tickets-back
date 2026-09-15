@@ -32,6 +32,10 @@ class Settings(BaseSettings):
         default="http://gateway:1234/api/v1/notifications/system",
         validation_alias=AliasChoices("NOTIFICATION_PUSH_URL"),
     )
+    notifications_service_url: str = Field(
+        default="http://notifications:1237",
+        validation_alias=AliasChoices("NOTIFICATIONS_SERVICE_URL"),
+    )
     ws_internal_secret: str = Field(
         default="",
         validation_alias=AliasChoices("WS_INTERNAL_SECRET"),

@@ -349,12 +349,12 @@ async def correspondence_stats(
 ):
     check_view_role(user)
     repo = CorrespondenceRepository(session)
+    # Always count pending_review assigned to the current user (badge is assignment-based).
     partner_uid: int | None = None
-    if is_partner_org_role(user.get("role"), user.get("position")):
-        try:
-            partner_uid = int(user["id"])
-        except (KeyError, TypeError, ValueError):
-            partner_uid = None
+    try:
+        partner_uid = int(user["id"])
+    except (KeyError, TypeError, ValueError):
+        partner_uid = None
     s = await repo.get_stats(partner_user_id=partner_uid)
     return StatsOut(
         incoming_total=s["incoming_total"],

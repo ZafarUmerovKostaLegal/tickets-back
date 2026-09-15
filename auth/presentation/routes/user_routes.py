@@ -292,7 +292,22 @@ async def get_users_public_batch(
     return UserPublicListResponse(items=items, missing_ids=missing)
 
 
-_PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")
+_PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")  # legacy exact roles; see _is_partner_user
+
+
+def _normalize_partner_key(value: str | None) -> str:
+    return (value or "").strip().casefold().replace("ё", "е")
+
+
+def _is_partner_user(user: User) -> bool:
+    role = _normalize_partner_key(user.role)
+    if role in {_normalize_partner_key(v) for v in _PARTNER_ROLE_VALUES}:
+        return True
+    if "партнер" in role or "partner" in role:
+        return True
+    position = _normalize_partner_key(getattr(user, "position", None))
+    return "партнер" in position or "partner" in position
+
 
 _HIDDEN_EMAILS = frozenset({"admin@local"})
 _HIDDEN_LOCAL_PARTS = frozenset({"admin", "info"})
@@ -341,7 +356,7 @@ async def list_partners(
     items = [
         _user_to_public(u)
         for u in users
-        if (u.role or "").strip() in _PARTNER_ROLE_VALUES
+        if _is_partner_user(u)
     ]
     items.sort(key=lambda u: (u.display_name or u.email or "").lower())
     return UserPublicListResponse(items=items, missing_ids=[])
