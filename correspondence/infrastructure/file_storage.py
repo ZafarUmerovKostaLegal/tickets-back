@@ -30,3 +30,20 @@ def save_correspondence_file(document_id: str, attachment_id: str, filename: str
 
 def resolve_storage_path(storage_key: str) -> Path | None:
     return safe_media_path(get_settings().media_path, storage_key)
+
+
+def delete_correspondence_storage(document_id: str, storage_keys: list[str]) -> None:
+    """Remove attachment files after the document row is committed deleted."""
+    for key in storage_keys:
+        path = resolve_storage_path(key)
+        if path is not None and path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    folder = safe_media_path(get_settings().media_path, f"correspondence/{document_id}")
+    if folder is not None and folder.is_dir():
+        try:
+            folder.rmdir()
+        except OSError:
+            pass

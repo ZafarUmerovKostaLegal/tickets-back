@@ -21,7 +21,7 @@ from application.correspondence_service import (
 from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.file_storage import resolve_storage_path, save_correspondence_file
+from infrastructure.file_storage import delete_correspondence_storage, resolve_storage_path, save_correspondence_file
 from infrastructure.office_to_pdf import convert_office_bytes_to_pdf, is_office_document
 from infrastructure.models import (
     CorrespondenceAttachmentModel,
@@ -761,6 +761,25 @@ async def archive_correspondence(
     await session.commit()
     row = await repo.get_by_id(document_id, load_attachments=True)
     return await _detail(row, authorization)
+
+
+@router.delete("/{document_id}", status_code=204)
+async def delete_correspondence(
+    document_id: str,
+    user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    check_view_role(user)
+    check_manage_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    storage_keys = [att.storage_key for att in (row.attachments or []) if att.storage_key]
+    await repo.delete_document(row)
+    await session.commit()
+    delete_correspondence_storage(document_id, storage_keys)
+    return Response(status_code=204)
 
 
 @router.get("/{document_id}/comments", response_model=CommentListResponse)

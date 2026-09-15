@@ -283,6 +283,9 @@ class CorrespondenceRepository:
         row.archived_at = _utc_now()
         row.updated_at = _utc_now()
 
+    async def delete_document(self, row: CorrespondenceDocumentModel) -> None:
+        await self._session.delete(row)
+
     async def delete_attachment(self, att: CorrespondenceAttachmentModel) -> None:
         await self._session.delete(att)
 
