@@ -15,7 +15,7 @@ from infrastructure.config import Settings
 _log = logging.getLogger(__name__)
 _TIMEOUT_SEC = 90.0
 
-CorrMailKind = Literal["review", "approved", "rejected", "signed"]
+CorrMailKind = Literal["review", "approved", "rejected", "signed", "incoming"]
 
 
 def smtp_ready(settings: Settings) -> bool:
@@ -26,10 +26,12 @@ def smtp_ready(settings: Settings) -> bool:
     )
 
 
-def _app_link(settings: Settings) -> str | None:
+def _app_link(settings: Settings, *, kind: CorrMailKind = "review") -> str | None:
     base = (settings.public_app_url or "").strip().rstrip("/")
     if not base:
         return None
+    if kind == "incoming":
+        return f"{base}/correspondence?tab=incoming&view=attention"
     return f"{base}/correspondence?tab=outgoing"
 
 
@@ -47,6 +49,7 @@ def _build_message(
         "approved": "Письмо одобрено — загрузите подписанный скан",
         "rejected": "Исходящее письмо отклонено",
         "signed": "Подписанный скан загружен",
+        "incoming": "Новое входящее письмо",
     }[kind]
     reg = (registry_number or "").strip()
     body_lines = [
@@ -63,6 +66,14 @@ def _build_message(
                 "1) Распечатайте письмо",
                 "2) Поставьте подпись",
                 "3) Загрузите подписанный скан в карточку документа",
+            ]
+        )
+    if kind == "incoming":
+        body_lines.extend(
+            [
+                "",
+                "В реестр корреспонденции добавлено входящее письмо, назначенное вам.",
+                "Откройте раздел «Корреспонденция» → «Входящие» → «Нужно посмотреть».",
             ]
         )
     if kind == "rejected" and (reject_comment or "").strip():
@@ -94,6 +105,7 @@ def _build_message(
         "approved": f"Одобрено — загрузите подпись: {reg or subject_line}",
         "rejected": f"Отклонено: {subject_line}",
         "signed": f"Подписанный скан: {reg or subject_line}",
+        "incoming": f"Новое входящее: {reg or subject_line}",
     }[kind]
     return mail_subject, text, html_body
 
@@ -151,7 +163,7 @@ async def _send_to_user(
         counterparty=counterparty,
         registry_number=registry_number,
         reject_comment=reject_comment,
-        open_url=_app_link(settings),
+        open_url=_app_link(settings, kind=kind),
     )
     await _send_smtp(
         settings,

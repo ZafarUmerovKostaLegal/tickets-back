@@ -184,7 +184,7 @@ class CorrespondenceRepository:
         return list(rows), total
 
     async def count_partner_attention_split(self, partner_user_id: int) -> tuple[int, int]:
-        """(outgoing pending_review, unused incoming count). Badges are review-only."""
+        """(outgoing pending_review, incoming open assigned to partner)."""
         if partner_user_id <= 0:
             return (0, 0)
         base = CorrespondenceDocumentModel.archived_at.is_(None)
@@ -200,7 +200,12 @@ class CorrespondenceRepository:
             CorrespondenceDocumentModel.direction == "outgoing",
             CorrespondenceDocumentModel.status == "pending_review",
         )
-        return (outgoing, 0)
+        # Open incoming assigned to this partner (until marked done).
+        incoming = await _count(
+            CorrespondenceDocumentModel.direction == "incoming",
+            CorrespondenceDocumentModel.status.in_(("new", "progress", "approval")),
+        )
+        return (outgoing, incoming)
 
     async def count_partner_attention(self, partner_user_id: int) -> int:
         outgoing, incoming = await self.count_partner_attention_split(partner_user_id)
@@ -215,8 +220,9 @@ class CorrespondenceRepository:
             return int((await self._session.execute(q)).scalar() or 0)
 
         partner_outgoing_pending = 0
+        partner_incoming_new = 0
         if partner_user_id is not None and partner_user_id > 0:
-            partner_outgoing_pending, _ = await self.count_partner_attention_split(
+            partner_outgoing_pending, partner_incoming_new = await self.count_partner_attention_split(
                 partner_user_id
             )
 
@@ -232,10 +238,13 @@ class CorrespondenceRepository:
             "pending_review_total": await _count(
                 CorrespondenceDocumentModel.status == "pending_review",
             ),
-            "incoming_new_total": 0,
-            "partner_attention_total": partner_outgoing_pending,
+            "incoming_new_total": await _count(
+                CorrespondenceDocumentModel.direction == "incoming",
+                CorrespondenceDocumentModel.status.in_(("new", "progress")),
+            ),
+            "partner_attention_total": partner_outgoing_pending + partner_incoming_new,
             "partner_outgoing_pending": partner_outgoing_pending,
-            "partner_incoming_new": 0,
+            "partner_incoming_new": partner_incoming_new,
         }
 
     async def update_document(

@@ -429,7 +429,7 @@ async def register_incoming(
         registry_number=reg_no,
         direction="incoming",
         doc_type=dt,
-        status="progress",
+        status="new",
         counterparty=counterparty,
         subject=subject,
         comment=comment,
@@ -447,6 +447,26 @@ async def register_incoming(
     await session.commit()
     row = await repo.get_by_id(doc_id, load_attachments=True)
     assert row is not None
+    settings = get_settings()
+    await send_system_notification(
+        settings,
+        recipient_user_id=partner_user_id,
+        title="Новое входящее письмо",
+        description=(
+            f"«{row.subject}» — {row.counterparty} ({reg_no}). "
+            "Откройте раздел корреспонденции."
+        ),
+        notification_type="correspondence_incoming",
+    )
+    await notify_correspondence_mail_safe(
+        settings,
+        authorization=authorization,
+        recipient_user_id=partner_user_id,
+        kind="incoming",
+        subject_line=row.subject,
+        counterparty=row.counterparty,
+        registry_number=row.registry_number,
+    )
     return await _detail(row, authorization)
 
 
