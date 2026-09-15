@@ -95,6 +95,7 @@ def _list_item(
     partner: dict | None = None,
 ) -> DocumentListItemOut:
     atts = row.attachments or []
+    comments = row.comments or []
     has_scan = any(a.attachment_kind == "scan" for a in atts)
     return DocumentListItemOut(
         id=row.id,
@@ -110,6 +111,7 @@ def _list_item(
         partner_user_id=row.partner_user_id,
         partner_user=_user_snippet(row.partner_user_id, partner) if row.partner_user_id else None,
         attachments_count=len(atts),
+        comments_count=len(comments),
         has_scan=has_scan,
         comment=row.comment,
         rejection_comment=row.rejection_comment,

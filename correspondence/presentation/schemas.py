@@ -41,6 +41,7 @@ class DocumentListItemOut(BaseModel):
     partner_user_id: Optional[int] = Field(None, serialization_alias="partnerUserId")
     partner_user: Optional[UserSnippetOut] = Field(None, serialization_alias="partnerUser")
     attachments_count: int = Field(0, serialization_alias="attachmentsCount")
+    comments_count: int = Field(0, serialization_alias="commentsCount")
     has_scan: bool = Field(False, serialization_alias="hasScan")
     comment: Optional[str] = None
     rejection_comment: Optional[str] = Field(None, serialization_alias="rejectionComment")

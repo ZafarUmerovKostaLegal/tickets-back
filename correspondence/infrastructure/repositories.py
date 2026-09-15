@@ -110,7 +110,10 @@ class CorrespondenceRepository:
     async def get_by_id(self, document_id: str, *, load_attachments: bool = False) -> CorrespondenceDocumentModel | None:
         q = select(CorrespondenceDocumentModel).where(CorrespondenceDocumentModel.id == document_id)
         if load_attachments:
-            q = q.options(selectinload(CorrespondenceDocumentModel.attachments))
+            q = q.options(
+                selectinload(CorrespondenceDocumentModel.attachments),
+                selectinload(CorrespondenceDocumentModel.comments),
+            )
         r = await self._session.execute(q)
         return r.scalars().one_or_none()
 
@@ -178,7 +181,10 @@ class CorrespondenceRepository:
             .order_by(order_ts.desc(), CorrespondenceDocumentModel.created_at.desc())
             .offset(skip)
             .limit(limit)
-            .options(selectinload(CorrespondenceDocumentModel.attachments))
+            .options(
+                selectinload(CorrespondenceDocumentModel.attachments),
+                selectinload(CorrespondenceDocumentModel.comments),
+            )
         )
         rows = (await self._session.execute(q)).scalars().all()
         return list(rows), total
