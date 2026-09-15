@@ -36,6 +36,34 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("WS_INTERNAL_SECRET"),
     )
+    smtp_host: str = Field(
+        default="",
+        validation_alias=AliasChoices("CORRESPONDENCE_SMTP_HOST", "EXPENSE_SMTP_HOST", "SMTP_HOST"),
+    )
+    smtp_port: int = Field(
+        default=587,
+        validation_alias=AliasChoices("CORRESPONDENCE_SMTP_PORT", "EXPENSE_SMTP_PORT", "SMTP_PORT"),
+    )
+    smtp_user: str = Field(
+        default="",
+        validation_alias=AliasChoices("CORRESPONDENCE_SMTP_USER", "EXPENSE_SMTP_USER", "SMTP_USER"),
+    )
+    smtp_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("CORRESPONDENCE_SMTP_PASSWORD", "EXPENSE_SMTP_PASSWORD", "SMTP_PASSWORD"),
+    )
+    smtp_use_tls: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("CORRESPONDENCE_SMTP_USE_TLS", "EXPENSE_SMTP_USE_TLS", "SMTP_USE_TLS"),
+    )
+    mail_from: str = Field(
+        default="",
+        validation_alias=AliasChoices("CORRESPONDENCE_MAIL_FROM", "EXPENSE_MAIL_FROM"),
+    )
+    public_app_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("CORRESPONDENCE_PUBLIC_APP_URL", "PUBLIC_APP_URL", "GATEWAY_PUBLIC_URL"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=_env_files(),

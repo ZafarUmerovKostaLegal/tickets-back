@@ -10,16 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
     REVIEW_EDITABLE_STATUSES,
+    SIGNED_UPLOAD_STATUSES,
     is_partner_org_role,
     normalize_attachment_kind,
     normalize_doc_type,
     normalize_status,
     parse_doc_type_filter,
     parse_status_filter,
+    validate_signed_upload_mime,
     validate_upload_content,
 )
 from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
 from infrastructure.config import get_settings
+from infrastructure.correspondence_mail import notify_correspondence_mail_safe
 from infrastructure.database import get_session
 from infrastructure.file_storage import delete_correspondence_storage, resolve_storage_path, save_correspondence_file
 from infrastructure.office_to_pdf import convert_office_bytes_to_pdf, is_office_document
@@ -160,13 +163,17 @@ async def _save_uploads(
     files: list[UploadFile],
     attachment_kind: str,
     uploaded_by_user_id: int,
+    require_signed_mime: bool = False,
 ) -> None:
+    saved = 0
     for f in files:
         content = await f.read()
         if not content:
             continue
         try:
             mime = validate_upload_content(content, f.content_type)
+            if require_signed_mime:
+                validate_signed_upload_mime(mime)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         att_id = str(uuid.uuid4())
@@ -193,6 +200,9 @@ async def _save_uploads(
             attachment_kind=attachment_kind,
             uploaded_by_user_id=uploaded_by_user_id,
         )
+        saved += 1
+    if require_signed_mime and saved == 0:
+        raise HTTPException(status_code=422, detail="Выберите файл подписанного скана")
 
 
 async def _maybe_store_pdf_preview(
@@ -567,7 +577,7 @@ async def submit_outgoing_for_review(
     if row.status not in REVIEW_EDITABLE_STATUSES:
         raise HTTPException(
             status_code=400,
-            detail="На проверку можно отправить только черновик или отклонённый документ",
+            detail="На согласование можно отправить только черновик или отклонённый документ",
         )
     if body.partner_user_id <= 0:
         raise HTTPException(status_code=422, detail="partnerUserId is required")
@@ -585,12 +595,20 @@ async def submit_outgoing_for_review(
     await send_system_notification(
         settings,
         recipient_user_id=body.partner_user_id,
-        title="Исходящее письмо на проверке",
+        title="Исходящее письмо на согласовании",
         description=(
             f"«{row.subject}» — {row.counterparty}. "
             "Откройте раздел корреспонденции, чтобы подтвердить или отклонить."
         ),
         notification_type="correspondence_review",
+    )
+    await notify_correspondence_mail_safe(
+        settings,
+        authorization=authorization,
+        recipient_user_id=body.partner_user_id,
+        kind="review",
+        subject_line=row.subject,
+        counterparty=row.counterparty,
     )
     return await _detail(row, authorization)
 
@@ -610,14 +628,14 @@ async def approve_outgoing(
     _assert_not_archived(row)
     _assert_outgoing(row)
     if row.status != "pending_review":
-        raise HTTPException(status_code=400, detail="Документ не ожидает проверки")
+        raise HTTPException(status_code=400, detail="Документ не ожидает согласования")
     _assert_assigned_partner(row, user)
     year = datetime.now(timezone.utc).year
     now = datetime.now(timezone.utc)
     reg_no = await repo.next_registry_number("outgoing", year)
     await repo.update_document(
         row,
-        status="progress",
+        status="awaiting_signature",
         registry_number=reg_no,
         set_registered_at=True,
         registered_at=now,
@@ -630,11 +648,21 @@ async def approve_outgoing(
     await send_system_notification(
         settings,
         recipient_user_id=row.responsible_user_id,
-        title="Исходящее письмо зарегистрировано",
+        title="Письмо одобрено — загрузите подписанный скан",
         description=(
-            f"Письмо «{row.subject}» зарегистрировано как {reg_no}."
+            f"Письмо «{row.subject}» зарегистрировано как {reg_no}. "
+            "Распечатайте, подпишите и загрузите скан в карточку документа."
         ),
         notification_type="correspondence_registered",
+    )
+    await notify_correspondence_mail_safe(
+        settings,
+        authorization=authorization,
+        recipient_user_id=row.responsible_user_id,
+        kind="approved",
+        subject_line=row.subject,
+        counterparty=row.counterparty,
+        registry_number=reg_no,
     )
     return await _detail(row, authorization)
 
@@ -658,7 +686,7 @@ async def reject_outgoing(
     _assert_not_archived(row)
     _assert_outgoing(row)
     if row.status != "pending_review":
-        raise HTTPException(status_code=400, detail="Документ не ожидает проверки")
+        raise HTTPException(status_code=400, detail="Документ не ожидает согласования")
     _assert_assigned_partner(row, user)
     await repo.update_document(
         row,
@@ -677,6 +705,15 @@ async def reject_outgoing(
             f"Письмо «{row.subject}» отклонено партнёром. Комментарий: {comment}"
         ),
         notification_type="correspondence_rejected",
+    )
+    await notify_correspondence_mail_safe(
+        settings,
+        authorization=authorization,
+        recipient_user_id=row.responsible_user_id,
+        kind="rejected",
+        subject_line=row.subject,
+        counterparty=row.counterparty,
+        reject_comment=comment,
     )
     return await _detail(row, authorization)
 
@@ -715,10 +752,10 @@ async def patch_correspondence(
             new_status = normalize_status(data["status"])
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        if new_status in ("draft", "pending_review", "rejected"):
+        if new_status in ("draft", "pending_review", "rejected", "awaiting_signature"):
             raise HTTPException(
                 status_code=422,
-                detail="Статусы проверки меняются через submit-review / approve / reject",
+                detail="Статусы согласования и подписи меняются через submit-review / approve / reject / загрузку подписанного скана",
             )
     new_resp = data.get("responsible_user_id")
     if new_resp is not None and int(new_resp) <= 0:
@@ -874,15 +911,66 @@ async def upload_attachment(
         kind = normalize_attachment_kind(attachment_kind, default=default_kind)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    if kind == "signed":
+        if row.direction != "outgoing" or row.status not in SIGNED_UPLOAD_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail="Подписанный скан можно загрузить только для исходящего письма после одобрения",
+            )
+        _assert_author_or_manage(row, user)
+
     await _save_uploads(
         repo,
         document_id=document_id,
         files=[file],
         attachment_kind=kind,
         uploaded_by_user_id=int(user["id"]),
+        require_signed_mime=(kind == "signed"),
     )
+
+    completed_signature = False
+    if kind == "signed" and row.status == "awaiting_signature":
+        await repo.update_document(row, status="done")
+        completed_signature = True
+
     await session.commit()
     row = await repo.get_by_id(document_id, load_attachments=True)
+    assert row is not None
+
+    if completed_signature:
+        settings = get_settings()
+        await send_system_notification(
+            settings,
+            recipient_user_id=row.responsible_user_id,
+            title="Подписанный скан загружен",
+            description=(
+                f"Письмо «{row.subject}» "
+                f"({row.registry_number or 'без номера'}) завершено."
+            ),
+            notification_type="correspondence_signed",
+        )
+        if row.partner_user_id:
+            await send_system_notification(
+                settings,
+                recipient_user_id=int(row.partner_user_id),
+                title="Подписанный скан загружен",
+                description=(
+                    f"По письму «{row.subject}» "
+                    f"({row.registry_number or 'без номера'}) загружен подписанный скан."
+                ),
+                notification_type="correspondence_signed",
+            )
+            await notify_correspondence_mail_safe(
+                settings,
+                authorization=authorization,
+                recipient_user_id=int(row.partner_user_id),
+                kind="signed",
+                subject_line=row.subject,
+                counterparty=row.counterparty,
+                registry_number=row.registry_number,
+            )
+
     return await _detail(row, authorization)
 
 

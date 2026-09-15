@@ -18,7 +18,13 @@ def test_format_registry_number_outgoing():
 
 
 def test_parse_status_group_work():
-    assert parse_status_filter(None, "work") == ["approval", "new", "pending_review", "progress"]
+    assert parse_status_filter(None, "work") == [
+        "approval",
+        "awaiting_signature",
+        "new",
+        "pending_review",
+        "progress",
+    ]
 
 
 def test_normalize_review_statuses():
@@ -51,6 +57,36 @@ def test_validate_arbitrary_file():
 
 def test_normalize_doc_type_default_letter():
     assert normalize_doc_type(None) == "letter"
+
+
+def test_normalize_doc_type_accepts_extended_types():
+    assert normalize_doc_type("claim") == "claim"
+    assert normalize_doc_type("lawsuit") == "lawsuit"
+    assert normalize_doc_type("proposal") == "proposal"
+    assert normalize_doc_type("other") == "other"
+
+
+def test_normalize_doc_type_rejects_unknown():
+    import pytest
+
+    with pytest.raises(ValueError):
+        normalize_doc_type("memo")
+
+
+def test_normalize_status_awaiting_signature():
+    from application.correspondence_service import normalize_status
+
+    assert normalize_status("awaiting_signature") == "awaiting_signature"
+
+
+def test_normalize_attachment_kind_signed():
+    from application.correspondence_service import normalize_attachment_kind, validate_signed_upload_mime
+    import pytest
+
+    assert normalize_attachment_kind("signed", default="attachment") == "signed"
+    validate_signed_upload_mime("application/pdf")
+    with pytest.raises(ValueError):
+        validate_signed_upload_mime("application/msword")
 
 
 def test_is_partner_org_role_variants():

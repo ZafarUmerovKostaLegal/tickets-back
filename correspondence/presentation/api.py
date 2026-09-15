@@ -46,6 +46,18 @@ async def lifespan(app: FastAPI):
                 )
                 await conn.execute(
                     text(
+                        "ALTER TABLE correspondence_documents "
+                        "ALTER COLUMN doc_type TYPE VARCHAR(32)"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "ALTER TABLE correspondence_documents "
+                        "ALTER COLUMN status TYPE VARCHAR(32)"
+                    )
+                )
+                await conn.execute(
+                    text(
                         """
                         CREATE TABLE IF NOT EXISTS correspondence_document_comments (
                             id VARCHAR(36) PRIMARY KEY,

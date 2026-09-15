@@ -1,6 +1,26 @@
 
 ALLOWED_DIRECTIONS = frozenset({"incoming", "outgoing"})
-ALLOWED_DOC_TYPES = frozenset({"letter", "contract", "note"})
+ALLOWED_DOC_TYPES = frozenset(
+    {
+        "letter",
+        "request",
+        "claim",
+        "demand",
+        "notification",
+        "application",
+        "complaint",
+        "lawsuit",
+        "court",
+        "enforcement",
+        "contract",
+        "addendum",
+        "act",
+        "financial",
+        "proposal",
+        "other",
+        "note",  # legacy
+    }
+)
 ALLOWED_STATUSES = frozenset(
     {
         "draft",
@@ -9,10 +29,11 @@ ALLOWED_STATUSES = frozenset(
         "new",
         "progress",
         "approval",
+        "awaiting_signature",
         "done",
     }
 )
-ALLOWED_ATTACHMENT_KINDS = frozenset({"scan", "attachment"})
+ALLOWED_ATTACHMENT_KINDS = frozenset({"scan", "attachment", "signed"})
 
 ALLOWED_MIME_TYPES = frozenset(
     {
@@ -27,9 +48,23 @@ ALLOWED_MIME_TYPES = frozenset(
 )
 
 # Registered workflow + partner review queue (`new` is a legacy alias of progress)
-WORK_STATUS_GROUP = frozenset({"progress", "approval", "pending_review", "new"})
+WORK_STATUS_GROUP = frozenset(
+    {"progress", "approval", "pending_review", "awaiting_signature", "new"}
+)
 REVIEW_EDITABLE_STATUSES = frozenset({"draft", "rejected"})
 UNREGISTERED_STATUSES = frozenset({"draft", "pending_review", "rejected"})
+SIGNED_UPLOAD_STATUSES = frozenset({"awaiting_signature"})
+SIGNED_UPLOAD_MIMES = frozenset(
+    {
+        "application/pdf",
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/webp",
+        "image/heic",
+        "image/heif",
+    }
+)
 
 REGISTRY_PREFIX = {"incoming": "ВХ", "outgoing": "ИСХ"}
 
@@ -130,5 +165,13 @@ def validate_upload_content(content: bytes, declared_mime: str | None) -> str:
 def normalize_attachment_kind(value: str | None, *, default: str) -> str:
     k = (value or default).strip().lower()
     if k not in ALLOWED_ATTACHMENT_KINDS:
-        raise ValueError("attachmentKind must be scan or attachment")
+        raise ValueError("attachmentKind must be scan, attachment or signed")
     return k
+
+
+def validate_signed_upload_mime(mime: str) -> None:
+    m = (mime or "").split(";")[0].strip().lower()
+    if m == "image/jpg":
+        m = "image/jpeg"
+    if m not in SIGNED_UPLOAD_MIMES:
+        raise ValueError("Подписанный скан: только PDF или изображение")
