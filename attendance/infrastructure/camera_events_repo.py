@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models import AttendanceCameraEventModel
+
+# Office timezone for day bounds (matches Hikvision event offsets we ingest).
+_OFFICE_TZ = timezone(timedelta(hours=5))
 
 
 async def ensure_camera_events_indexes(session: AsyncSession) -> None:
@@ -83,3 +86,50 @@ async def camera_events_time_bounds(session: AsyncSession) -> tuple[datetime | N
     )
     row = result.one()
     return row[0], row[1]
+
+
+def _day_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
+    start = datetime.combine(date_from, time.min, tzinfo=_OFFICE_TZ)
+    end_exclusive = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=_OFFICE_TZ)
+    return start, end_exclusive
+
+
+async def list_camera_events_grouped_by_device(
+    session: AsyncSession,
+    *,
+    date_from: date,
+    date_to: date,
+    camera_ips: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return Hikvision-shaped device batches from DB for report builders."""
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+    start, end_exclusive = _day_bounds(date_from, date_to)
+    filters = [
+        AttendanceCameraEventModel.event_time >= start,
+        AttendanceCameraEventModel.event_time < end_exclusive,
+    ]
+    allowed = [ip.strip() for ip in (camera_ips or []) if ip and ip.strip()]
+    if allowed:
+        filters.append(AttendanceCameraEventModel.camera_ip.in_(allowed))
+
+    result = await session.execute(
+        select(AttendanceCameraEventModel)
+        .where(and_(*filters))
+        .order_by(AttendanceCameraEventModel.event_time.asc())
+    )
+    rows = list(result.scalars().all())
+    by_ip: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        rec = {
+            "person_id": row.person_id,
+            "name": row.name or "-",
+            "department": row.department or "-",
+            "time": row.event_time.isoformat() if row.event_time else None,
+            "checkpoint": row.checkpoint or "Door",
+            "attendance_status": row.attendance_status or "-",
+            "door_no": row.door_no,
+            "label": row.label or "",
+        }
+        by_ip.setdefault(row.camera_ip, []).append(rec)
+    return [{"camera_ip": ip, "records": recs, "error": None} for ip, recs in by_ip.items()]

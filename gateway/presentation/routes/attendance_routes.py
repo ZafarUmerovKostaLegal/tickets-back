@@ -20,6 +20,7 @@ from infrastructure.attendance_range_snapshot import (
 from application.attendance_range_builder import (
     build_daily_report_items,
     build_hikvision_roster,
+    build_range_roster_from_mappings,
     fetch_attendance_range_items,
     index_first_events_by_day,
 )
@@ -727,24 +728,19 @@ async def get_daily_attendance_report(
         raise HTTPException(status_code=503, detail="Attendance service not configured")
 
     allowed = _allowed_camera_ips()
-    attendance_params = {
+    stored_params = {
         "date_from": report_day.isoformat(),
         "date_to": report_day.isoformat(),
-        "max_records_per_device": 5000,
-    }
-    hikvision_users_params = {
-        "max_users_per_device": 20000,
     }
     if allowed:
-        attendance_params["camera_ip"] = ",".join(allowed)
-        hikvision_users_params["camera_ip"] = ",".join(allowed)
+        stored_params["camera_ip"] = ",".join(allowed)
 
+    # Fast path: workday + DB events + mappings + explanations (no live camera / user pulls).
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            workday_r, events_r, hikvision_users_r, mappings_r, explanations_r = await asyncio.gather(
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            workday_r, stored_r, mappings_r, explanations_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
-                client.get(f"{base}/hikvision/attendance", params=attendance_params),
-                client.get(f"{base}/hikvision/users", params=hikvision_users_params),
+                client.get(f"{base}/hikvision/ingest/events", params=stored_params),
                 client.get(f"{base}/hikvision/mappings"),
                 client.get(
                     f"{base}/hikvision/explanations",
@@ -754,10 +750,9 @@ async def get_daily_attendance_report(
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
 
-
     auth_headers = merge_upstream_headers({}) or {}
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             users_r = await client.get(
                 f"{settings.auth_service_url}/users",
                 params={"include_archived": False},
@@ -768,10 +763,6 @@ async def get_daily_attendance_report(
 
     if workday_r.status_code >= 400:
         raise HTTPException(status_code=workday_r.status_code, detail=workday_r.text or "Attendance service error")
-    if events_r.status_code >= 400:
-        raise HTTPException(status_code=events_r.status_code, detail=events_r.text or "Attendance service error")
-    if hikvision_users_r.status_code >= 400:
-        raise HTTPException(status_code=hikvision_users_r.status_code, detail=hikvision_users_r.text or "Attendance service error")
     if mappings_r.status_code >= 400:
         raise HTTPException(status_code=mappings_r.status_code, detail=mappings_r.text or "Attendance service error")
     if explanations_r.status_code >= 400:
@@ -779,11 +770,34 @@ async def get_daily_attendance_report(
     if users_r.status_code >= 400:
         raise HTTPException(status_code=users_r.status_code, detail=users_r.text or "Auth service error")
 
+    events_source = "db"
+    events_devices: list = []
+    if stored_r.status_code < 400:
+        events_devices = stored_r.json() or []
+    stored_count = sum(len(dev.get("records") or []) for dev in events_devices)
+
+    # Fallback to live cameras only when DB has nothing for this day (e.g. brand-new day before poller).
+    if stored_count == 0:
+        attendance_params = {
+            "date_from": report_day.isoformat(),
+            "date_to": report_day.isoformat(),
+            "max_records_per_device": 5000,
+        }
+        if allowed:
+            attendance_params["camera_ip"] = ",".join(allowed)
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                events_r = await client.get(f"{base}/hikvision/attendance", params=attendance_params)
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Attendance service unavailable")
+        if events_r.status_code >= 400:
+            raise HTTPException(status_code=events_r.status_code, detail=events_r.text or "Attendance service error")
+        events_devices = events_r.json() or []
+        events_source = "live"
+
     app_users = users_r.json() or []
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
     mappings = mappings_r.json() or []
-    events_devices = events_r.json() or []
-    hikvision_users_devices = hikvision_users_r.json() or []
     workday = workday_r.json() or {}
     mapping_by_employee_no = {
         (m.get("camera_employee_no") or "").strip(): m
@@ -792,7 +806,24 @@ async def get_daily_attendance_report(
     }
     explanations = explanations_r.json() or []
 
-    roster_by_employee_no = build_hikvision_roster(hikvision_users_devices)
+    # Roster from bindings (DB) — avoids slow live Hikvision /users scrape.
+    roster_by_employee_no = build_range_roster_from_mappings(mappings)
+    for dev in events_devices:
+        camera_ip = dev.get("camera_ip")
+        for rec in (dev.get("records") or []):
+            employee_no = (rec.get("person_id") or "").strip()
+            if not employee_no or employee_no not in roster_by_employee_no:
+                continue
+            entry = roster_by_employee_no[employee_no]
+            if camera_ip:
+                entry["camera_ips"].add(camera_ip)
+            name = (rec.get("name") or "").strip()
+            if name and name != "-" and not entry.get("camera_name"):
+                entry["camera_name"] = name
+            dept = (rec.get("department") or "").strip()
+            if dept and dept != "-" and not entry.get("department"):
+                entry["department"] = dept
+
     first_events_by_day = index_first_events_by_day(
         events_devices,
         start=report_day,
@@ -814,12 +845,17 @@ async def get_daily_attendance_report(
         for rec in (dev.get("records") or []):
             item = dict(rec)
             item["camera_ip"] = dev.get("camera_ip")
+            emp = (rec.get("person_id") or "").strip()
+            mapping = mapping_by_employee_no.get(emp)
+            if mapping and mapping.get("app_user_id") is not None:
+                item["mapped_app_user_id"] = mapping.get("app_user_id")
             flat_events.append(item)
 
     unmapped_events = [e for e in flat_events if not e.get("mapped_app_user_id")]
 
     return {
         "date": report_day.isoformat(),
+        "events_source": events_source,
         "workday": {
             "workday_start": workday.get("workday_start"),
             "workday_end": workday.get("workday_end"),

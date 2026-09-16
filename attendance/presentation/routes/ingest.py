@@ -6,7 +6,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from infrastructure.camera_events_repo import camera_events_time_bounds, count_camera_events
+from infrastructure.camera_events_repo import (
+    camera_events_time_bounds,
+    count_camera_events,
+    list_camera_events_grouped_by_device,
+)
 from infrastructure.database import get_session
 from infrastructure.ingest_poller import ingest_status, start_backfill_background
 
@@ -31,6 +35,25 @@ async def get_ingest_status(session: AsyncSession = Depends(get_session)):
         "max_event_time": mx.isoformat() if mx else None,
         **runtime,
     }
+
+
+@router.get("/events")
+async def get_stored_camera_events(
+    date_from: str = Query(..., description="YYYY-MM-DD"),
+    date_to: str = Query(..., description="YYYY-MM-DD"),
+    camera_ip: Optional[str] = Query(None, description="Optional comma-separated camera IPs"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Fast path: AcsEvent history from Postgres (same shape as live /hikvision/attendance)."""
+    start = _parse_day(date_from, "date_from")
+    end = _parse_day(date_to, "date_to")
+    ips = [p.strip() for p in (camera_ip or "").split(",") if p.strip()] or None
+    return await list_camera_events_grouped_by_device(
+        session,
+        date_from=start,
+        date_to=end,
+        camera_ips=ips,
+    )
 
 
 @router.post("/backfill")
