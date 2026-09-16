@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import Date, DateTime, Integer, String, Time
+from sqlalchemy import Date, DateTime, Index, Integer, String, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from infrastructure.database import Base
 
@@ -38,3 +38,32 @@ class AttendanceExplanationModel(Base):
     explanation_file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AttendanceCameraEventModel(Base):
+    """Raw Hikvision AcsEvent rows persisted for history + continuous ingest."""
+
+    __tablename__ = "attendance_camera_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "camera_ip",
+            "person_id",
+            "event_time",
+            "checkpoint",
+            name="uq_attendance_camera_event",
+        ),
+        Index("ix_attendance_camera_events_event_time", "event_time"),
+        Index("ix_attendance_camera_events_person_time", "person_id", "event_time"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    camera_ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    person_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    checkpoint: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    attendance_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    door_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

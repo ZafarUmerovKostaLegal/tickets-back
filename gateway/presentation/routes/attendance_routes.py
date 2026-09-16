@@ -229,8 +229,14 @@ def _index_first_events_by_day(
                 continue
             day_bucket = result.setdefault(day_key, {})
             prev = day_bucket.get(employee_no)
-            if not prev or dt < prev["dt"]:
-                day_bucket[employee_no] = {"dt": dt, "record": rec}
+            if not prev:
+                day_bucket[employee_no] = {"dt": dt, "last_dt": dt, "record": rec}
+                continue
+            if dt < prev["dt"]:
+                prev["dt"] = dt
+                prev["record"] = rec
+            if dt > prev.get("last_dt", prev["dt"]):
+                prev["last_dt"] = dt
     return result
 
 
@@ -510,6 +516,48 @@ async def delete_hikvision_mapping(
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
     schedule_refresh()
+    return r.json()
+
+
+@router.get("/hikvision/ingest/status")
+async def get_camera_ingest_status(_: dict = Depends(get_current_user)):
+    settings = get_settings()
+    base = (settings.attendance_service_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="Attendance service not configured")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{base}/hikvision/ingest/status")
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Attendance service unavailable")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
+    return r.json()
+
+
+@router.post("/hikvision/ingest/backfill")
+async def trigger_camera_ingest_backfill(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    year: Optional[int] = Query(None),
+    _: dict = Depends(get_current_user),
+):
+    settings = get_settings()
+    base = (settings.attendance_service_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="Attendance service not configured")
+    params = {
+        "date_from": date_from,
+        "date_to": date_to,
+        "year": year,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{base}/hikvision/ingest/backfill", params=params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Attendance service unavailable")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "Attendance service error")
     return r.json()
 
 

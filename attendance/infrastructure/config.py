@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     hikvision_device_password: str = ""
     hikvision_request_timeout: float = 60.0
     hikvision_device_ips: str = ""
+
+    # Persist camera AcsEvent history + keep it fresh.
+    attendance_ingest_enabled: bool = True
+    attendance_ingest_interval_sec: int = 300
+    attendance_ingest_lookback_minutes: int = 180
+    attendance_ingest_max_records_per_device: int = 10000
+    # Optional auto backfill on boot (e.g. 2026-01-01). Empty = skip.
+    attendance_backfill_from: str = ""
+    attendance_backfill_to: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

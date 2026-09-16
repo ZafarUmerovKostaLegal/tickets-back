@@ -158,6 +158,12 @@ def build_daily_report_items(
             workday=workday,
             first_events_for_day=first_events_for_day,
         )
+        first = first_events_for_day.get(employee_no)
+        last_dt = (first or {}).get("last_dt")
+        first_dt = (first or {}).get("dt")
+        last_time = None
+        if last_dt is not None and first_dt is not None and last_dt > first_dt:
+            last_time = last_dt.isoformat()
         counts[status] += 1
         explanation = explanation_by_key.get(f"{employee_no}|{status}")
         explanation_file_path = (explanation or {}).get("explanation_file_path")
@@ -177,6 +183,7 @@ def build_daily_report_items(
                 "department": user.get("department"),
                 "status": status,
                 "first_event_time": first_time,
+                "last_event_time": last_time,
                 "explanation_text": (explanation or {}).get("explanation_text"),
                 "explanation_file_path": explanation_file_path,
                 "explanation_file_url": explanation_file_url,
@@ -232,6 +239,7 @@ def index_first_events_by_day(
     start: date,
     end: date,
 ) -> dict[str, dict[str, dict]]:
+    """Per day → employee_no → {dt, last_dt, record} (first and last punch that day)."""
     start_s = start.isoformat()
     end_s = end.isoformat()
     result: dict[str, dict[str, dict]] = {}
@@ -248,8 +256,14 @@ def index_first_events_by_day(
                 continue
             day_bucket = result.setdefault(day_key, {})
             prev = day_bucket.get(employee_no)
-            if not prev or dt < prev["dt"]:
-                day_bucket[employee_no] = {"dt": dt, "record": rec}
+            if not prev:
+                day_bucket[employee_no] = {"dt": dt, "last_dt": dt, "record": rec}
+                continue
+            if dt < prev["dt"]:
+                prev["dt"] = dt
+                prev["record"] = rec
+            if dt > prev.get("last_dt", prev["dt"]):
+                prev["last_dt"] = dt
     return result
 
 
