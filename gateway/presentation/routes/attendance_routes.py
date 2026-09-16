@@ -21,8 +21,11 @@ from application.attendance_range_builder import (
     build_daily_report_items,
     build_hikvision_roster,
     build_range_roster_from_mappings,
+    enrich_roster_from_events,
     fetch_attendance_range_items,
     index_first_events_by_day,
+    iter_dates_inclusive,
+    merge_people_into_roster,
 )
 
 
@@ -735,10 +738,13 @@ async def get_daily_attendance_report(
     if allowed:
         stored_params["camera_ip"] = ",".join(allowed)
 
-    # Fast path: workday + DB events + mappings + explanations (no live camera / user pulls).
+    # Fast path: workday + DB events + mappings + explanations + known people (no live camera / user pulls).
+    people_params: dict[str, str] = {}
+    if allowed:
+        people_params["camera_ip"] = ",".join(allowed)
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            workday_r, stored_r, mappings_r, explanations_r = await asyncio.gather(
+            workday_r, stored_r, mappings_r, explanations_r, people_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
                 client.get(f"{base}/hikvision/ingest/events", params=stored_params),
                 client.get(f"{base}/hikvision/mappings"),
@@ -746,11 +752,13 @@ async def get_daily_attendance_report(
                     f"{base}/hikvision/explanations",
                     params={"day": report_day.isoformat()},
                 ),
+                client.get(f"{base}/hikvision/ingest/people", params=people_params),
             )
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
 
     auth_headers = merge_upstream_headers({}) or {}
+    app_users: list = []
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             users_r = await client.get(
@@ -758,8 +766,10 @@ async def get_daily_attendance_report(
                 params={"include_archived": False},
                 headers=auth_headers,
             )
+        if users_r.status_code < 400:
+            app_users = users_r.json() or []
     except httpx.RequestError:
-        raise HTTPException(status_code=503, detail="Auth service unavailable")
+        app_users = []
 
     if workday_r.status_code >= 400:
         raise HTTPException(status_code=workday_r.status_code, detail=workday_r.text or "Attendance service error")
@@ -767,8 +777,6 @@ async def get_daily_attendance_report(
         raise HTTPException(status_code=mappings_r.status_code, detail=mappings_r.text or "Attendance service error")
     if explanations_r.status_code >= 400:
         raise HTTPException(status_code=explanations_r.status_code, detail=explanations_r.text or "Attendance service error")
-    if users_r.status_code >= 400:
-        raise HTTPException(status_code=users_r.status_code, detail=users_r.text or "Auth service error")
 
     events_source = "db"
     events_devices: list = []
@@ -795,7 +803,6 @@ async def get_daily_attendance_report(
         events_devices = events_r.json() or []
         events_source = "live"
 
-    app_users = users_r.json() or []
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
     mappings = mappings_r.json() or []
     workday = workday_r.json() or {}
@@ -805,24 +812,12 @@ async def get_daily_attendance_report(
         if (m.get("camera_employee_no") or "").strip()
     }
     explanations = explanations_r.json() or []
+    known_people = people_r.json() if people_r.status_code < 400 else []
 
-    # Roster from bindings (DB) — avoids slow live Hikvision /users scrape.
+    # Roster: bindings + everyone seen on cameras in DB history + people who punched today.
     roster_by_employee_no = build_range_roster_from_mappings(mappings)
-    for dev in events_devices:
-        camera_ip = dev.get("camera_ip")
-        for rec in (dev.get("records") or []):
-            employee_no = (rec.get("person_id") or "").strip()
-            if not employee_no or employee_no not in roster_by_employee_no:
-                continue
-            entry = roster_by_employee_no[employee_no]
-            if camera_ip:
-                entry["camera_ips"].add(camera_ip)
-            name = (rec.get("name") or "").strip()
-            if name and name != "-" and not entry.get("camera_name"):
-                entry["camera_name"] = name
-            dept = (rec.get("department") or "").strip()
-            if dept and dept != "-" and not entry.get("department"):
-                entry["department"] = dept
+    merge_people_into_roster(roster_by_employee_no, known_people or [])
+    enrich_roster_from_events(roster_by_employee_no, events_devices)
 
     first_events_by_day = index_first_events_by_day(
         events_devices,
@@ -872,6 +867,148 @@ async def get_daily_attendance_report(
         },
         "items": items,
         "unmapped_events": unmapped_events,
+    }
+
+
+@router.get("/report/period")
+async def get_period_attendance_report(
+    date_from: str = Query(..., description="YYYY-MM-DD"),
+    date_to: str = Query(..., description="YYYY-MM-DD"),
+    app_user_id: Optional[int] = Query(None, description="Filter by mapped app user id"),
+    _: dict = Depends(get_current_user),
+):
+    """Day-by-day attendance rows for a period (DB-backed). Optional single-employee filter."""
+    start = _parse_required_iso_date(date_from, field_name="date_from")
+    end = _parse_required_iso_date(date_to, field_name="date_to")
+    try:
+        days = iter_dates_inclusive(start, end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if len(days) > 93:
+        raise HTTPException(status_code=400, detail="Period too long (max 93 days)")
+
+    settings = get_settings()
+    base = (settings.attendance_service_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="Attendance service not configured")
+
+    allowed = _allowed_camera_ips()
+    stored_params: dict[str, str] = {
+        "date_from": start.isoformat(),
+        "date_to": end.isoformat(),
+    }
+    if allowed:
+        stored_params["camera_ip"] = ",".join(allowed)
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            workday_r, mappings_r, explanations_r, people_r = await asyncio.gather(
+                client.get(f"{base}/settings/workday"),
+                client.get(f"{base}/hikvision/mappings"),
+                client.get(f"{base}/hikvision/explanations"),
+                client.get(
+                    f"{base}/hikvision/ingest/people",
+                    params={"camera_ip": ",".join(allowed)} if allowed else {},
+                ),
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Attendance service unavailable")
+
+    for label, resp in (("workday", workday_r), ("mappings", mappings_r), ("explanations", explanations_r)):
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text or f"{label} error")
+
+    workday = workday_r.json() or {}
+    mappings = mappings_r.json() or []
+    explanations_all = explanations_r.json() or []
+    known_people = people_r.json() if people_r.status_code < 400 else []
+    mapping_by_employee_no = {
+        (m.get("camera_employee_no") or "").strip(): m
+        for m in mappings
+        if (m.get("camera_employee_no") or "").strip()
+    }
+    roster_by_employee_no = build_range_roster_from_mappings(mappings)
+    merge_people_into_roster(roster_by_employee_no, known_people or [])
+
+    if app_user_id is not None:
+        keep_emp = {
+            emp
+            for emp, m in mapping_by_employee_no.items()
+            if m.get("app_user_id") == app_user_id
+        }
+        roster_by_employee_no = {
+            emp: row for emp, row in roster_by_employee_no.items() if emp in keep_emp
+        }
+        if not roster_by_employee_no:
+            return {
+                "date_from": start.isoformat(),
+                "date_to": end.isoformat(),
+                "app_user_id": app_user_id,
+                "events_source": "db",
+                "items": [],
+            }
+        if len(keep_emp) == 1:
+            stored_params["person_id"] = next(iter(keep_emp))
+
+    app_users: list = []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            stored_r, users_r = await asyncio.gather(
+                client.get(f"{base}/hikvision/ingest/events", params=stored_params),
+                client.get(
+                    f"{settings.auth_service_url}/users",
+                    params={"include_archived": False},
+                    headers=merge_upstream_headers({}) or {},
+                ),
+            )
+        if users_r.status_code < 400:
+            app_users = users_r.json() or []
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Upstream service unavailable")
+
+    if stored_r.status_code >= 400:
+        raise HTTPException(status_code=stored_r.status_code, detail=stored_r.text or "events error")
+
+    events_devices = stored_r.json() or []
+    app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
+    enrich_roster_from_events(roster_by_employee_no, events_devices)
+
+    first_events_by_day = index_first_events_by_day(events_devices, start=start, end=end)
+    explanations_by_day: dict[str, list] = {}
+    for x in explanations_all:
+        day_str = (x.get("day") or "").strip()
+        if day_str:
+            explanations_by_day.setdefault(day_str, []).append(x)
+
+    items: list[dict] = []
+    for day in days:
+        day_str = day.isoformat()
+        day_items, _, _ = build_daily_report_items(
+            day,
+            workday=workday,
+            roster_by_employee_no=roster_by_employee_no,
+            mapping_by_employee_no=mapping_by_employee_no,
+            app_users_by_id=app_users_by_id,
+            first_events_for_day=first_events_by_day.get(day_str, {}),
+            explanations_for_day=explanations_by_day.get(day_str, []),
+        )
+        for it in day_items:
+            if app_user_id is not None and it.get("app_user_id") != app_user_id:
+                continue
+            items.append({"date": day_str, **it})
+
+    return {
+        "date_from": start.isoformat(),
+        "date_to": end.isoformat(),
+        "app_user_id": app_user_id,
+        "events_source": "db",
+        "workday": {
+            "workday_start": workday.get("workday_start"),
+            "workday_end": workday.get("workday_end"),
+            "late_threshold_minutes": workday.get("late_threshold_minutes"),
+            "daily_hours_norm": workday.get("daily_hours_norm"),
+        },
+        "items": items,
     }
 
 

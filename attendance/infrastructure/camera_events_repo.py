@@ -121,11 +121,12 @@ async def list_camera_events_grouped_by_device(
     rows = list(result.scalars().all())
     by_ip: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
+        event_local = row.event_time.astimezone(_OFFICE_TZ) if row.event_time else None
         rec = {
             "person_id": row.person_id,
             "name": row.name or "-",
             "department": row.department or "-",
-            "time": row.event_time.isoformat() if row.event_time else None,
+            "time": event_local.isoformat() if event_local else None,
             "checkpoint": row.checkpoint or "Door",
             "attendance_status": row.attendance_status or "-",
             "door_no": row.door_no,
@@ -133,3 +134,40 @@ async def list_camera_events_grouped_by_device(
         }
         by_ip.setdefault(row.camera_ip, []).append(rec)
     return [{"camera_ip": ip, "records": recs, "error": None} for ip, recs in by_ip.items()]
+
+
+async def list_known_camera_people(
+    session: AsyncSession,
+    *,
+    since: date | None = None,
+    camera_ips: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Distinct camera people seen in stored events (for roster without live /users)."""
+    filters = []
+    if since is not None:
+        start, _ = _day_bounds(since, since)
+        filters.append(AttendanceCameraEventModel.event_time >= start)
+    allowed = [ip.strip() for ip in (camera_ips or []) if ip and ip.strip()]
+    if allowed:
+        filters.append(AttendanceCameraEventModel.camera_ip.in_(allowed))
+
+    stmt = (
+        select(
+            AttendanceCameraEventModel.person_id,
+            func.max(AttendanceCameraEventModel.name).label("name"),
+            func.max(AttendanceCameraEventModel.department).label("department"),
+        )
+        .where(and_(*filters) if filters else True)
+        .group_by(AttendanceCameraEventModel.person_id)
+        .order_by(AttendanceCameraEventModel.person_id)
+    )
+    result = await session.execute(stmt)
+    return [
+        {
+            "person_id": row.person_id,
+            "name": row.name,
+            "department": row.department,
+        }
+        for row in result.all()
+        if (row.person_id or "").strip()
+    ]

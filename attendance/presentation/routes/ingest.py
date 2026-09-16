@@ -10,6 +10,7 @@ from infrastructure.camera_events_repo import (
     camera_events_time_bounds,
     count_camera_events,
     list_camera_events_grouped_by_device,
+    list_known_camera_people,
 )
 from infrastructure.database import get_session
 from infrastructure.ingest_poller import ingest_status, start_backfill_background
@@ -42,18 +43,40 @@ async def get_stored_camera_events(
     date_from: str = Query(..., description="YYYY-MM-DD"),
     date_to: str = Query(..., description="YYYY-MM-DD"),
     camera_ip: Optional[str] = Query(None, description="Optional comma-separated camera IPs"),
+    person_id: Optional[str] = Query(None, description="Optional camera employee no"),
     session: AsyncSession = Depends(get_session),
 ):
     """Fast path: AcsEvent history from Postgres (same shape as live /hikvision/attendance)."""
     start = _parse_day(date_from, "date_from")
     end = _parse_day(date_to, "date_to")
     ips = [p.strip() for p in (camera_ip or "").split(",") if p.strip()] or None
-    return await list_camera_events_grouped_by_device(
+    devices = await list_camera_events_grouped_by_device(
         session,
         date_from=start,
         date_to=end,
         camera_ips=ips,
     )
+    pid = (person_id or "").strip()
+    if not pid:
+        return devices
+    filtered = []
+    for dev in devices:
+        recs = [r for r in (dev.get("records") or []) if (r.get("person_id") or "").strip() == pid]
+        if recs:
+            filtered.append({**dev, "records": recs})
+    return filtered
+
+
+@router.get("/people")
+async def get_known_camera_people(
+    since: Optional[str] = Query(None, description="YYYY-MM-DD — only people seen since this day"),
+    camera_ip: Optional[str] = Query(None, description="Optional comma-separated camera IPs"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Distinct people from stored camera events (fast roster without live device scrape)."""
+    since_day = _parse_day(since, "since") if since else None
+    ips = [p.strip() for p in (camera_ip or "").split(",") if p.strip()] or None
+    return await list_known_camera_people(session, since=since_day, camera_ips=ips)
 
 
 @router.post("/backfill")

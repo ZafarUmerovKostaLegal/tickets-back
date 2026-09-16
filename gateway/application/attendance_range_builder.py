@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -12,6 +12,9 @@ from fastapi import HTTPException
 from infrastructure.config import get_settings
 
 RANGE_REPORT_HTTP_TIMEOUT_SEC = 300.0
+
+# Matches attendance camera_events_repo day bounds (Asia/Tashkent / UTC+5).
+_OFFICE_TZ = timezone(timedelta(hours=5))
 
 
 def allowed_camera_ips() -> list[str]:
@@ -56,15 +59,19 @@ def _parse_event_dt(raw: Optional[str]) -> Optional[datetime]:
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(s)
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        # Hikvision local wall time without offset → treat as office TZ.
+        return dt.replace(tzinfo=_OFFICE_TZ)
+    return dt.astimezone(_OFFICE_TZ)
 
 
 def _late_border_dt(report_day: date, workday: dict) -> datetime:
     start_val = time.fromisoformat(workday.get("workday_start", "09:00:00"))
     late_threshold = int(workday.get("late_threshold_minutes", 0) or 0)
-    return datetime.combine(report_day, start_val) + timedelta(minutes=late_threshold)
+    return datetime.combine(report_day, start_val, tzinfo=_OFFICE_TZ) + timedelta(minutes=late_threshold)
 
 
 def build_range_roster_from_mappings(mappings: list) -> dict[str, dict]:
@@ -79,6 +86,69 @@ def build_range_roster_from_mappings(mappings: list) -> dict[str, dict]:
             "department": None,
             "camera_ips": set(),
         }
+    return roster_by_employee_no
+
+
+def merge_people_into_roster(
+    roster_by_employee_no: dict[str, dict],
+    people: list[dict],
+) -> dict[str, dict]:
+    """Merge known camera people (from DB history) into the daily roster."""
+    for person in people:
+        employee_no = (person.get("person_id") or person.get("camera_employee_no") or "").strip()
+        if not employee_no:
+            continue
+        entry = roster_by_employee_no.get(employee_no)
+        if entry is None:
+            entry = {
+                "camera_employee_no": employee_no,
+                "camera_name": None,
+                "department": None,
+                "camera_ips": set(),
+            }
+            roster_by_employee_no[employee_no] = entry
+        name = (person.get("name") or person.get("camera_name") or "").strip()
+        if name and name != "-" and not entry.get("camera_name"):
+            entry["camera_name"] = name
+        dept = (person.get("department") or "").strip()
+        if dept and dept != "-" and not entry.get("department"):
+            entry["department"] = dept
+        for ip in person.get("camera_ips") or []:
+            if ip:
+                entry["camera_ips"].add(ip)
+        camera_ip = (person.get("camera_ip") or "").strip()
+        if camera_ip:
+            entry["camera_ips"].add(camera_ip)
+    return roster_by_employee_no
+
+
+def enrich_roster_from_events(
+    roster_by_employee_no: dict[str, dict],
+    events_devices: list,
+) -> dict[str, dict]:
+    for dev in events_devices:
+        camera_ip = dev.get("camera_ip")
+        for rec in (dev.get("records") or []):
+            employee_no = (rec.get("person_id") or "").strip()
+            if not employee_no:
+                continue
+            entry = roster_by_employee_no.get(employee_no)
+            if entry is None:
+                entry = {
+                    "camera_employee_no": employee_no,
+                    "camera_name": None,
+                    "department": None,
+                    "camera_ips": set(),
+                }
+                roster_by_employee_no[employee_no] = entry
+            if camera_ip:
+                entry["camera_ips"].add(camera_ip)
+            name = (rec.get("name") or "").strip()
+            if name and name != "-" and not entry.get("camera_name"):
+                entry["camera_name"] = name
+            dept = (rec.get("department") or "").strip()
+            if dept and dept != "-" and not entry.get("department"):
+                entry["department"] = dept
     return roster_by_employee_no
 
 
@@ -118,8 +188,12 @@ def compute_employee_day_status(
     if not first:
         return "absent", None
     first_dt = first["dt"]
+    if first_dt.tzinfo is None:
+        first_dt = first_dt.replace(tzinfo=_OFFICE_TZ)
+    else:
+        first_dt = first_dt.astimezone(_OFFICE_TZ)
     first_time = first_dt.isoformat()
-    status = "late" if first_dt.replace(tzinfo=None) > late_border else "present_on_time"
+    status = "late" if first_dt > late_border else "present_on_time"
     return status, first_time
 
 
@@ -162,8 +236,17 @@ def build_daily_report_items(
         last_dt = (first or {}).get("last_dt")
         first_dt = (first or {}).get("dt")
         last_time = None
-        if last_dt is not None and first_dt is not None and last_dt > first_dt:
-            last_time = last_dt.isoformat()
+        if last_dt is not None and first_dt is not None:
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=_OFFICE_TZ)
+            else:
+                last_dt = last_dt.astimezone(_OFFICE_TZ)
+            if first_dt.tzinfo is None:
+                first_cmp = first_dt.replace(tzinfo=_OFFICE_TZ)
+            else:
+                first_cmp = first_dt.astimezone(_OFFICE_TZ)
+            if last_dt > first_cmp:
+                last_time = last_dt.isoformat()
         counts[status] += 1
         explanation = explanation_by_key.get(f"{employee_no}|{status}")
         explanation_file_path = (explanation or {}).get("explanation_file_path")
@@ -251,7 +334,7 @@ def index_first_events_by_day(
             dt = _parse_event_dt(rec.get("time"))
             if not dt:
                 continue
-            day_key = dt.date().isoformat()
+            day_key = dt.astimezone(_OFFICE_TZ).date().isoformat()
             if day_key < start_s or day_key > end_s:
                 continue
             day_bucket = result.setdefault(day_key, {})
