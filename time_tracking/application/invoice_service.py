@@ -1312,6 +1312,48 @@ async def send_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth_u
     return inv
 
 
+async def unsend_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int) -> InvoiceModel:
+    """Clear «sent to client» mark: return invoice to draft (no payments allowed)."""
+    status = (inv.status or "").strip()
+    if status == "draft":
+        return inv
+    if status == "canceled":
+        raise HTTPException(status_code=400, detail="Нельзя вернуть в черновик отменённый счёт")
+    if status in ("partial_paid", "paid"):
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя снять отметку отправки: по счёту уже есть оплаты",
+        )
+    if status not in ("sent", "viewed", "overdue"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Нельзя снять отметку отправки из статуса «{status}»",
+        )
+    paid = _money4(inv.amount_paid or 0)
+    if paid > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя снять отметку отправки: по счёту уже есть оплаты",
+        )
+    prev = status
+    inv.status = "draft"
+    inv.sent_at = None
+    inv.last_sent_at = None
+    inv.viewed_at = None
+    inv.updated_at = _now_utc()
+    flag_modified(inv, "status")
+    repo = InvoiceRepository(session)
+    await _audit(
+        session,
+        repo,
+        inv.id,
+        "unsent",
+        actor_auth_user_id,
+        {"fromStatus": prev, "toStatus": "draft"},
+    )
+    return inv
+
+
 async def mark_viewed(session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int) -> InvoiceModel:
     _require_not_canceled(inv)
     if inv.status == "draft":

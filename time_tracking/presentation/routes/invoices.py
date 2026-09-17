@@ -25,6 +25,7 @@ from application.invoice_service import (
     register_payment,
     record_payment_confirmation_document,
     send_invoice,
+    unsend_invoice,
 )
 from application.partner_snapshot_invoice_preview import (
     resolve_partner_invoice_preview,
@@ -395,6 +396,23 @@ async def send_invoice_route(
     if not inv:
         raise HTTPException(status_code=404, detail="Счёт не найден")
     inv = await send_invoice(session, inv, actor_auth_user_id=actor)
+    await session.commit()
+    inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
+    assert inv2
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
+
+
+@router.post("/{invoice_id}/unsend")
+async def unsend_invoice_route(
+    invoice_id: str,
+    session: AsyncSession = Depends(get_session),
+    actor: int = Depends(invoice_actor_auth_user_id),
+):
+    """Clear sent mark and return invoice to draft (no payments)."""
+    inv = await InvoiceRepository(session).get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    inv = await unsend_invoice(session, inv, actor_auth_user_id=actor)
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2

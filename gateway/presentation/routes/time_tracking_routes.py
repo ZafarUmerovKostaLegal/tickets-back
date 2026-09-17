@@ -1907,6 +1907,15 @@ async def invoices_send(
     return await _tt_json("POST", f"/invoices/{invoice_id}/send", params=_invoice_actor_qs(user), timeout=30.0)
 
 
+@router.post("/invoices/{invoice_id}/unsend")
+async def invoices_unsend(
+    invoice_id: str,
+    user: dict = Depends(require_view_role),
+):
+    """Proxy: clear sent mark and return invoice to draft."""
+    return await _tt_json("POST", f"/invoices/{invoice_id}/unsend", params=_invoice_actor_qs(user), timeout=30.0)
+
+
 @router.post("/invoices/{invoice_id}/notify-accounting-last-page")
 async def invoices_notify_accounting_last_page(
     invoice_id: str,
