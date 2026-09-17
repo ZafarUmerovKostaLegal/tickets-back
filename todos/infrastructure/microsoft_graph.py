@@ -187,9 +187,45 @@ async def create_calendar_event(
 
 async def probe_mail_read_write(access_token: str) -> bool:
     """True if the token can access mail (Mail.ReadWrite)."""
+    detail = await probe_mail_access(access_token)
+    return bool(detail.get("mailReady"))
+
+
+def _access_token_has_mail_scope(access_token: str) -> bool | None:
+    """Parse JWT ``scp`` when possible. None = could not decode."""
+    token = (access_token or "").strip()
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        import base64
+        import json
+
+        pad = "=" * (-len(parts[1]) % 4)
+        raw = base64.urlsafe_b64decode(parts[1] + pad)
+        payload = json.loads(raw.decode("utf-8"))
+        scp = str(payload.get("scp") or "")
+        roles = payload.get("roles") or []
+        role_list = roles if isinstance(roles, list) else []
+        hay = f" {scp} " + " ".join(str(x) for x in role_list)
+        return "Mail.ReadWrite" in hay or "Mail.Send" in hay
+    except Exception:
+        return None
+
+
+async def probe_mail_access(access_token: str) -> dict[str, Any]:
+    """
+    Probe Graph mail access.
+
+    ``mailReadyReason`` when not ready:
+    - ``missing_scope`` — token has no Mail.ReadWrite (reconnect / admin consent)
+    - ``no_exchange_mailbox`` — M365 without Exchange mailbox / REST disabled (license)
+    - ``mail_api_error`` — other Graph failure
+    """
     token = (access_token or "").strip()
     if not token:
-        return False
+        return {"mailReady": False, "mailReadyReason": "missing_scope"}
+    has_scope = _access_token_has_mail_scope(token)
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(
@@ -197,9 +233,36 @@ async def probe_mail_read_write(access_token: str) -> bool:
                 headers={"Authorization": f"Bearer {token}"},
                 params={"$top": "1", "$select": "id"},
             )
-        return r.status_code == 200
     except Exception:
-        return False
+        return {"mailReady": False, "mailReadyReason": "mail_api_error"}
+
+    if r.status_code == 200:
+        return {"mailReady": True, "mailReadyReason": None}
+
+    err_code = ""
+    err_msg = ""
+    try:
+        body = r.json() if r.content else {}
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            err_code = str(err.get("code") or "")
+            err_msg = str(err.get("message") or "")
+    except Exception:
+        err_msg = (r.text or "")[:300]
+
+    blob = f"{err_code} {err_msg}".lower()
+    if (
+        "mailboxnotenabledforrestapi" in blob
+        or "mailbox not enabled" in blob
+        or ("restapi" in blob and "mailbox" in blob)
+        or "no mailbox" in blob
+    ):
+        return {"mailReady": False, "mailReadyReason": "no_exchange_mailbox"}
+
+    if has_scope is False or r.status_code in (401, 403):
+        return {"mailReady": False, "mailReadyReason": "missing_scope"}
+
+    return {"mailReady": False, "mailReadyReason": "mail_api_error"}
 
 
 async def create_mail_draft(

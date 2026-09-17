@@ -261,6 +261,8 @@ async def todos_calendar_status(request: Request):
     out: dict = {"connected": connected}
     if "mailReady" in data:
         out["mailReady"] = bool(data.get("mailReady"))
+    if isinstance(data.get("mailReadyReason"), str) and data.get("mailReadyReason"):
+        out["mailReadyReason"] = str(data.get("mailReadyReason"))
     if "error" in data:
         out["error"] = data["error"]
     if "detail" in data and isinstance(data.get("detail"), str):
