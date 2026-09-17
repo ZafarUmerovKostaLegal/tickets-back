@@ -738,13 +738,10 @@ async def get_daily_attendance_report(
     if allowed:
         stored_params["camera_ip"] = ",".join(allowed)
 
-    # Fast path: workday + DB events + mappings + explanations + known people (no live camera / user pulls).
-    people_params: dict[str, str] = {}
-    if allowed:
-        people_params["camera_ip"] = ",".join(allowed)
+    # Fast path: workday + DB events + mappings + explanations (no live camera / user pulls).
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            workday_r, stored_r, mappings_r, explanations_r, people_r = await asyncio.gather(
+            workday_r, stored_r, mappings_r, explanations_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
                 client.get(f"{base}/hikvision/ingest/events", params=stored_params),
                 client.get(f"{base}/hikvision/mappings"),
@@ -752,7 +749,6 @@ async def get_daily_attendance_report(
                     f"{base}/hikvision/explanations",
                     params={"day": report_day.isoformat()},
                 ),
-                client.get(f"{base}/hikvision/ingest/people", params=people_params),
             )
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
@@ -812,11 +808,10 @@ async def get_daily_attendance_report(
         if (m.get("camera_employee_no") or "").strip()
     }
     explanations = explanations_r.json() or []
-    known_people = people_r.json() if people_r.status_code < 400 else []
 
-    # Roster: bindings + everyone seen on cameras in DB history + people who punched today.
+    # Roster: mapped employees (for absences) + everyone who punched this day.
+    # Do NOT include full camera history — that resurfaces people who no longer come.
     roster_by_employee_no = build_range_roster_from_mappings(mappings)
-    merge_people_into_roster(roster_by_employee_no, known_people or [])
     enrich_roster_from_events(roster_by_employee_no, events_devices)
 
     first_events_by_day = index_first_events_by_day(
@@ -902,14 +897,10 @@ async def get_period_attendance_report(
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            workday_r, mappings_r, explanations_r, people_r = await asyncio.gather(
+            workday_r, mappings_r, explanations_r = await asyncio.gather(
                 client.get(f"{base}/settings/workday"),
                 client.get(f"{base}/hikvision/mappings"),
                 client.get(f"{base}/hikvision/explanations"),
-                client.get(
-                    f"{base}/hikvision/ingest/people",
-                    params={"camera_ip": ",".join(allowed)} if allowed else {},
-                ),
             )
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Attendance service unavailable")
@@ -921,14 +912,13 @@ async def get_period_attendance_report(
     workday = workday_r.json() or {}
     mappings = mappings_r.json() or []
     explanations_all = explanations_r.json() or []
-    known_people = people_r.json() if people_r.status_code < 400 else []
     mapping_by_employee_no = {
         (m.get("camera_employee_no") or "").strip(): m
         for m in mappings
         if (m.get("camera_employee_no") or "").strip()
     }
+    # Mapped staff (absences) + whoever punched in the period — not full camera history.
     roster_by_employee_no = build_range_roster_from_mappings(mappings)
-    merge_people_into_roster(roster_by_employee_no, known_people or [])
 
     if app_user_id is not None:
         keep_emp = {
@@ -939,7 +929,10 @@ async def get_period_attendance_report(
         roster_by_employee_no = {
             emp: row for emp, row in roster_by_employee_no.items() if emp in keep_emp
         }
-        if not roster_by_employee_no:
+        if not roster_by_employee_no and not keep_emp:
+            # No mapping for this user — still allow camera-only period via events below.
+            pass
+        elif not roster_by_employee_no:
             return {
                 "date_from": start.isoformat(),
                 "date_to": end.isoformat(),
@@ -994,6 +987,10 @@ async def get_period_attendance_report(
         )
         for it in day_items:
             if app_user_id is not None and it.get("app_user_id") != app_user_id:
+                continue
+            # Without a mapping, don't invent "absent" rows for people who only
+            # punched on other days of the period (or earlier in history).
+            if app_user_id is None and not it.get("is_mapped") and it.get("status") == "absent":
                 continue
             items.append({"date": day_str, **it})
 

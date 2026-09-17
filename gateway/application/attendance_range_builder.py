@@ -214,16 +214,28 @@ def build_daily_report_items(
         for x in explanations_for_day
         if (x.get("camera_employee_no") or "").strip()
     }
+    app_users_by_name: dict[str, dict] = {}
+    for u in app_users_by_id.values():
+        for raw in ((u or {}).get("display_name"), (u or {}).get("email")):
+            key = (raw or "").strip().lower()
+            if key and key not in app_users_by_name:
+                app_users_by_name[key] = u
+
     items: list[dict] = []
     counts = {"present_on_time": 0, "late": 0, "absent": 0}
     for employee_no, user in roster_by_employee_no.items():
         mapping = mapping_by_employee_no.get(employee_no)
         uid = mapping.get("app_user_id") if mapping else None
         app_user = app_users_by_id.get(uid) if uid is not None else None
+        camera_name = (user.get("camera_name") or "").strip() or None
+        if app_user is None and camera_name:
+            app_user = app_users_by_name.get(camera_name.lower())
+            if app_user is not None and uid is None:
+                uid = app_user.get("id")
         display_name = (
             (app_user or {}).get("display_name")
             or (app_user or {}).get("email")
-            or user.get("camera_name")
+            or camera_name
             or f"Hikvision #{employee_no}"
         )
         status, first_time = compute_employee_day_status(
@@ -253,17 +265,19 @@ def build_daily_report_items(
         explanation_file_url = (
             f"/api/v1/media/{explanation_file_path}" if explanation_file_path else None
         )
+        position = (app_user or {}).get("position") or user.get("department")
         items.append(
             {
                 "app_user_id": uid,
                 "display_name": display_name,
                 "email": (app_user or {}).get("email"),
                 "role": (app_user or {}).get("role"),
-                "is_mapped": uid is not None,
+                "position": position,
+                "is_mapped": mapping is not None and mapping.get("app_user_id") is not None,
                 "camera_employee_no": employee_no,
-                "camera_name": user.get("camera_name"),
+                "camera_name": camera_name,
                 "camera_ips": sorted([ip for ip in user.get("camera_ips", set()) if ip]),
-                "department": user.get("department"),
+                "department": user.get("department") or position,
                 "status": status,
                 "first_event_time": first_time,
                 "last_event_time": last_time,
