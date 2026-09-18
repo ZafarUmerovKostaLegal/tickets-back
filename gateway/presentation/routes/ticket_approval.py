@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 import httpx
+from fastapi import Request
 
+from infrastructure.auth_upstream import access_token_from_request, auth_service_request
 from infrastructure.config import Settings
 
 _log = logging.getLogger(__name__)
@@ -27,30 +30,88 @@ def is_partner_org_role(role: str | None, position: str | None = None) -> bool:
 
 async def fetch_auth_user_public(
     settings: Settings,
-    authorization: str | None,
+    request: Request,
+    authorization: Optional[str],
     user_id: int,
 ) -> dict | None:
-    if not authorization or not authorization.strip():
-        return None
-    hdr = authorization.strip()
-    if not hdr.lower().startswith("bearer "):
-        hdr = f"Bearer {hdr}"
-    base = (settings.auth_service_url or "").rstrip("/")
-    if not base:
+    """Load public user profile via auth service (Bearer header or session cookie)."""
+    del settings  # reserved for callers; auth base comes from auth_service_request
+    token = access_token_from_request(request, authorization)
+    if not token:
+        _log.warning("ticket partner lookup skipped: no access token user_id=%s", user_id)
         return None
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(
-                f"{base}/users/{user_id}/public",
-                headers={"Authorization": hdr},
-            )
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, dict):
-                return data
-    except httpx.RequestError as exc:
+        r = await auth_service_request(
+            "GET",
+            f"/users/{user_id}/public",
+            f"Bearer {token}",
+            timeout=8.0,
+        )
+    except Exception as exc:
         _log.warning("auth user public fetch failed user_id=%s err=%s", user_id, exc)
+        return None
+    if r.status_code == 200:
+        data = r.json()
+        if isinstance(data, dict):
+            return data
+    _log.warning(
+        "auth user public fetch status=%s user_id=%s body=%s",
+        r.status_code,
+        user_id,
+        (r.text or "")[:200],
+    )
     return None
+
+
+async def fetch_partner_from_partners_list(
+    request: Request,
+    authorization: Optional[str],
+    user_id: int,
+) -> dict | None:
+    """Fallback: same source as UI listPartners (`GET /users/partners`)."""
+    token = access_token_from_request(request, authorization)
+    if not token:
+        return None
+    try:
+        r = await auth_service_request(
+            "GET",
+            "/users/partners",
+            f"Bearer {token}",
+            timeout=10.0,
+        )
+    except Exception as exc:
+        _log.warning("auth partners list fetch failed err=%s", exc)
+        return None
+    if r.status_code != 200:
+        _log.warning("auth partners list status=%s body=%s", r.status_code, (r.text or "")[:200])
+        return None
+    payload = r.json()
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return None
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            if int(raw.get("id")) == int(user_id):
+                return raw
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def resolve_ticket_approval_partner(
+    settings: Settings,
+    request: Request,
+    authorization: Optional[str],
+    partner_user_id: int,
+) -> tuple[dict | None, bool]:
+    """Return (profile, trusted_as_partner). trusted_as_partner when found in /users/partners."""
+    listed = await fetch_partner_from_partners_list(request, authorization, partner_user_id)
+    if listed:
+        return listed, True
+    profile = await fetch_auth_user_public(settings, request, authorization, partner_user_id)
+    return profile, False
 
 
 async def send_ticket_system_notification(

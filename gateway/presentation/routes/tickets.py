@@ -33,8 +33,8 @@ from presentation.routes.ticket_approval import (
     TICKET_STATUS_IN_PROGRESS,
     TICKET_STATUS_ON_APPROVAL,
     TICKET_STATUS_OPEN,
-    fetch_auth_user_public,
     is_partner_org_role,
+    resolve_ticket_approval_partner,
     send_ticket_system_notification,
 )
 
@@ -277,6 +277,7 @@ async def update_ticket(
 async def submit_ticket_for_approval(
     ticket_uuid: str,
     body: TicketSubmitApprovalRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
@@ -286,10 +287,15 @@ async def submit_ticket_for_approval(
     ):
         raise HTTPException(status_code=403, detail="Нет прав отправить заявку на согласование")
     settings = get_settings()
-    partner = await fetch_auth_user_public(settings, authorization, body.partner_user_id)
+    partner, trusted_partner = await resolve_ticket_approval_partner(
+        settings,
+        request,
+        authorization,
+        body.partner_user_id,
+    )
     if not partner:
         raise HTTPException(status_code=422, detail="Партнёр не найден")
-    if not is_partner_org_role(partner.get("role"), partner.get("position")):
+    if not trusted_partner and not is_partner_org_role(partner.get("role"), partner.get("position")):
         raise HTTPException(status_code=422, detail="Выбранный пользователь не является партнёром")
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
