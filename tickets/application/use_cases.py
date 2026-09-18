@@ -75,6 +75,10 @@ class UpdateTicketUseCase:
         status: Optional[str] = None,
         category: Optional[str] = None,
         priority: Optional[str] = None,
+        partner_user_id: Optional[int] = None,
+        rejection_comment: Optional[str] = None,
+        clear_partner_user_id: bool = False,
+        clear_rejection_comment: bool = False,
     ) -> Optional[Ticket]:
         return await self._ticket_repo.update(
             ticket_uuid=ticket_uuid,
@@ -84,6 +88,10 @@ class UpdateTicketUseCase:
             status=status,
             category=category,
             priority=priority,
+            partner_user_id=partner_user_id,
+            rejection_comment=rejection_comment,
+            clear_partner_user_id=clear_partner_user_id,
+            clear_rejection_comment=clear_rejection_comment,
         )
 
 

@@ -35,6 +35,8 @@ class TicketRepository(TicketRepositoryPort):
             category=m.category,
             priority=m.priority,
             is_archived=getattr(m, "is_archived", False),
+            partner_user_id=getattr(m, "partner_user_id", None),
+            rejection_comment=getattr(m, "rejection_comment", None),
         )
 
     async def create(
@@ -103,6 +105,10 @@ class TicketRepository(TicketRepositoryPort):
         status: Optional[str] = None,
         category: Optional[str] = None,
         priority: Optional[str] = None,
+        partner_user_id: Optional[int] = None,
+        rejection_comment: Optional[str] = None,
+        clear_partner_user_id: bool = False,
+        clear_rejection_comment: bool = False,
     ) -> Optional[Ticket]:
         result = await self._session.execute(select(TicketModel).where(TicketModel.uuid == ticket_uuid))
         model = result.scalars().one_or_none()
@@ -120,6 +126,14 @@ class TicketRepository(TicketRepositoryPort):
             model.category = category
         if priority is not None:
             model.priority = priority
+        if clear_partner_user_id:
+            model.partner_user_id = None
+        elif partner_user_id is not None:
+            model.partner_user_id = partner_user_id
+        if clear_rejection_comment:
+            model.rejection_comment = None
+        elif rejection_comment is not None:
+            model.rejection_comment = rejection_comment
         await self._session.flush()
         await self._session.refresh(model)
         return self._to_entity(model)

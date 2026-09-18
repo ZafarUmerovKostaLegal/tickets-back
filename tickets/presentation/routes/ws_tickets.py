@@ -37,6 +37,8 @@ def _ticket_to_dict(t):
         "category": t.category,
         "priority": t.priority,
         "is_archived": getattr(t, "is_archived", False),
+        "partner_user_id": getattr(t, "partner_user_id", None),
+        "rejection_comment": getattr(t, "rejection_comment", None),
     }
 
 
@@ -155,15 +157,28 @@ async def ws_tickets(websocket: WebSocket):
                             continue
 
                         if action == "update_ticket":
+                            status = payload.get("status")
+                            partner_user_id = payload.get("partner_user_id")
+                            if status == Status.ON_APPROVAL.value and (
+                                partner_user_id is None or int(partner_user_id) <= 0
+                            ):
+                                await websocket.send_json(
+                                    reply(error="Статус «На согласовании» требует partner_user_id")
+                                )
+                                continue
                             uc = UpdateTicketUseCase(ticket_repo)
                             ticket = await uc.execute(
                                 ticket_uuid=payload.get("ticket_uuid", ""),
                                 theme=payload.get("theme"),
                                 description=payload.get("description"),
                                 attachment_path=payload.get("attachment_path"),
-                                status=payload.get("status"),
+                                status=status,
                                 category=payload.get("category"),
                                 priority=payload.get("priority"),
+                                partner_user_id=partner_user_id,
+                                rejection_comment=payload.get("rejection_comment"),
+                                clear_partner_user_id=bool(payload.get("clear_partner_user_id")),
+                                clear_rejection_comment=bool(payload.get("clear_rejection_comment")),
                             )
                             if not ticket:
                                 await websocket.send_json(reply(error="Ticket not found"))

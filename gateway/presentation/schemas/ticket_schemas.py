@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TicketResponse(BaseModel):
@@ -15,6 +16,8 @@ class TicketResponse(BaseModel):
     category: str
     priority: str
     is_archived: bool = False
+    partner_user_id: Optional[int] = None
+    rejection_comment: Optional[str] = None
 
 
 class TicketUpdateRequest(BaseModel):
@@ -24,6 +27,20 @@ class TicketUpdateRequest(BaseModel):
     status: Optional[str] = None
     category: Optional[str] = None
     priority: Optional[str] = None
+    partner_user_id: Optional[int] = None
+    rejection_comment: Optional[str] = None
+    clear_partner_user_id: bool = False
+    clear_rejection_comment: bool = False
+
+
+class TicketSubmitApprovalRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    partner_user_id: int = Field(..., alias="partnerUserId", gt=0)
+
+
+class TicketRejectApprovalRequest(BaseModel):
+    comment: str = Field(..., min_length=1)
 
 
 class StatusItem(BaseModel):

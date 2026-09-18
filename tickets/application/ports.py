@@ -62,6 +62,10 @@ class TicketRepositoryPort(ABC):
         status: Optional[str] = None,
         category: Optional[str] = None,
         priority: Optional[str] = None,
+        partner_user_id: Optional[int] = None,
+        rejection_comment: Optional[str] = None,
+        clear_partner_user_id: bool = False,
+        clear_rejection_comment: bool = False,
     ) -> Optional[Ticket]:
         pass
 

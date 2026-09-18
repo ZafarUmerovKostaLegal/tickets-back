@@ -21,11 +21,21 @@ from infrastructure.config import get_settings
 from presentation.schemas.ticket_schemas import (
     TicketResponse,
     TicketUpdateRequest,
+    TicketSubmitApprovalRequest,
+    TicketRejectApprovalRequest,
     StatusItem,
     PriorityItem,
     CommentResponse,
     CommentCreateRequest,
     CommentUpdateRequest,
+)
+from presentation.routes.ticket_approval import (
+    TICKET_STATUS_IN_PROGRESS,
+    TICKET_STATUS_ON_APPROVAL,
+    TICKET_STATUS_OPEN,
+    fetch_auth_user_public,
+    is_partner_org_role,
+    send_ticket_system_notification,
 )
 
 router = APIRouter(prefix="/api/v1/tickets", tags=["tickets"])
@@ -244,6 +254,11 @@ async def update_ticket(
     current_user: dict = Depends(get_current_user),
 ):
     await _get_ticket_and_check_access(ticket_uuid, current_user)
+    if body.status == TICKET_STATUS_ON_APPROVAL:
+        raise HTTPException(
+            status_code=400,
+            detail="Для статуса «На согласовании» выберите партнёра через submit-approval",
+        )
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
@@ -256,6 +271,143 @@ async def update_ticket(
         raise HTTPException(status_code=400, detail=r.json().get("detail", "Bad request"))
     r.raise_for_status()
     return r.json()
+
+
+@router.post("/{ticket_uuid}/submit-approval", response_model=TicketResponse)
+async def submit_ticket_for_approval(
+    ticket_uuid: str,
+    body: TicketSubmitApprovalRequest,
+    current_user: dict = Depends(get_current_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
+    ticket = await _get_ticket_and_check_access(ticket_uuid, current_user)
+    if current_user["role"] not in ROLES_FULL_ACCESS and not _same_user_id(
+        ticket.get("created_by_user_id"), current_user.get("id")
+    ):
+        raise HTTPException(status_code=403, detail="Нет прав отправить заявку на согласование")
+    settings = get_settings()
+    partner = await fetch_auth_user_public(settings, authorization, body.partner_user_id)
+    if not partner:
+        raise HTTPException(status_code=422, detail="Партнёр не найден")
+    if not is_partner_org_role(partner.get("role"), partner.get("position")):
+        raise HTTPException(status_code=422, detail="Выбранный пользователь не является партнёром")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{settings.tickets_service_url}/tickets/{ticket_uuid}",
+            json={
+                "status": TICKET_STATUS_ON_APPROVAL,
+                "partner_user_id": body.partner_user_id,
+                "clear_rejection_comment": True,
+            },
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if r.status_code == 400:
+        raise HTTPException(status_code=400, detail=r.json().get("detail", "Bad request"))
+    r.raise_for_status()
+    updated = r.json()
+    theme = str(updated.get("theme") or ticket.get("theme") or "IT-заявка")
+    await send_ticket_system_notification(
+        settings,
+        recipient_user_id=body.partner_user_id,
+        title="IT-заявка на согласовании",
+        description=(
+            f"«{theme}» ожидает вашего решения. "
+            f"Откройте заявку, чтобы согласовать или отклонить. ticket:{ticket_uuid}"
+        ),
+        notification_type="ticket_approval",
+    )
+    return updated
+
+
+@router.post("/{ticket_uuid}/approve", response_model=TicketResponse)
+async def approve_ticket(
+    ticket_uuid: str,
+    current_user: dict = Depends(get_current_user),
+):
+    ticket = await _get_ticket_and_check_access(ticket_uuid, current_user)
+    if ticket.get("status") != TICKET_STATUS_ON_APPROVAL:
+        raise HTTPException(status_code=400, detail="Заявка не ожидает согласования")
+    partner_id = ticket.get("partner_user_id")
+    if not _same_user_id(partner_id, current_user.get("id")):
+        raise HTTPException(status_code=403, detail="Согласовать может только назначенный партнёр")
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{settings.tickets_service_url}/tickets/{ticket_uuid}",
+            json={
+                "status": TICKET_STATUS_IN_PROGRESS,
+                "clear_rejection_comment": True,
+            },
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if r.status_code == 400:
+        raise HTTPException(status_code=400, detail=r.json().get("detail", "Bad request"))
+    r.raise_for_status()
+    updated = r.json()
+    theme = str(updated.get("theme") or ticket.get("theme") or "IT-заявка")
+    author_id = ticket.get("created_by_user_id")
+    if author_id is not None:
+        try:
+            await send_ticket_system_notification(
+                settings,
+                recipient_user_id=int(author_id),
+                title="IT-заявка согласована",
+                description=f"«{theme}» согласована партнёром и переведена в работу. ticket:{ticket_uuid}",
+                notification_type="ticket_approved",
+            )
+        except (TypeError, ValueError):
+            pass
+    return updated
+
+
+@router.post("/{ticket_uuid}/reject", response_model=TicketResponse)
+async def reject_ticket(
+    ticket_uuid: str,
+    body: TicketRejectApprovalRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    ticket = await _get_ticket_and_check_access(ticket_uuid, current_user)
+    if ticket.get("status") != TICKET_STATUS_ON_APPROVAL:
+        raise HTTPException(status_code=400, detail="Заявка не ожидает согласования")
+    partner_id = ticket.get("partner_user_id")
+    if not _same_user_id(partner_id, current_user.get("id")):
+        raise HTTPException(status_code=403, detail="Отклонить может только назначенный партнёр")
+    comment = (body.comment or "").strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="Укажите комментарий при отказе")
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.patch(
+            f"{settings.tickets_service_url}/tickets/{ticket_uuid}",
+            json={
+                "status": TICKET_STATUS_OPEN,
+                "rejection_comment": comment,
+            },
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if r.status_code == 400:
+        raise HTTPException(status_code=400, detail=r.json().get("detail", "Bad request"))
+    r.raise_for_status()
+    updated = r.json()
+    theme = str(updated.get("theme") or ticket.get("theme") or "IT-заявка")
+    author_id = ticket.get("created_by_user_id")
+    if author_id is not None:
+        try:
+            await send_ticket_system_notification(
+                settings,
+                recipient_user_id=int(author_id),
+                title="IT-заявка отклонена",
+                description=(
+                    f"«{theme}» отклонена партнёром. Комментарий: {comment}. ticket:{ticket_uuid}"
+                ),
+                notification_type="ticket_rejected",
+            )
+        except (TypeError, ValueError):
+            pass
+    return updated
 
 
 @router.patch("/{ticket_uuid}/archive", response_model=TicketResponse)

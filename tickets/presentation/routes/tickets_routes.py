@@ -51,6 +51,8 @@ def _ticket_to_response(t):
         category=t.category,
         priority=t.priority,
         is_archived=getattr(t, "is_archived", False),
+        partner_user_id=getattr(t, "partner_user_id", None),
+        rejection_comment=getattr(t, "rejection_comment", None),
     )
 
 
@@ -137,6 +139,13 @@ async def update_ticket(
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {[s.value for s in Status]}")
     if body.priority is not None and body.priority not in [p.value for p in Priority]:
         raise HTTPException(status_code=400, detail=f"Invalid priority. Must be one of: {[p.value for p in Priority]}")
+    if body.status == Status.ON_APPROVAL.value:
+        partner_id = body.partner_user_id
+        if partner_id is None or int(partner_id) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Статус «На согласовании» требует partner_user_id. Используйте submit-approval.",
+            )
     uc = UpdateTicketUseCase(ticket_repo)
     ticket = await uc.execute(
         ticket_uuid=ticket_uuid,
@@ -146,6 +155,10 @@ async def update_ticket(
         status=body.status,
         category=body.category,
         priority=body.priority,
+        partner_user_id=body.partner_user_id,
+        rejection_comment=body.rejection_comment,
+        clear_partner_user_id=body.clear_partner_user_id,
+        clear_rejection_comment=body.clear_rejection_comment,
     )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")

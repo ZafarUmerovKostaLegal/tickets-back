@@ -19,6 +19,12 @@ async def lifespan(app: FastAPI):
         await conn.execute(text(
             "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false"
         ))
+        await conn.execute(text(
+            "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS partner_user_id INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS rejection_comment TEXT"
+        ))
     yield
 
 

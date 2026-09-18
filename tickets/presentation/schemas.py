@@ -28,6 +28,8 @@ class TicketResponse(BaseModel):
     category: str
     priority: str
     is_archived: bool = False
+    partner_user_id: Optional[int] = None
+    rejection_comment: Optional[str] = None
 
 
 class TicketUpdateRequest(BaseModel):
@@ -37,6 +39,10 @@ class TicketUpdateRequest(BaseModel):
     status: Optional[str] = None
     category: Optional[str] = None
     priority: Optional[str] = None
+    partner_user_id: Optional[int] = None
+    rejection_comment: Optional[str] = None
+    clear_partner_user_id: bool = False
+    clear_rejection_comment: bool = False
 
 
 class CommentResponse(BaseModel):

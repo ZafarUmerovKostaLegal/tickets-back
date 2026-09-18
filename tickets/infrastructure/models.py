@@ -18,6 +18,8 @@ class TicketModel(Base):
     category: Mapped[str] = mapped_column(String(256), nullable=False)
     priority: Mapped[str] = mapped_column(String(64), nullable=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    partner_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    rejection_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CommentModel(Base):

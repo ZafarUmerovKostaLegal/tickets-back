@@ -32,6 +32,8 @@ class Ticket:
     category: str
     priority: str
     is_archived: bool
+    partner_user_id: Optional[int] = None
+    rejection_comment: Optional[str] = None
 
 
 @dataclass
