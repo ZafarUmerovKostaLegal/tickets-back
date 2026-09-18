@@ -259,6 +259,14 @@ def build_daily_report_items(
                 first_cmp = first_dt.astimezone(_OFFICE_TZ)
             if last_dt > first_cmp:
                 last_time = last_dt.isoformat()
+        event_count = int((first or {}).get("event_count") or 0)
+        unique_keys = (first or {}).get("unique_keys")
+        if isinstance(unique_keys, set):
+            unique_event_count = len(unique_keys)
+        elif event_count > 0:
+            unique_event_count = 1
+        else:
+            unique_event_count = 0
         counts[status] += 1
         explanation = explanation_by_key.get(f"{employee_no}|{status}")
         explanation_file_path = (explanation or {}).get("explanation_file_path")
@@ -281,6 +289,8 @@ def build_daily_report_items(
                 "status": status,
                 "first_event_time": first_time,
                 "last_event_time": last_time,
+                "event_count": event_count,
+                "unique_event_count": unique_event_count,
                 "explanation_text": (explanation or {}).get("explanation_text"),
                 "explanation_file_path": explanation_file_path,
                 "explanation_file_url": explanation_file_url,
@@ -336,7 +346,7 @@ def index_first_events_by_day(
     start: date,
     end: date,
 ) -> dict[str, dict[str, dict]]:
-    """Per day → employee_no → {dt, last_dt, record} (first and last punch that day)."""
+    """Per day → employee_no → {dt, last_dt, record, event_count, unique_keys}."""
     start_s = start.isoformat()
     end_s = end.isoformat()
     result: dict[str, dict[str, dict]] = {}
@@ -348,14 +358,29 @@ def index_first_events_by_day(
             dt = _parse_event_dt(rec.get("time"))
             if not dt:
                 continue
-            day_key = dt.astimezone(_OFFICE_TZ).date().isoformat()
+            local = dt.astimezone(_OFFICE_TZ) if dt.tzinfo else dt.replace(tzinfo=_OFFICE_TZ)
+            day_key = local.date().isoformat()
             if day_key < start_s or day_key > end_s:
                 continue
+            # Dedupe key: same employee + same local minute counts as one unique punch.
+            unique_key = local.strftime("%Y-%m-%d %H:%M")
             day_bucket = result.setdefault(day_key, {})
             prev = day_bucket.get(employee_no)
             if not prev:
-                day_bucket[employee_no] = {"dt": dt, "last_dt": dt, "record": rec}
+                day_bucket[employee_no] = {
+                    "dt": dt,
+                    "last_dt": dt,
+                    "record": rec,
+                    "event_count": 1,
+                    "unique_keys": {unique_key},
+                }
                 continue
+            prev["event_count"] = int(prev.get("event_count") or 0) + 1
+            keys = prev.get("unique_keys")
+            if not isinstance(keys, set):
+                keys = set()
+                prev["unique_keys"] = keys
+            keys.add(unique_key)
             if dt < prev["dt"]:
                 prev["dt"] = dt
                 prev["record"] = rec
