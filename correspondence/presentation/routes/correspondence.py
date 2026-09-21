@@ -1126,16 +1126,23 @@ def _serve_public_attachment_file(document_id: str, att: CorrespondenceAttachmen
             "Документ недоступен.",
         )
     mime = (att.content_type or "application/octet-stream").strip() or "application/octet-stream"
+    mime_l = mime.lower()
+    name_l = (att.file_name or "").lower()
+    # Phone browsers open PDF/images immediately (same as expenses email-file).
+    inline = (
+        mime_l.startswith("image/")
+        or mime_l == "application/pdf"
+        or name_l.endswith((".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"))
+    )
     safe_name = Path(att.file_name or "document").name or "document"
     return FileResponse(
         path,
         media_type=mime,
         filename=safe_name,
-        content_disposition_type="attachment",
+        content_disposition_type="inline" if inline else "attachment",
         headers={
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "no-store",
-            "Content-Security-Policy": "default-src 'none'; sandbox",
         },
     )
 

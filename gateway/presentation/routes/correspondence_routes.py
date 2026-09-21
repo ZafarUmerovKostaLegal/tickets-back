@@ -80,6 +80,56 @@ def _strip_hop_and_cors(headers: dict) -> dict:
     return {k: v for k, v in headers.items() if k.lower() not in skip}
 
 
+async def _forward_public(request: Request, path: str, *, timeout: float = 120.0):
+    """Unauthenticated proxy for QR public-file links (do not require / forward login)."""
+    base = _correspondence_base()
+    if not base:
+        return JSONResponse(status_code=503, content={"detail": "CORRESPONDENCE_SERVICE_URL is not configured"})
+    upstream_url = f"{base}/api/v1/correspondence/{path}".rstrip("/")
+    query = request.url.query
+    if query:
+        upstream_url = f"{upstream_url}?{query}"
+    headers = _request_headers_for_upstream(request)
+    headers.pop("authorization", None)
+    headers.pop("Authorization", None)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            upstream = await client.request(
+                request.method,
+                upstream_url,
+                headers=headers,
+                content=None,
+            )
+    except httpx.RequestError as exc:
+        return _correspondence_upstream_503(base, exc)
+    out_headers = _strip_hop_and_cors(dict(upstream.headers))
+    return FastAPIResponse(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=out_headers,
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+@router.get("/{document_id}/public-file")
+async def proxy_correspondence_public_file(document_id: str, request: Request):
+    """Public QR download — no JWT (HMAC token in query)."""
+    return await _forward_public(request, f"{document_id}/public-file")
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-file")
+async def proxy_correspondence_attachment_public_file(
+    document_id: str,
+    attachment_id: str,
+    request: Request,
+):
+    """Public QR download for a pinned attachment — no JWT."""
+    return await _forward_public(
+        request,
+        f"{document_id}/attachments/{attachment_id}/public-file",
+    )
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def proxy_correspondence(request: Request, path: str):
     base = _correspondence_base()

@@ -32,7 +32,7 @@ def build_public_download_url(
     token: str,
     attachment_id: str | None = None,
 ) -> str:
-    """Absolute URL when GATEWAY_BASE_URL is set; otherwise relative path for the client to resolve."""
+    """Absolute public URL for phone QR (requires GATEWAY_BASE_URL)."""
     path = build_public_download_path(
         document_id=document_id,
         attachment_id=attachment_id,
@@ -40,7 +40,9 @@ def build_public_download_url(
     )
     base = (settings.public_api_base_url or "").strip().rstrip("/")
     if not base:
-        return path
+        raise ValueError(
+            "Задайте GATEWAY_BASE_URL / PUBLIC_API_BASE_URL для публичной ссылки QR"
+        )
     return f"{base}{path}"
 
 

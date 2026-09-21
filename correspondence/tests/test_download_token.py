@@ -14,8 +14,22 @@ def test_sign_and_verify_download_token_roundtrip():
         attachment_id=ATT,
         ttl_seconds=3600,
     )
+    assert token.startswith("1.")
+    assert verify_download_token(SECRET, token=token, document_id=DOC, attachment_id=ATT) == ATT
+
+
+def test_document_scoped_token_roundtrip():
+    token = sign_download_token(
+        SECRET,
+        document_id=DOC,
+        attachment_id=None,
+        ttl_seconds=3600,
+    )
+    assert token.startswith("2.")
     assert "." in token
-    verify_download_token(SECRET, token=token, document_id=DOC, attachment_id=ATT)
+    # Compact tokens stay short enough for phone QR scanners.
+    assert len(token) < 120
+    assert verify_download_token(SECRET, token=token, document_id=DOC) is None
 
 
 def test_verify_rejects_tampered_token():
@@ -25,10 +39,10 @@ def test_verify_rejects_tampered_token():
         attachment_id=ATT,
         ttl_seconds=3600,
     )
-    body, sig = token.split(".", 1)
-    bad_sig = ("0" * 64) if sig != ("0" * 64) else ("1" * 64)
+    parts = token.split(".")
+    parts[-1] = ("0" * 32) if parts[-1] != ("0" * 32) else ("1" * 32)
     with pytest.raises(ValueError, match="Недействительная"):
-        verify_download_token(SECRET, token=f"{body}.{bad_sig}", document_id=DOC, attachment_id=ATT)
+        verify_download_token(SECRET, token=".".join(parts), document_id=DOC, attachment_id=ATT)
 
 
 def test_verify_rejects_wrong_document():
@@ -59,7 +73,6 @@ def test_verify_rejects_expired_token(monkeypatch):
     import infrastructure.download_token as mod
 
     real_time = mod.time.time
-    # Freeze "now" while signing with short TTL, then jump past expiry.
     monkeypatch.setattr(mod.time, "time", lambda: 1_700_000_000)
     token = sign_download_token(
         SECRET,
@@ -78,16 +91,6 @@ def test_sign_rejects_non_uuid():
         sign_download_token(SECRET, document_id="not-a-uuid", attachment_id=ATT, ttl_seconds=60)
 
 
-def test_document_scoped_token_roundtrip():
-    token = sign_download_token(
-        SECRET,
-        document_id=DOC,
-        attachment_id=None,
-        ttl_seconds=3600,
-    )
-    assert verify_download_token(SECRET, token=token, document_id=DOC) is None
-
-
 def test_document_scoped_token_rejects_wrong_document():
     token = sign_download_token(
         SECRET,
@@ -99,11 +102,24 @@ def test_document_scoped_token_rejects_wrong_document():
         verify_download_token(SECRET, token=token, document_id=other)
 
 
-def test_v1_verify_returns_bound_attachment_id():
-    token = sign_download_token(
-        SECRET,
-        document_id=DOC,
-        attachment_id=ATT,
-        ttl_seconds=3600,
-    )
-    assert verify_download_token(SECRET, token=token, document_id=DOC) == ATT
+def test_legacy_json_token_still_verifies():
+    """Old body.sig tokens minted before compact format must keep working."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    payload = {
+        "act": "download",
+        "aid": ATT,
+        "did": DOC,
+        "exp": 1_900_000_000,
+        "n": "abcd1234abcd1234",
+        "v": 1,
+    }
+    body_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    sig = hmac.new(SECRET.encode("utf-8"), body_b64.encode("ascii"), hashlib.sha256).hexdigest()
+    token = f"{body_b64}.{sig}"
+    assert verify_download_token(SECRET, token=token, document_id=DOC, attachment_id=ATT) == ATT

@@ -1,7 +1,7 @@
 """HMAC-signed download tokens for QR / public file links (same idea as expenses email_action_token).
 
-v2 tokens bind document_id only so the QR stays valid when the letter file is re-uploaded.
-v1 tokens (document + attachment) remain verifiable for older links.
+v3 compact tokens keep QR module count low for phone cameras.
+v1/v2 JSON tokens remain verifiable for older links.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+_HEX32_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
 _MAX_TOKEN_LEN = 2048
 
 
@@ -37,6 +38,18 @@ def _assert_id(value: str, label: str) -> str:
     return v
 
 
+def _uuid_from_hex32(value: str) -> str:
+    h = (value or "").strip().lower()
+    if not _HEX32_RE.match(h):
+        raise ValueError("Invalid id")
+    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+
+def _sig16(secret: str, message: str) -> str:
+    digest = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
+    return digest[:16].hex()
+
+
 def sign_download_token(
     secret: str,
     *,
@@ -53,20 +66,13 @@ def sign_download_token(
     if ttl < 60 or ttl > 2_592_000:
         raise ValueError("invalid ttl")
     exp = int(time.time()) + ttl
-    payload: dict = {
-        "did": did,
-        "act": "download",
-        "exp": exp,
-        "n": secrets.token_hex(8),
-        "v": 2 if not attachment_id else 1,
-    }
+    n = secrets.token_hex(4)
     if attachment_id:
-        payload["aid"] = _assert_id(attachment_id, "attachment_id")
-    body_b64 = _b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    )
-    sig = hmac.new(secret.encode("utf-8"), body_b64.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"{body_b64}.{sig}"
+        aid = _assert_id(attachment_id, "attachment_id")
+        msg = f"1|{did}|{aid}|{exp}|{n}"
+        return f"1.{did.replace('-', '')}.{aid.replace('-', '')}.{exp}.{n}.{_sig16(secret, msg)}"
+    msg = f"2|{did}|{exp}|{n}"
+    return f"2.{did.replace('-', '')}.{exp}.{n}.{_sig16(secret, msg)}"
 
 
 def verify_download_token(
@@ -76,7 +82,7 @@ def verify_download_token(
     document_id: str,
     attachment_id: str | None = None,
 ) -> str | None:
-    """Verify token. Returns bound attachment_id for v1 tokens, or None for document-scoped v2."""
+    """Verify token. Returns bound attachment_id for attachment-scoped tokens, or None for document-scoped."""
     if not (secret or "").strip():
         raise ValueError("Секрет не настроен")
     raw_token = (token or "").strip()
@@ -84,9 +90,85 @@ def verify_download_token(
         raise ValueError("Недействительная ссылка")
     did = _assert_id(document_id, "document_id")
     parts = raw_token.split(".")
-    if len(parts) != 2:
+    if len(parts) == 5 and parts[0] == "2":
+        return _verify_compact_v2(secret, parts=parts, document_id=did)
+    if len(parts) == 6 and parts[0] == "1":
+        return _verify_compact_v1(
+            secret,
+            parts=parts,
+            document_id=did,
+            attachment_id=attachment_id,
+        )
+    if len(parts) == 2:
+        return _verify_legacy_json(
+            secret,
+            body_b64=parts[0],
+            sig=parts[1],
+            document_id=did,
+            attachment_id=attachment_id,
+        )
+    raise ValueError("Недействительная ссылка")
+
+
+def _verify_compact_v2(secret: str, *, parts: list[str], document_id: str) -> None:
+    _, did_hex, exp_s, n, sig = parts
+    try:
+        token_did = _uuid_from_hex32(did_hex)
+        exp = int(exp_s)
+    except ValueError as e:
+        raise ValueError("Недействительная ссылка") from e
+    if token_did != document_id:
         raise ValueError("Недействительная ссылка")
-    body_b64, sig = parts
+    if not re.fullmatch(r"[0-9a-f]{8}", n or "", flags=re.IGNORECASE):
+        raise ValueError("Недействительная ссылка")
+    if not re.fullmatch(r"[0-9a-f]{32}", sig or "", flags=re.IGNORECASE):
+        raise ValueError("Недействительная ссылка")
+    if int(time.time()) > exp:
+        raise ValueError("Ссылка устарела")
+    expected = _sig16(secret, f"2|{document_id}|{exp}|{n}")
+    if not hmac.compare_digest(expected, sig.lower()):
+        raise ValueError("Недействительная ссылка")
+    return None
+
+
+def _verify_compact_v1(
+    secret: str,
+    *,
+    parts: list[str],
+    document_id: str,
+    attachment_id: str | None,
+) -> str:
+    _, did_hex, aid_hex, exp_s, n, sig = parts
+    try:
+        token_did = _uuid_from_hex32(did_hex)
+        token_aid = _uuid_from_hex32(aid_hex)
+        exp = int(exp_s)
+    except ValueError as e:
+        raise ValueError("Недействительная ссылка") from e
+    if token_did != document_id:
+        raise ValueError("Недействительная ссылка")
+    if attachment_id is not None and token_aid != attachment_id:
+        raise ValueError("Недействительная ссылка")
+    if not re.fullmatch(r"[0-9a-f]{8}", n or "", flags=re.IGNORECASE):
+        raise ValueError("Недействительная ссылка")
+    if not re.fullmatch(r"[0-9a-f]{32}", sig or "", flags=re.IGNORECASE):
+        raise ValueError("Недействительная ссылка")
+    if int(time.time()) > exp:
+        raise ValueError("Ссылка устарела")
+    expected = _sig16(secret, f"1|{document_id}|{token_aid}|{exp}|{n}")
+    if not hmac.compare_digest(expected, sig.lower()):
+        raise ValueError("Недействительная ссылка")
+    return token_aid
+
+
+def _verify_legacy_json(
+    secret: str,
+    *,
+    body_b64: str,
+    sig: str,
+    document_id: str,
+    attachment_id: str | None,
+) -> str | None:
     if not body_b64 or not sig or len(sig) != 64:
         raise ValueError("Недействительная ссылка")
     expected_sig = hmac.new(secret.encode("utf-8"), body_b64.encode("ascii"), hashlib.sha256).hexdigest()
@@ -99,7 +181,7 @@ def verify_download_token(
         raise ValueError("Недействительная ссылка") from e
     if not isinstance(body, dict):
         raise ValueError("Недействительная ссылка")
-    if body.get("did") != did:
+    if body.get("did") != document_id:
         raise ValueError("Недействительная ссылка")
     if body.get("act") != "download":
         raise ValueError("Недействительная ссылка")
@@ -117,5 +199,4 @@ def verify_download_token(
         if attachment_id is not None and aid != attachment_id:
             raise ValueError("Недействительная ссылка")
         return aid
-    # v2 document-scoped
     return None
