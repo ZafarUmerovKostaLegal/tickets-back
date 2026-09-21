@@ -1,10 +1,7 @@
 """HMAC-signed download tokens for QR / public file links (same idea as expenses email_action_token).
 
-Security properties:
-- HMAC-SHA256 over payload; signature compared with hmac.compare_digest (timing-safe)
-- Payload binds document_id + attachment_id + action + expiry (+ nonce)
-- Forged / swapped IDs fail verification
-- Token length capped to limit abuse
+v2 tokens bind document_id only so the QR stays valid when the letter file is re-uploaded.
+v1 tokens (document + attachment) remain verifiable for older links.
 """
 
 from __future__ import annotations
@@ -44,7 +41,7 @@ def sign_download_token(
     secret: str,
     *,
     document_id: str,
-    attachment_id: str,
+    attachment_id: str | None = None,
     ttl_seconds: int,
 ) -> str:
     if not (secret or "").strip():
@@ -52,24 +49,22 @@ def sign_download_token(
     if len(secret.strip()) < 16:
         raise ValueError("secret too short")
     did = _assert_id(document_id, "document_id")
-    aid = _assert_id(attachment_id, "attachment_id")
     ttl = int(ttl_seconds)
     if ttl < 60 or ttl > 2_592_000:
         raise ValueError("invalid ttl")
     exp = int(time.time()) + ttl
-    payload = json.dumps(
-        {
-            "did": did,
-            "aid": aid,
-            "act": "download",
-            "exp": exp,
-            "n": secrets.token_hex(8),
-            "v": 1,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
+    payload: dict = {
+        "did": did,
+        "act": "download",
+        "exp": exp,
+        "n": secrets.token_hex(8),
+        "v": 2 if not attachment_id else 1,
+    }
+    if attachment_id:
+        payload["aid"] = _assert_id(attachment_id, "attachment_id")
+    body_b64 = _b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     )
-    body_b64 = _b64encode(payload.encode("utf-8"))
     sig = hmac.new(secret.encode("utf-8"), body_b64.encode("ascii"), hashlib.sha256).hexdigest()
     return f"{body_b64}.{sig}"
 
@@ -79,15 +74,15 @@ def verify_download_token(
     *,
     token: str,
     document_id: str,
-    attachment_id: str,
-) -> None:
+    attachment_id: str | None = None,
+) -> str | None:
+    """Verify token. Returns bound attachment_id for v1 tokens, or None for document-scoped v2."""
     if not (secret or "").strip():
         raise ValueError("Секрет не настроен")
     raw_token = (token or "").strip()
     if not raw_token or len(raw_token) > _MAX_TOKEN_LEN:
         raise ValueError("Недействительная ссылка")
     did = _assert_id(document_id, "document_id")
-    aid = _assert_id(attachment_id, "attachment_id")
     parts = raw_token.split(".")
     if len(parts) != 2:
         raise ValueError("Недействительная ссылка")
@@ -106,8 +101,6 @@ def verify_download_token(
         raise ValueError("Недействительная ссылка")
     if body.get("did") != did:
         raise ValueError("Недействительная ссылка")
-    if body.get("aid") != aid:
-        raise ValueError("Недействительная ссылка")
     if body.get("act") != "download":
         raise ValueError("Недействительная ссылка")
     try:
@@ -116,3 +109,13 @@ def verify_download_token(
         raise ValueError("Недействительная ссылка") from e
     if int(time.time()) > exp:
         raise ValueError("Ссылка устарела")
+
+    aid = body.get("aid")
+    if aid is not None:
+        if not isinstance(aid, str) or not _UUID_RE.match(aid):
+            raise ValueError("Недействительная ссылка")
+        if attachment_id is not None and aid != attachment_id:
+            raise ValueError("Недействительная ссылка")
+        return aid
+    # v2 document-scoped
+    return None

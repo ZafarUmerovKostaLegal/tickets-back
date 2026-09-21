@@ -11,14 +11,19 @@ def build_public_download_url(
     settings: Settings,
     *,
     document_id: str,
-    attachment_id: str,
     token: str,
+    attachment_id: str | None = None,
 ) -> str | None:
     base = (settings.public_api_base_url or "").strip().rstrip("/")
     if not base:
         return None
+    if attachment_id:
+        return (
+            f"{base}/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file"
+            f"?token={quote(token, safe='')}"
+        )
     return (
-        f"{base}/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file"
+        f"{base}/api/v1/correspondence/{document_id}/public-file"
         f"?token={quote(token, safe='')}"
     )
 
@@ -27,9 +32,9 @@ def mint_download_qr(
     settings: Settings,
     *,
     document_id: str,
-    attachment_id: str,
+    attachment_id: str | None = None,
 ) -> dict:
-    """Return { url, token, expiresAt } for QR embedding."""
+    """Return { url, token, expiresAt } for QR embedding (document-scoped by default)."""
     secret = (settings.correspondence_download_token_secret or "").strip()
     if not secret:
         raise ValueError(

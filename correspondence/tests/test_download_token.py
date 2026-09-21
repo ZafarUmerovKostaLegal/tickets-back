@@ -76,3 +76,34 @@ def test_verify_rejects_expired_token(monkeypatch):
 def test_sign_rejects_non_uuid():
     with pytest.raises(ValueError, match="document_id"):
         sign_download_token(SECRET, document_id="not-a-uuid", attachment_id=ATT, ttl_seconds=60)
+
+
+def test_document_scoped_token_roundtrip():
+    token = sign_download_token(
+        SECRET,
+        document_id=DOC,
+        attachment_id=None,
+        ttl_seconds=3600,
+    )
+    assert verify_download_token(SECRET, token=token, document_id=DOC) is None
+
+
+def test_document_scoped_token_rejects_wrong_document():
+    token = sign_download_token(
+        SECRET,
+        document_id=DOC,
+        ttl_seconds=3600,
+    )
+    other = "99999999-8888-7777-6666-555555555555"
+    with pytest.raises(ValueError, match="Недействительная"):
+        verify_download_token(SECRET, token=token, document_id=other)
+
+
+def test_v1_verify_returns_bound_attachment_id():
+    token = sign_download_token(
+        SECRET,
+        document_id=DOC,
+        attachment_id=ATT,
+        ttl_seconds=3600,
+    )
+    assert verify_download_token(SECRET, token=token, document_id=DOC) == ATT

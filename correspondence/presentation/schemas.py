@@ -124,7 +124,7 @@ class DownloadQrOut(BaseModel):
 
     url: str
     expires_at: int = Field(serialization_alias="expiresAt")
-    attachment_id: str = Field(serialization_alias="attachmentId")
+    attachment_id: Optional[str] = Field(None, serialization_alias="attachmentId")
     document_id: str = Field(serialization_alias="documentId")
 
 
