@@ -49,6 +49,14 @@ services:
 
   correspondence:
     restart: unless-stopped
+    environment:
+      - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-https://ticketsback.kostalegal.com}
+      - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-}
+      - CORRESPONDENCE_DOWNLOAD_TOKEN_SECRET=${CORRESPONDENCE_DOWNLOAD_TOKEN_SECRET:-}
+      - EXPENSE_EMAIL_ACTION_SECRET=${EXPENSE_EMAIL_ACTION_SECRET:-}
+      - CORRESPONDENCE_DOWNLOAD_TOKEN_TTL_SECONDS=${CORRESPONDENCE_DOWNLOAD_TOKEN_TTL_SECONDS:-604800}
+      - FRONTEND_URL=${FRONTEND_URL:-https://tickets.kostalegal.com}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:-https://tickets.kostalegal.com}
 
   expenses:
     restart: unless-stopped
