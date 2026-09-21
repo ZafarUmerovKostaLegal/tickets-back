@@ -7,25 +7,41 @@ from infrastructure.config import Settings
 from infrastructure.download_token import sign_download_token
 
 
+def build_public_download_path(
+    *,
+    document_id: str,
+    token: str,
+    attachment_id: str | None = None,
+) -> str:
+    """Relative API path (gateway-routable) for the public download link."""
+    if attachment_id:
+        return (
+            f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file"
+            f"?token={quote(token, safe='')}"
+        )
+    return (
+        f"/api/v1/correspondence/{document_id}/public-file"
+        f"?token={quote(token, safe='')}"
+    )
+
+
 def build_public_download_url(
     settings: Settings,
     *,
     document_id: str,
     token: str,
     attachment_id: str | None = None,
-) -> str | None:
+) -> str:
+    """Absolute URL when GATEWAY_BASE_URL is set; otherwise relative path for the client to resolve."""
+    path = build_public_download_path(
+        document_id=document_id,
+        attachment_id=attachment_id,
+        token=token,
+    )
     base = (settings.public_api_base_url or "").strip().rstrip("/")
     if not base:
-        return None
-    if attachment_id:
-        return (
-            f"{base}/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file"
-            f"?token={quote(token, safe='')}"
-        )
-    return (
-        f"{base}/api/v1/correspondence/{document_id}/public-file"
-        f"?token={quote(token, safe='')}"
-    )
+        return path
+    return f"{base}{path}"
 
 
 def mint_download_qr(
@@ -56,10 +72,6 @@ def mint_download_qr(
         attachment_id=attachment_id,
         token=token,
     )
-    if not url:
-        raise ValueError(
-            "Задайте GATEWAY_BASE_URL / PUBLIC_API_BASE_URL для публичной ссылки QR"
-        )
     return {
         "url": url,
         "token": token,
