@@ -117,3 +117,18 @@ class CommentListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[CommentOut]
+
+
+class DownloadQrOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: str
+    expires_at: int = Field(serialization_alias="expiresAt")
+    attachment_id: str = Field(serialization_alias="attachmentId")
+    document_id: str = Field(serialization_alias="documentId")
+
+
+class MintDownloadQrBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    attachment_id: Optional[str] = Field(None, validation_alias="attachmentId")

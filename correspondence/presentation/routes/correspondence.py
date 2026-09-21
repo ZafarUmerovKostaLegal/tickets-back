@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
@@ -32,6 +32,8 @@ from infrastructure.models import (
     CorrespondenceDocumentCommentModel,
     CorrespondenceDocumentModel,
 )
+from infrastructure.download_qr import mint_download_qr
+from infrastructure.download_token import verify_download_token
 from infrastructure.notify import send_system_notification
 from infrastructure.repositories import CorrespondenceRepository
 from presentation.deps import check_manage_role, check_view_role, get_current_user
@@ -44,6 +46,8 @@ from presentation.schemas import (
     DocumentListItemOut,
     DocumentListResponse,
     DocumentPatchBody,
+    DownloadQrOut,
+    MintDownloadQrBody,
     RejectReviewBody,
     StatsOut,
     SubmitReviewBody,
@@ -1064,6 +1068,153 @@ async def download_attachment_file(
         media_type=mime,
         filename=att.file_name,
         content_disposition_type=disp,
+    )
+
+
+def _pick_download_attachment(
+    attachments: list[CorrespondenceAttachmentModel],
+    preferred_id: str | None = None,
+) -> CorrespondenceAttachmentModel | None:
+    atts = list(attachments or [])
+    if not atts:
+        return None
+    if preferred_id:
+        hit = next((a for a in atts if a.id == preferred_id), None)
+        if hit:
+            return hit
+    kind_rank = {"signed": 0, "attachment": 1, "scan": 2}
+    atts.sort(key=lambda a: (kind_rank.get(a.attachment_kind, 9), a.created_at or datetime.min.replace(tzinfo=timezone.utc)))
+    return atts[0]
+
+
+def _public_link_error_page(title: str, message: str, *, status_code: int = 400) -> HTMLResponse:
+    safe_title = title.replace("<", "&lt;")
+    safe_msg = message.replace("<", "&lt;")
+    return HTMLResponse(
+        f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{safe_title}</title></head>
+<body style="margin:0;font-family:Segoe UI,Arial,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+<div style="max-width:440px;text-align:center;background:#1e293b;border-radius:16px;padding:28px;border:1px solid #334155;">
+<p style="color:#dc2626;font-size:48px;margin:0 0 12px;">!</p>
+<h1 style="font-size:20px;margin:0 0 12px;">{safe_title}</h1>
+<p style="color:#cbd5e1;font-size:15px;line-height:1.5;margin:0;">{safe_msg}</p>
+<p style="color:#64748b;font-size:12px;margin:24px 0 0;">Kosta Legal · корреспонденция</p>
+</div></body></html>""",
+        status_code=status_code,
+    )
+
+
+@router.post("/{document_id}/download-qr", response_model=DownloadQrOut)
+async def create_download_qr(
+    document_id: str,
+    body: MintDownloadQrBody | None = None,
+    user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Mint HMAC-signed public download URL for QR (same security model as expense email-file)."""
+    check_view_role(user)
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    _assert_not_archived(row)
+    if row.direction != "outgoing":
+        raise HTTPException(status_code=422, detail="QR-скачивание только для исходящих писем")
+    preferred = body.attachment_id if body else None
+    att = _pick_download_attachment(row.attachments or [], preferred)
+    if not att:
+        raise HTTPException(status_code=422, detail="У документа нет файла для QR-скачивания")
+    settings = get_settings()
+    try:
+        minted = mint_download_qr(
+            settings,
+            document_id=document_id,
+            attachment_id=att.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return DownloadQrOut(
+        url=minted["url"],
+        expires_at=minted["expiresAt"],
+        attachment_id=minted["attachmentId"],
+        document_id=minted["documentId"],
+    )
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-file")
+async def download_attachment_public_file(
+    document_id: str,
+    attachment_id: str,
+    token: str = Query(..., min_length=20, max_length=2048, description="HMAC-токен из QR"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Public download via signed QR token — no login required (expires by TTL).
+
+    Does not enumerate other documents: invalid token / missing file → same generic page.
+    Only the attachment bound in the HMAC payload can be returned.
+    """
+    settings = get_settings()
+    secret = (settings.correspondence_download_token_secret or "").strip()
+    if not secret or len(secret) < 16:
+        return _public_link_error_page(
+            "Ссылка недоступна",
+            "На сервере не настроен секрет для QR-скачивания.",
+            status_code=503,
+        )
+    try:
+        verify_download_token(
+            secret,
+            token=token,
+            document_id=document_id,
+            attachment_id=attachment_id,
+        )
+    except ValueError:
+        return _public_link_error_page(
+            "Ссылка недействительна",
+            "Ссылка повреждена, подделана или срок её действия истёк.",
+        )
+
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row or row.archived_at is not None or row.direction != "outgoing":
+        return _public_link_error_page(
+            "Ссылка недействительна",
+            "Документ недоступен.",
+        )
+    att = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
+    if not att:
+        return _public_link_error_page(
+            "Ссылка недействительна",
+            "Документ недоступен.",
+        )
+    # Storage must stay under this document's folder (no cross-doc path).
+    key = (att.storage_key or "").replace("\\", "/").lstrip("/")
+    expected_prefix = f"correspondence/{document_id}/"
+    if not key.startswith(expected_prefix) or ".." in key:
+        return _public_link_error_page(
+            "Ссылка недействительна",
+            "Документ недоступен.",
+        )
+    path = resolve_storage_path(key)
+    if path is None or not path.is_file():
+        return _public_link_error_page(
+            "Ссылка недействительна",
+            "Документ недоступен.",
+        )
+    mime = (att.content_type or "application/octet-stream").strip() or "application/octet-stream"
+    # Force download — never inline HTML that could execute in browser context of the API host.
+    safe_name = Path(att.file_name or "document").name or "document"
+    return FileResponse(
+        path,
+        media_type=mime,
+        filename=safe_name,
+        content_disposition_type="attachment",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )
 
 

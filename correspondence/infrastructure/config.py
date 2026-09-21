@@ -88,6 +88,27 @@ class Settings(BaseSettings):
             "GATEWAY_PUBLIC_URL",
         ),
     )
+    public_api_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GATEWAY_BASE_URL",
+            "PUBLIC_API_BASE_URL",
+            "CORRESPONDENCE_PUBLIC_API_BASE_URL",
+        ),
+    )
+    correspondence_download_token_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CORRESPONDENCE_DOWNLOAD_TOKEN_SECRET",
+            "EXPENSE_EMAIL_ACTION_SECRET",
+        ),
+    )
+    correspondence_download_token_ttl_seconds: int = Field(
+        default=604800,  # 7 days
+        ge=60,
+        le=2592000,
+        validation_alias=AliasChoices("CORRESPONDENCE_DOWNLOAD_TOKEN_TTL_SECONDS"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=_env_files(),
