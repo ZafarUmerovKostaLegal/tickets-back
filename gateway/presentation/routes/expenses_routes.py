@@ -105,6 +105,11 @@ async def proxy_expense_attachment_email_file(
     )
 
 
+@router.get("/expenses/reimbursed-feed")
+async def proxy_reimbursed_feed(request: Request):
+    return await _forward(request, "expenses/reimbursed-feed", None, timeout=60.0)
+
+
 @router.api_route("/expenses", methods=["GET", "POST"])
 async def proxy_expenses_root(
     request: Request,

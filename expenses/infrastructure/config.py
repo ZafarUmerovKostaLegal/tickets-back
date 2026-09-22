@@ -131,6 +131,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GATEWAY_BASE_URL", "PUBLIC_API_BASE_URL", "EXPENSES_PUBLIC_API_BASE_URL"),
     )
 
+    expenses_bot_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("EXPENSES_BOT_TOKEN"),
+    )
     expense_email_action_secret: str = Field(
         default="",
         validation_alias=AliasChoices("EXPENSE_EMAIL_ACTION_SECRET"),
