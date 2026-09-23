@@ -33,6 +33,7 @@ class CashMovementOut(BaseModel):
     balanceAfter: str
     createdByUserId: int
     createdAt: str
+    expenseId: str | None = None
     text: str
 
 
@@ -103,6 +104,7 @@ def _movement_out(row: CashMovementModel) -> CashMovementOut:
         balanceAfter=format_money(Decimal(row.balance_after)),
         createdByUserId=row.created_by_user_id,
         createdAt=row.created_at.isoformat(),
+        expenseId=row.expense_id,
         text=_movement_text(row),
     )
 
