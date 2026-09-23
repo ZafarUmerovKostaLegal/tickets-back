@@ -5,12 +5,13 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.cash_ledger import sync_cash_reimbursements
 from application.cash_money import cash_movement, format_money, parse_amount
 from infrastructure.database import get_session
-from infrastructure.models import CashBalanceModel, CashMovementModel
+from infrastructure.models import CashBalanceModel, CashMovementModel, CashTrackedModel
 from presentation.deps import get_current_user
 
 router = APIRouter(prefix="/expenses/cash", tags=["expenses-cash"])
@@ -129,7 +130,9 @@ def _parse_body_amount(raw: str) -> Decimal:
 async def _history(session: AsyncSession) -> list[CashMovementOut]:
     rows = (
         await session.execute(
-            select(CashMovementModel).order_by(CashMovementModel.id.desc()).limit(_HISTORY_LIMIT)
+            select(CashMovementModel)
+            .order_by(CashMovementModel.created_at.desc(), CashMovementModel.id.desc())
+            .limit(_HISTORY_LIMIT)
         )
     ).scalars().all()
     return [_movement_out(row) for row in rows]
@@ -140,7 +143,8 @@ async def get_cash(
     user: dict = Depends(require_cash_partner),
     session: AsyncSession = Depends(get_session),
 ) -> CashStateOut:
-    del user
+    await sync_cash_reimbursements(session, int(user["id"]))
+    await session.commit()
     row = (
         await session.execute(select(CashBalanceModel).where(CashBalanceModel.id == 1))
     ).scalar_one_or_none()
@@ -165,7 +169,10 @@ async def set_cash_balance(
     now = datetime.now(timezone.utc)
     row.balance = amount
     row.balance_set = True
+    row.baseline_done = False
+    row.balance_set_at = now
     row.updated_at = now
+    await session.execute(delete(CashTrackedModel))
     movement = CashMovementModel(
         kind="set",
         amount=amount,
@@ -176,10 +183,12 @@ async def set_cash_balance(
         created_at=now,
     )
     session.add(movement)
+    await session.flush()
+    await sync_cash_reimbursements(session, int(user["id"]))
     await session.commit()
     await session.refresh(movement)
     return CashChangeOut(
-        balance=format_money(amount),
+        balance=format_money(Decimal(row.balance if row.balance is not None else amount)),
         message=_movement_text(movement),
         movement=_movement_out(movement),
     )

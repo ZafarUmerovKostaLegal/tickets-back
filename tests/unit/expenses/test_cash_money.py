@@ -1,5 +1,7 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
+from application.cash_ledger import PaidCashExpense, plan_reimbursement_actions
 from application.cash_money import cash_movement, format_money, parse_amount
 from presentation.routes.cash import is_cash_partner
 
@@ -21,6 +23,53 @@ def test_cash_movement_text():
     assert "Остаток в кассе: 298000" in text
     assert "Потрачено: 50000 (канцелярия)" in text
     assert "Остаток на текущий момент: 248000" in text
+
+
+def _paid(expense_id: str, amount: str, when: datetime | None, description: str = "пошлина") -> PaidCashExpense:
+    return PaidCashExpense(expense_id, Decimal(amount), description, when, 1)
+
+
+def test_reimbursement_after_balance_is_subtracted_once():
+    cutoff = datetime(2026, 9, 23, 7, 59, tzinfo=timezone.utc)
+    old = _paid("KL1", "1000", datetime(2026, 9, 23, 7, 0, tzinfo=timezone.utc), "старая")
+    fresh = _paid("KL2", "59900", datetime(2026, 9, 23, 8, 10, tzinfo=timezone.utc))
+    done, actions = plan_reimbursement_actions(
+        balance=Decimal("300000"),
+        baseline_done=False,
+        cutoff=cutoff,
+        tracked={},
+        paid=[old, fresh],
+    )
+    assert done is True
+    assert [item.kind for item in actions] == ["track", "subtract"]
+    assert actions[0].expense_id == "KL1"
+    assert actions[1].expense_id == "KL2"
+    assert actions[1].before == Decimal("300000")
+    assert actions[1].after == Decimal("240100")
+    assert actions[1].description == "пошлина"
+
+    again_done, again = plan_reimbursement_actions(
+        balance=actions[1].after,
+        baseline_done=True,
+        cutoff=cutoff,
+        tracked={"KL1": Decimal("1000"), "KL2": Decimal("59900")},
+        paid=[old, fresh],
+    )
+    assert again_done is True
+    assert again == []
+
+
+def test_cancelled_reimbursement_is_added_back():
+    _, actions = plan_reimbursement_actions(
+        balance=Decimal("240100"),
+        baseline_done=True,
+        cutoff=datetime(2026, 9, 23, 7, 59, tzinfo=timezone.utc),
+        tracked={"KL2": Decimal("59900")},
+        paid=[],
+    )
+    assert len(actions) == 1
+    assert actions[0].kind == "restore"
+    assert actions[0].after == Decimal("300000")
 
 
 def test_cash_partner_role_and_position():

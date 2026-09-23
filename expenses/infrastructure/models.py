@@ -171,6 +171,8 @@ class CashBalanceModel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     balance: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     balance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    baseline_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    balance_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -183,5 +185,16 @@ class CashMovementModel(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     balance_before: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     balance_after: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    expense_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class CashTrackedModel(Base):
+    """Reimbursements already reflected in the cash figure. Same role as the bot tracked table."""
+
+    __tablename__ = "expense_cash_tracked"
+
+    expense_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")

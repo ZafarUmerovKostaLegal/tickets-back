@@ -81,6 +81,16 @@ async def apply_expense_rejection_reason(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_expense_cash_reimbursement_columns(conn: AsyncConnection) -> None:
+    for ddl in (
+        "ALTER TABLE expense_cash_balance ADD COLUMN IF NOT EXISTS baseline_done BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE expense_cash_balance ADD COLUMN IF NOT EXISTS balance_set_at TIMESTAMPTZ",
+        "ALTER TABLE expense_cash_movements ADD COLUMN IF NOT EXISTS expense_id VARCHAR(40)",
+        "CREATE INDEX IF NOT EXISTS ix_expense_cash_movements_expense_id ON expense_cash_movements (expense_id)",
+    ):
+        await conn.execute(text(ddl))
+
+
 async def apply_expense_reimbursement_card_number(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
@@ -95,4 +105,5 @@ REGISTERED_EXPENSE_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("expense_approved_by_user_id", apply_expense_approved_by_user_id),
     ("expense_rejection_reason", apply_expense_rejection_reason),
     ("expense_reimbursement_card_number", apply_expense_reimbursement_card_number),
+    ("expense_cash_reimbursement_columns", apply_expense_cash_reimbursement_columns),
 ]

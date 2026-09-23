@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
+from application.cash_ledger import sync_cash_reimbursements
 from application.expense_service import (
     calc_equivalent,
     is_employee_personal_funds_payout,
@@ -1148,6 +1149,7 @@ async def pay_expense(
         new_value="paid",
         performed_by_user_id=int(user["id"]),
     )
+    await sync_cash_reimbursements(session, int(user["id"]))
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
     await run_expense_paid_notification_safe(
@@ -1215,6 +1217,7 @@ async def unpay_expense(
         new_value=f"approved: {comment}",
         performed_by_user_id=int(user["id"]),
     )
+    await sync_cash_reimbursements(session, int(user["id"]))
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
     return await _detail_response(row, authorization)
@@ -1311,6 +1314,7 @@ async def close_expense(
         new_value=new_status,
         performed_by_user_id=int(user["id"]),
     )
+    await sync_cash_reimbursements(session, int(user["id"]))
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
     return await _detail_response(row, authorization)
