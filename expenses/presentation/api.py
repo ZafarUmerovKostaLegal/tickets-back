@@ -13,7 +13,7 @@ from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
 from infrastructure.repositories import seed_reference_data
 from infrastructure.schema_patches import REGISTERED_EXPENSE_SCHEMA_PATCHES
-from presentation.routes import expense_email_action, expenses, health, reference, reimbursed_feed
+from presentation.routes import cash, expense_email_action, expenses, health, reference, reimbursed_feed
 
 _log = logging.getLogger("expenses.startup")
 
@@ -113,5 +113,6 @@ app.include_router(health.router)
                                                                                           
 app.include_router(reference.router)
 app.include_router(reimbursed_feed.router)
+app.include_router(cash.router)
 app.include_router(expenses.router)
 app.include_router(expense_email_action.router)

@@ -160,12 +160,18 @@ class CorrespondenceRepository:
             conds.append(doc_ts < end)
         if search and search.strip():
             qpat = f"%{search.strip()}%"
+            attachment_name_match = (
+                select(CorrespondenceAttachmentModel.document_id)
+                .where(CorrespondenceAttachmentModel.file_name.ilike(qpat))
+            )
             conds.append(
                 or_(
                     CorrespondenceDocumentModel.counterparty.ilike(qpat),
                     CorrespondenceDocumentModel.subject.ilike(qpat),
                     CorrespondenceDocumentModel.registry_number.ilike(qpat),
                     CorrespondenceDocumentModel.comment.ilike(qpat),
+                    CorrespondenceDocumentModel.rejection_comment.ilike(qpat),
+                    CorrespondenceDocumentModel.id.in_(attachment_name_match),
                 )
             )
         where = and_(*conds) if conds else True

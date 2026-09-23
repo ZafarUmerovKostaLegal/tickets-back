@@ -161,3 +161,27 @@ class ExchangeRateModel(Base):
     rate_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True, index=True)
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     pair_label: Mapped[str] = mapped_column(String(32), nullable=False, default="UZS/USD_equiv")
+
+
+class CashBalanceModel(Base):
+    """Single company cash figure. Same role as the expenses bot settings row."""
+
+    __tablename__ = "expense_cash_balance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    balance: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    balance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CashMovementModel(Base):
+    __tablename__ = "expense_cash_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    balance_before: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
