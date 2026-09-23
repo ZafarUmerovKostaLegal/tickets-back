@@ -79,7 +79,16 @@ def _movement_text(row: CashMovementModel) -> str:
     if row.kind == "topup" and before is not None:
         return cash_movement(before, "Пополнение", amount, after, note)
     if row.kind == "set":
-        return f"Остаток установлен: {format_money(after)}"
+        if before is not None:
+            return (
+                f"Остаток в кассе: {format_money(before)}\n"
+                f"Остаток установлен: {format_money(after)}\n\n"
+                f"Остаток на текущий момент: {format_money(after)}"
+            )
+        return (
+            f"Остаток установлен: {format_money(after)}\n\n"
+            f"Остаток на текущий момент: {format_money(after)}"
+        )
     return format_money(after)
 
 
@@ -171,7 +180,7 @@ async def set_cash_balance(
     await session.refresh(movement)
     return CashChangeOut(
         balance=format_money(amount),
-        message=f"Остаток установлен: {format_money(amount)}",
+        message=_movement_text(movement),
         movement=_movement_out(movement),
     )
 
