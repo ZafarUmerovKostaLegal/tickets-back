@@ -14,7 +14,13 @@ def format_money(value: Decimal) -> str:
 
 
 def parse_amount(text: str) -> Decimal | None:
-    raw = (text or "").strip().replace("\u00a0", "").replace(" ", "")
+    raw = (
+        (text or "")
+        .strip()
+        .replace("\u00a0", "")
+        .replace("\u202f", "")
+        .replace(" ", "")
+    )
     if not raw:
         return None
     sign = ""

@@ -5,10 +5,15 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.cash_ledger import sync_cash_reimbursements
+from application.cash_ledger import (
+    is_manual_cash_entry,
+    manual_balance_delta,
+    propagate_cash_delta,
+    sync_cash_reimbursements,
+)
 from application.cash_money import cash_movement, format_money, parse_amount
 from infrastructure.database import get_session
 from infrastructure.models import CashBalanceModel, CashMovementModel, CashTrackedModel
@@ -47,6 +52,10 @@ class CashChangeOut(BaseModel):
     balance: str
     message: str
     movement: CashMovementOut
+
+
+class CashDeleteOut(BaseModel):
+    balance: str
 
 
 def _norm(value: str | None) -> str:
@@ -252,3 +261,96 @@ async def record_cash_topup(
     session: AsyncSession = Depends(get_session),
 ) -> CashChangeOut:
     return await _move(session, user, body, expense=False)
+
+
+async def _manual_movement(session: AsyncSession, movement_id: int) -> CashMovementModel:
+    row = await session.get(CashMovementModel, movement_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    if not is_manual_cash_entry(row.kind, row.expense_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Эту запись добавила заявка на расход. Её можно изменить только на странице расходов",
+        )
+    return row
+
+
+async def _movements_after(session: AsyncSession, row: CashMovementModel) -> list[CashMovementModel]:
+    rows = (
+        await session.execute(
+            select(CashMovementModel)
+            .where(
+                or_(
+                    CashMovementModel.created_at > row.created_at,
+                    and_(
+                        CashMovementModel.created_at == row.created_at,
+                        CashMovementModel.id > row.id,
+                    ),
+                )
+            )
+            .order_by(CashMovementModel.created_at.asc(), CashMovementModel.id.asc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+def _apply_delta(balance: CashBalanceModel, later: list[CashMovementModel], delta: Decimal) -> None:
+    if not propagate_cash_delta(later, delta):
+        return
+    if balance.balance is None:
+        return
+    balance.balance = Decimal(balance.balance) + delta
+    balance.updated_at = datetime.now(timezone.utc)
+
+
+@router.patch("/movements/{movement_id}", response_model=CashChangeOut)
+async def update_cash_movement(
+    movement_id: int,
+    body: CashAmountBody,
+    user: dict = Depends(require_cash_partner),
+    session: AsyncSession = Depends(get_session),
+) -> CashChangeOut:
+    amount = _parse_body_amount(body.amount)
+    if amount <= 0:
+        raise HTTPException(status_code=422, detail="Отправьте сумму больше нуля, например 50000")
+    balance = await _lock_balance(session)
+    row = await _manual_movement(session, movement_id)
+    old_amount = Decimal(row.amount)
+    delta = manual_balance_delta(kind=row.kind, old_amount=old_amount, new_amount=amount)
+    note = " ".join((body.note or "").split())
+    row.amount = amount
+    row.note = note
+    if row.balance_before is not None:
+        sign = Decimal("-1") if row.kind == "expense" else Decimal("1")
+        row.balance_after = Decimal(row.balance_before) + sign * amount
+    else:
+        row.balance_after = Decimal(row.balance_after) + delta
+    later = await _movements_after(session, row)
+    _apply_delta(balance, later, delta)
+    await session.commit()
+    await session.refresh(row)
+    label = "Потрачено" if row.kind == "expense" else "Пополнение"
+    before = Decimal("0") if row.balance_before is None else Decimal(row.balance_before)
+    after = Decimal(row.balance_after)
+    return CashChangeOut(
+        balance=format_money(Decimal(balance.balance if balance.balance is not None else after)),
+        message=cash_movement(before, label, amount, after, note),
+        movement=_movement_out(row),
+    )
+
+
+@router.delete("/movements/{movement_id}", response_model=CashDeleteOut)
+async def delete_cash_movement(
+    movement_id: int,
+    user: dict = Depends(require_cash_partner),
+    session: AsyncSession = Depends(get_session),
+) -> CashDeleteOut:
+    balance = await _lock_balance(session)
+    row = await _manual_movement(session, movement_id)
+    delta = manual_balance_delta(kind=row.kind, old_amount=Decimal(row.amount), new_amount=None)
+    later = await _movements_after(session, row)
+    await session.delete(row)
+    _apply_delta(balance, later, delta)
+    await session.commit()
+    shown = Decimal("0") if balance.balance is None else Decimal(balance.balance)
+    return CashDeleteOut(balance=format_money(shown))

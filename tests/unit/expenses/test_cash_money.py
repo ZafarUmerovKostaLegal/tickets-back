@@ -1,7 +1,13 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from application.cash_ledger import PaidCashExpense, plan_reimbursement_actions
+from application.cash_ledger import (
+    PaidCashExpense,
+    is_manual_cash_entry,
+    manual_balance_delta,
+    plan_reimbursement_actions,
+    propagate_cash_delta,
+)
 from application.cash_money import cash_movement, format_money, parse_amount
 from presentation.routes.cash import is_cash_partner
 
@@ -70,6 +76,44 @@ def test_cancelled_reimbursement_is_added_back():
     assert len(actions) == 1
     assert actions[0].kind == "restore"
     assert actions[0].after == Decimal("300000")
+
+
+class _Point:
+    def __init__(self, kind: str, before: str | None, after: str):
+        self.kind = kind
+        self.balance_before = None if before is None else Decimal(before)
+        self.balance_after = Decimal(after)
+
+
+def test_manual_entry_is_hand_typed_expense_or_topup():
+    assert is_manual_cash_entry("expense", None)
+    assert is_manual_cash_entry("topup", "")
+    assert not is_manual_cash_entry("expense", "KL-1")
+    assert not is_manual_cash_entry("set", None)
+
+
+def test_edit_shifts_later_rows_and_live_balance():
+    later = [_Point("topup", "100", "150"), _Point("expense", "150", "120")]
+    delta = manual_balance_delta(kind="expense", old_amount=Decimal("40"), new_amount=Decimal("10"))
+    assert delta == Decimal("30")
+    assert propagate_cash_delta(later, delta) is True
+    assert later[0].balance_before == Decimal("130")
+    assert later[0].balance_after == Decimal("180")
+    assert later[1].balance_after == Decimal("150")
+
+
+def test_shift_stops_at_balance_set():
+    later = [_Point("expense", "100", "80"), _Point("set", "80", "500"), _Point("topup", "500", "510")]
+    assert propagate_cash_delta(later, Decimal("-20")) is False
+    assert later[0].balance_after == Decimal("60")
+    assert later[1].balance_before == Decimal("60")
+    assert later[1].balance_after == Decimal("500")
+    assert later[2].balance_before == Decimal("500")
+
+
+def test_delete_manual_expense_returns_the_amount():
+    assert manual_balance_delta(kind="expense", old_amount=Decimal("100000"), new_amount=None) == Decimal("100000")
+    assert manual_balance_delta(kind="topup", old_amount=Decimal("10000"), new_amount=None) == Decimal("-10000")
 
 
 def test_cash_partner_role_and_position():

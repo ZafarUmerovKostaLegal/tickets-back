@@ -45,6 +45,38 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def is_manual_cash_entry(kind: str, expense_id: str | None) -> bool:
+    """Hand-typed expense or top-up. Rows linked to an expense request stay read-only."""
+    return not (expense_id or "").strip() and kind in ("expense", "topup")
+
+
+def manual_balance_delta(*, kind: str, old_amount: Decimal, new_amount: Decimal | None) -> Decimal:
+    """How the live cash figure moves when a manual row changes. None deletes the row."""
+    sign = Decimal("-1") if kind == "expense" else Decimal("1")
+    old_effect = sign * old_amount
+    new_effect = Decimal("0") if new_amount is None else sign * new_amount
+    return new_effect - old_effect
+
+
+def propagate_cash_delta(rows: list, delta: Decimal) -> bool:
+    """Shift later history by delta until an absolute balance set.
+
+    Returns True when the delta still applies to the live cash figure.
+    A later «остаток установлен» keeps its own amount and stops the shift.
+    """
+    if delta == 0:
+        return True
+    for row in rows:
+        if row.kind == "set":
+            if row.balance_before is not None:
+                row.balance_before = Decimal(row.balance_before) + delta
+            return False
+        if row.balance_before is not None:
+            row.balance_before = Decimal(row.balance_before) + delta
+        row.balance_after = Decimal(row.balance_after) + delta
+    return True
+
+
 def _reason(description: str, expense_id: str) -> str:
     text = " ".join((description or "").split())
     return text or expense_id

@@ -119,7 +119,7 @@ async def proxy_expenses_root(
     return await _forward(request, "expenses", authorization, timeout=60.0)
 
 
-@router.api_route("/expenses/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route("/expenses/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy_expenses_subpath(
     path: str,
     request: Request,
