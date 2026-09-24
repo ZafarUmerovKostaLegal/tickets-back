@@ -90,8 +90,8 @@ async def _forward_public(request: Request, path: str, *, timeout: float = 120.0
     if query:
         upstream_url = f"{upstream_url}?{query}"
     headers = _request_headers_for_upstream(request)
-    headers.pop("authorization", None)
-    headers.pop("Authorization", None)
+    for name in ("authorization", "Authorization", "cookie", "Cookie"):
+        headers.pop(name, None)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             upstream = await client.request(
@@ -108,6 +108,24 @@ async def _forward_public(request: Request, path: str, *, timeout: float = 120.0
         status_code=upstream.status_code,
         headers=out_headers,
         media_type=upstream.headers.get("content-type"),
+    )
+
+
+@router.get("/{document_id}/public-card")
+async def proxy_correspondence_public_card(document_id: str, request: Request):
+    """Public verification page — no JWT, no session cookie forwarded."""
+    return await _forward_public(request, f"{document_id}/public-card")
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-card")
+async def proxy_correspondence_attachment_public_card(
+    document_id: str,
+    attachment_id: str,
+    request: Request,
+):
+    return await _forward_public(
+        request,
+        f"{document_id}/attachments/{attachment_id}/public-card",
     )
 
 

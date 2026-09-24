@@ -1,6 +1,8 @@
 import pytest
 
+from infrastructure.download_qr import build_public_download_path
 from infrastructure.download_token import sign_download_token, verify_download_token
+from infrastructure.public_card import render_public_card
 
 DOC = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 ATT = "11111111-2222-3333-4444-555555555555"
@@ -123,3 +125,26 @@ def test_legacy_json_token_still_verifies():
     sig = hmac.new(SECRET.encode("utf-8"), body_b64.encode("ascii"), hashlib.sha256).hexdigest()
     token = f"{body_b64}.{sig}"
     assert verify_download_token(SECRET, token=token, document_id=DOC, attachment_id=ATT) == ATT
+
+
+def test_qr_link_opens_card_not_the_file():
+    token = sign_download_token(SECRET, document_id=DOC, ttl_seconds=3600)
+    path = build_public_download_path(document_id=DOC, token=token)
+    assert "/public-card?" in path
+    assert "/public-file" not in path
+
+
+def test_public_card_escapes_text_and_blocks_other_origins():
+    page, nonce = render_public_card(
+        registry_number="<script>",
+        issued_on=None,
+        counterparty="Фирма",
+        subject="Тема",
+        doc_type="letter",
+        file_name="letter.pdf",
+        file_path="/api/v1/correspondence/x/public-file",
+    )
+    assert "<script>" not in page.split("<script nonce=")[0]
+    assert "&lt;script&gt;" in page
+    assert f'nonce="{nonce}"' in page
+    assert "connect-src" in page

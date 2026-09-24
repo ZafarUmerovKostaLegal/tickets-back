@@ -13,14 +13,14 @@ def build_public_download_path(
     token: str,
     attachment_id: str | None = None,
 ) -> str:
-    """Relative API path (gateway-routable) for the public download link."""
+    """Relative API path for the public verification page (not a direct file download)."""
     if attachment_id:
         return (
-            f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file"
+            f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-card"
             f"?token={quote(token, safe='')}"
         )
     return (
-        f"/api/v1/correspondence/{document_id}/public-file"
+        f"/api/v1/correspondence/{document_id}/public-card"
         f"?token={quote(token, safe='')}"
     )
 

@@ -3,9 +3,10 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.correspondence_service import (
@@ -34,6 +35,7 @@ from infrastructure.models import (
 )
 from infrastructure.download_qr import mint_download_qr
 from infrastructure.download_token import verify_download_token
+from infrastructure.public_card import public_card_headers, render_public_card
 from infrastructure.notify import send_system_notification
 from infrastructure.repositories import CorrespondenceRepository
 from presentation.deps import check_manage_role, check_view_role, get_current_user
@@ -1125,26 +1127,96 @@ def _serve_public_attachment_file(document_id: str, att: CorrespondenceAttachmen
             "Ссылка недействительна",
             "Документ недоступен.",
         )
-    mime = (att.content_type or "application/octet-stream").strip() or "application/octet-stream"
-    mime_l = mime.lower()
-    name_l = (att.file_name or "").lower()
-    # Phone browsers open PDF/images immediately (same as expenses email-file).
-    inline = (
-        mime_l.startswith("image/")
-        or mime_l == "application/pdf"
-        or name_l.endswith((".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"))
-    )
     safe_name = Path(att.file_name or "document").name or "document"
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
+        "X-Frame-Options": "SAMEORIGIN",
+    }
+    if is_office_document(att.file_name, att.content_type):
+        cache_path = path.with_suffix(path.suffix + ".preview.pdf")
+        if not cache_path.is_file() or cache_path.stat().st_size <= 0:
+            try:
+                cache_path.write_bytes(convert_office_bytes_to_pdf(path.read_bytes(), att.file_name))
+            except Exception:
+                _log.exception("public preview convert failed for %s", att.id)
+                return _public_link_error_page(
+                    "Просмотр недоступен",
+                    "Файл нельзя показать на странице проверки.",
+                )
+        return FileResponse(
+            cache_path,
+            media_type="application/pdf",
+            filename="document.pdf",
+            content_disposition_type="inline",
+            headers=headers,
+        )
+    mime = (att.content_type or "application/octet-stream").strip() or "application/octet-stream"
     return FileResponse(
         path,
         media_type=mime,
         filename=safe_name,
-        content_disposition_type="inline" if inline else "attachment",
-        headers={
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "no-store",
-        },
+        content_disposition_type="inline",
+        headers=headers,
     )
+
+
+def _public_token_or_error(document_id: str, token: str, attachment_id: str | None):
+    settings = get_settings()
+    secret = (settings.correspondence_download_token_secret or "").strip()
+    if not secret or len(secret) < 16:
+        return None, _public_link_error_page(
+            "Ссылка недоступна",
+            "На сервере не настроен секрет для QR-скачивания.",
+            status_code=503,
+        )
+    try:
+        bound = verify_download_token(
+            secret,
+            token=token,
+            document_id=document_id,
+            attachment_id=attachment_id,
+        )
+    except ValueError:
+        return None, _public_link_error_page(
+            "Ссылка недействительна",
+            "Ссылка повреждена, подделана или срок её действия истёк.",
+        )
+    return bound, None
+
+
+async def _public_letter(session: AsyncSession, document_id: str, bound_aid: str | None, attachment_id: str | None):
+    repo = CorrespondenceRepository(session)
+    row = await repo.get_by_id(document_id, load_attachments=True)
+    if not row or row.archived_at is not None or row.direction != "outgoing":
+        return None, None, _public_link_error_page("Ссылка недействительна", "Документ недоступен.")
+    if attachment_id:
+        att = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
+    elif bound_aid:
+        att = next((a for a in (row.attachments or []) if a.id == bound_aid), None)
+    else:
+        att = _pick_download_attachment(row.attachments or [])
+    if not att:
+        return row, None, _public_link_error_page(
+            "Файл ещё не готов",
+            "Письмо пока без вложения. Сохраните документ и повторите сканирование QR.",
+        )
+    return row, att, None
+
+
+def _card_response(row: CorrespondenceDocumentModel, att: CorrespondenceAttachmentModel, file_path: str) -> HTMLResponse:
+    issued = row.registered_at or row.created_at
+    page, nonce = render_public_card(
+        registry_number=row.registry_number,
+        issued_on=issued,
+        counterparty=row.counterparty or "",
+        subject=row.subject or "",
+        doc_type=row.doc_type,
+        file_name=att.file_name or "Документ",
+        file_path=file_path,
+    )
+    return HTMLResponse(page, headers=public_card_headers(nonce))
 
 
 @router.post("/{document_id}/download-qr", response_model=DownloadQrOut)
@@ -1188,13 +1260,55 @@ async def create_download_qr(
     )
 
 
+@router.get("/{document_id}/public-card")
+async def view_document_public_card(
+    document_id: str,
+    token: str = Query(..., min_length=20, max_length=2048),
+    session: AsyncSession = Depends(get_session),
+):
+    """Public verification page. Token opens only this letter, not the portal."""
+    bound, err = _public_token_or_error(document_id, token, None)
+    if err is not None:
+        return err
+    row, att, missing = await _public_letter(session, document_id, bound, None)
+    if missing is not None:
+        return missing
+    return _card_response(row, att, f"/api/v1/correspondence/{document_id}/public-file")
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-card")
+async def view_attachment_public_card(
+    document_id: str,
+    attachment_id: str,
+    token: str = Query(..., min_length=20, max_length=2048),
+    session: AsyncSession = Depends(get_session),
+):
+    _, err = _public_token_or_error(document_id, token, attachment_id)
+    if err is not None:
+        return err
+    row, att, missing = await _public_letter(session, document_id, None, attachment_id)
+    if missing is not None:
+        return missing
+    return _card_response(
+        row,
+        att,
+        f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file",
+    )
+
+
 @router.get("/{document_id}/public-file")
 async def download_document_public_file(
     document_id: str,
     token: str = Query(..., min_length=20, max_length=2048, description="HMAC-токен из QR"),
+    inline: int = Query(0),
     session: AsyncSession = Depends(get_session),
 ):
-    """Public download of the letter's primary file via document-scoped QR token."""
+    """File for the verification page. A bare QR link opens the card instead."""
+    if inline != 1:
+        return RedirectResponse(
+            url=f"/api/v1/correspondence/{quote(document_id, safe='')}/public-card?token={quote(token, safe='')}",
+            status_code=302,
+        )
     settings = get_settings()
     secret = (settings.correspondence_download_token_secret or "").strip()
     if not secret or len(secret) < 16:
@@ -1240,8 +1354,18 @@ async def download_attachment_public_file(
     document_id: str,
     attachment_id: str,
     token: str = Query(..., min_length=20, max_length=2048, description="HMAC-токен из QR"),
+    inline: int = Query(0),
     session: AsyncSession = Depends(get_session),
 ):
+    if inline != 1:
+        return RedirectResponse(
+            url=(
+                f"/api/v1/correspondence/{quote(document_id, safe='')}"
+                f"/attachments/{quote(attachment_id, safe='')}/public-card"
+                f"?token={quote(token, safe='')}"
+            ),
+            status_code=302,
+        )
     """Public download via signed QR token — no login required (expires by TTL).
 
     Does not enumerate other documents: invalid token / missing file → same generic page.
