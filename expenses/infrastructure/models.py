@@ -188,6 +188,28 @@ class CashMovementModel(Base):
     expense_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attachments: Mapped[list["CashAttachmentModel"]] = relationship(
+        back_populates="movement",
+        cascade="all, delete-orphan",
+        order_by="CashAttachmentModel.created_at",
+    )
+
+
+class CashAttachmentModel(Base):
+    __tablename__ = "expense_cash_attachments"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("expense_cash_movements.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    movement: Mapped["CashMovementModel"] = relationship(back_populates="attachments")
 
 
 class CashTrackedModel(Base):

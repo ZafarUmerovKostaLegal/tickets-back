@@ -13,6 +13,21 @@ def get_expenses_upload_dir(expense_request_id: str) -> Path:
     return path
 
 
+def save_cash_attachment(movement_id: int, filename: str, content: bytes) -> tuple[str, str]:
+    max_bytes = get_settings().max_upload_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise ValueError(f"Файл больше {get_settings().max_upload_mb} МБ")
+    ext = Path(filename).suffix.lower() if filename else ""
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    rel = f"expenses/cash/{int(movement_id)}/{unique_name}"
+    path = safe_media_path(get_settings().media_path, rel)
+    if path is None:
+        raise ValueError("Некорректный путь файла")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return rel, Path(filename).name or unique_name
+
+
 def save_attachment(expense_request_id: str, filename: str, content: bytes) -> tuple[str, str]:
     max_bytes = get_settings().max_upload_mb * 1024 * 1024
     if len(content) > max_bytes:

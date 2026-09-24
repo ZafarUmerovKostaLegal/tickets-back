@@ -91,6 +91,29 @@ async def apply_expense_cash_reimbursement_columns(conn: AsyncConnection) -> Non
         await conn.execute(text(ddl))
 
 
+async def apply_expense_cash_attachments(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS expense_cash_attachments (
+                id VARCHAR(40) PRIMARY KEY,
+                movement_id INTEGER NOT NULL REFERENCES expense_cash_movements(id) ON DELETE CASCADE,
+                file_name VARCHAR(255) NOT NULL,
+                mime_type VARCHAR(120) NOT NULL,
+                storage_key VARCHAR(500) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_expense_cash_attachments_movement_id "
+            "ON expense_cash_attachments (movement_id)"
+        )
+    )
+
+
 async def apply_expense_reimbursement_card_number(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
@@ -106,4 +129,5 @@ REGISTERED_EXPENSE_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("expense_rejection_reason", apply_expense_rejection_reason),
     ("expense_reimbursement_card_number", apply_expense_reimbursement_card_number),
     ("expense_cash_reimbursement_columns", apply_expense_cash_reimbursement_columns),
+    ("expense_cash_attachments", apply_expense_cash_attachments),
 ]

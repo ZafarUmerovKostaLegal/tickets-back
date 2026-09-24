@@ -1,12 +1,16 @@
 """Company cash desk. Visible and writable only for partners."""
 
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from application.cash_ledger import (
     is_manual_cash_entry,
@@ -15,8 +19,11 @@ from application.cash_ledger import (
     sync_cash_reimbursements,
 )
 from application.cash_money import cash_movement, format_money, parse_amount
+from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.models import CashBalanceModel, CashMovementModel, CashTrackedModel
+from infrastructure.file_storage import save_cash_attachment
+from infrastructure.models import CashAttachmentModel, CashBalanceModel, CashMovementModel, CashTrackedModel
+from backend_common.media_path import safe_media_path
 from presentation.deps import get_current_user
 
 router = APIRouter(prefix="/expenses/cash", tags=["expenses-cash"])
@@ -27,6 +34,12 @@ _HISTORY_LIMIT = 40
 class CashAmountBody(BaseModel):
     amount: str = Field(min_length=1, max_length=40)
     note: str = Field(default="", max_length=500)
+
+
+class CashAttachmentOut(BaseModel):
+    id: str
+    fileName: str
+    mimeType: str
 
 
 class CashMovementOut(BaseModel):
@@ -40,6 +53,7 @@ class CashMovementOut(BaseModel):
     createdAt: str
     expenseId: str | None = None
     text: str
+    attachments: list[CashAttachmentOut] = Field(default_factory=list)
 
 
 class CashStateOut(BaseModel):
@@ -115,7 +129,50 @@ def _movement_out(row: CashMovementModel) -> CashMovementOut:
         createdAt=row.created_at.isoformat(),
         expenseId=row.expense_id,
         text=_movement_text(row),
+        attachments=[
+            CashAttachmentOut(id=item.id, fileName=item.file_name, mimeType=item.mime_type)
+            for item in (row.__dict__.get("attachments") or [])
+        ],
     )
+
+
+_CASH_FILE_EXT = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif", ".bmp",
+    ".pdf",
+    ".mp4", ".webm", ".mov", ".m4v",
+    ".mp3", ".m4a", ".wav", ".ogg",
+}
+_MAX_CASH_FILES = 8
+
+
+def _cash_file_ok(filename: str, content: bytes) -> str:
+    ext = Path(filename or "").suffix.lower()
+    if ext not in _CASH_FILE_EXT:
+        raise HTTPException(status_code=400, detail="Можно вложить скрин, скан PDF, фото, видео или аудио")
+    if not content:
+        raise HTTPException(status_code=400, detail="Файл пустой")
+    if ext == ".pdf" and not content.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Скан должен быть файлом PDF")
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        ok = (
+            content.startswith(b"\x89PNG")
+            or content.startswith(b"\xff\xd8\xff")
+            or content.startswith(b"GIF8")
+            or content.startswith(b"RIFF")
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail="Файл изображения повреждён или это не картинка")
+    return ext
+
+
+async def _load_movement(session: AsyncSession, movement_id: int) -> CashMovementModel | None:
+    return (
+        await session.execute(
+            select(CashMovementModel)
+            .options(selectinload(CashMovementModel.attachments))
+            .where(CashMovementModel.id == movement_id)
+        )
+    ).scalar_one_or_none()
 
 
 async def _lock_balance(session: AsyncSession) -> CashBalanceModel:
@@ -138,33 +195,53 @@ def _parse_body_amount(raw: str) -> Decimal:
     return amount
 
 
-async def _history(session: AsyncSession) -> list[CashMovementOut]:
-    rows = (
-        await session.execute(
-            select(CashMovementModel)
-            .order_by(CashMovementModel.created_at.desc(), CashMovementModel.id.desc())
-            .limit(_HISTORY_LIMIT)
+def _search_like(raw: str) -> str:
+    escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+async def _history(session: AsyncSession, q: str | None = None) -> list[CashMovementOut]:
+    stmt = (
+        select(CashMovementModel)
+        .options(selectinload(CashMovementModel.attachments))
+        .order_by(
+        CashMovementModel.created_at.desc(),
+        CashMovementModel.id.desc(),
         )
-    ).scalars().all()
+    )
+    term = (q or "").strip()
+    if term:
+        like = _search_like(term)
+        stmt = stmt.where(
+            or_(
+                CashMovementModel.note.ilike(like, escape="\\"),
+                CashMovementModel.expense_id.ilike(like, escape="\\"),
+            )
+        ).limit(500)
+    else:
+        stmt = stmt.limit(_HISTORY_LIMIT)
+    rows = (await session.execute(stmt)).scalars().all()
     return [_movement_out(row) for row in rows]
 
 
 @router.get("", response_model=CashStateOut)
 async def get_cash(
+    q: str | None = Query(None, max_length=200, description="Поиск по заметке и номеру заявки по всей истории"),
     user: dict = Depends(require_cash_partner),
     session: AsyncSession = Depends(get_session),
 ) -> CashStateOut:
     await sync_cash_reimbursements(session, int(user["id"]))
     await session.commit()
+    history = await _history(session, q)
     row = (
         await session.execute(select(CashBalanceModel).where(CashBalanceModel.id == 1))
     ).scalar_one_or_none()
     if row is None or not row.balance_set or row.balance is None:
-        return CashStateOut(balance=None, balanceSet=False, history=await _history(session))
+        return CashStateOut(balance=None, balanceSet=False, history=history)
     return CashStateOut(
         balance=format_money(Decimal(row.balance)),
         balanceSet=True,
-        history=await _history(session),
+        history=history,
     )
 
 
@@ -349,8 +426,122 @@ async def delete_cash_movement(
     row = await _manual_movement(session, movement_id)
     delta = manual_balance_delta(kind=row.kind, old_amount=Decimal(row.amount), new_amount=None)
     later = await _movements_after(session, row)
+    stored = (
+        await session.execute(
+            select(CashAttachmentModel).where(CashAttachmentModel.movement_id == row.id)
+        )
+    ).scalars().all()
+    for item in stored:
+        path = safe_media_path(get_settings().media_path, item.storage_key)
+        if path is not None and path.is_file():
+            path.unlink()
     await session.delete(row)
     _apply_delta(balance, later, delta)
     await session.commit()
     shown = Decimal("0") if balance.balance is None else Decimal(balance.balance)
     return CashDeleteOut(balance=format_money(shown))
+
+
+_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".bmp": "image/bmp",
+    ".pdf": "application/pdf",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".m4v": "video/mp4",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+}
+
+
+@router.post("/movements/{movement_id}/attachments", response_model=CashMovementOut)
+async def upload_cash_attachment(
+    movement_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_cash_partner),
+    session: AsyncSession = Depends(get_session),
+) -> CashMovementOut:
+    row = await _load_movement(session, movement_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    if len(row.attachments or []) >= _MAX_CASH_FILES:
+        raise HTTPException(status_code=400, detail=f"К записи можно прикрепить не больше {_MAX_CASH_FILES} файлов")
+    content = await file.read()
+    ext = _cash_file_ok(file.filename or "", content)
+    try:
+        storage_key, safe_name = save_cash_attachment(movement_id, file.filename or f"file{ext}", content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.add(CashAttachmentModel(
+        id=str(uuid.uuid4()),
+        movement_id=movement_id,
+        file_name=safe_name[:255],
+        mime_type=_MIME_BY_EXT.get(ext, "application/octet-stream"),
+        storage_key=storage_key,
+        created_at=datetime.now(timezone.utc),
+    ))
+    await session.commit()
+    loaded = await _load_movement(session, movement_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    return _movement_out(loaded)
+
+
+@router.get("/movements/{movement_id}/attachments/{attachment_id}/file")
+async def download_cash_attachment(
+    movement_id: int,
+    attachment_id: str,
+    user: dict = Depends(require_cash_partner),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    row = (
+        await session.execute(
+            select(CashAttachmentModel).where(
+                CashAttachmentModel.id == attachment_id,
+                CashAttachmentModel.movement_id == movement_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    path = safe_media_path(get_settings().media_path, row.storage_key)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(path, media_type=row.mime_type, filename=row.file_name, content_disposition_type="inline")
+
+
+@router.delete("/movements/{movement_id}/attachments/{attachment_id}", response_model=CashMovementOut)
+async def delete_cash_attachment(
+    movement_id: int,
+    attachment_id: str,
+    user: dict = Depends(require_cash_partner),
+    session: AsyncSession = Depends(get_session),
+) -> CashMovementOut:
+    row = (
+        await session.execute(
+            select(CashAttachmentModel).where(
+                CashAttachmentModel.id == attachment_id,
+                CashAttachmentModel.movement_id == movement_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    path = safe_media_path(get_settings().media_path, row.storage_key)
+    if path is not None and path.is_file():
+        path.unlink()
+    await session.delete(row)
+    await session.commit()
+    loaded = await _load_movement(session, movement_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    return _movement_out(loaded)
