@@ -60,9 +60,9 @@ def _csp(nonce: str, *, meta: bool) -> str:
     policy = (
         "default-src 'none'; "
         f"script-src 'nonce-{nonce}'; "
-        f"style-src 'nonce-{nonce}'; "
+        f"style-src 'nonce-{nonce}' https://fonts.googleapis.com; "
         "img-src 'self' data:; "
-        "font-src 'self' data:; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
         "frame-src 'self'; "
         "connect-src 'none'; "
         "base-uri 'none'; "
@@ -114,12 +114,13 @@ def render_public_card(
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="referrer" content="no-referrer"/>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23E6282C'/%3E%3C/svg%3E"/>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&amp;display=swap"/>
 <meta http-equiv="Content-Security-Policy" content="{html.escape(csp, quote=True)}"/>
 <title>Kosta Legal · {number}</title>
 <style nonce="{nonce}">
   :root {{ color-scheme: light; }}
   * {{ box-sizing: border-box; }}
-  html, body {{ margin: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Segoe UI", system-ui, sans-serif; }}
+  html, body {{ margin: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif; }}
   .layout {{ display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100%; }}
   .side {{
     background: #fff; border-right: 1px solid #e2e8f0; padding: 1.25rem 1.2rem 2rem;
