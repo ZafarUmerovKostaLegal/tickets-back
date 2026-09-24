@@ -75,3 +75,37 @@ def convert_office_bytes_to_pdf(content: bytes, filename: str) -> bytes:
             _log.warning("office-to-pdf failed code=%s err=%s", proc.returncode, err)
             raise RuntimeError(err.strip() or "LibreOffice не создал PDF")
         return pdf.read_bytes()
+
+
+def convert_pdf_bytes_to_png(content: bytes) -> bytes:
+    """First page of a PDF as PNG, for the public letter card (no browser PDF chrome)."""
+    soffice = find_soffice()
+    if not soffice:
+        raise RuntimeError("LibreOffice не установлен")
+    with tempfile.TemporaryDirectory(prefix="corr-png-") as td:
+        work = Path(td)
+        src = work / "source.pdf"
+        src.write_bytes(content)
+        profile = work / "lo-profile"
+        profile.mkdir()
+        cmd = [
+            soffice,
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--norestore",
+            f"-env:UserInstallation={profile.resolve().as_uri()}",
+            "--convert-to",
+            "png",
+            "--outdir",
+            str(work),
+            str(src),
+        ]
+        try:
+            proc = subprocess.run(cmd, check=False, timeout=90, capture_output=True)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError("Преобразование страницы превысило время ожидания") from e
+        png = work / "source.png"
+        if proc.returncode != 0 or not png.is_file():
+            raise RuntimeError("LibreOffice не создал изображение страницы")
+        return png.read_bytes()

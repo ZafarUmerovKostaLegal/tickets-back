@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 
 import httpx
@@ -80,18 +81,46 @@ def _strip_hop_and_cors(headers: dict) -> dict:
     return {k: v for k, v in headers.items() if k.lower() not in skip}
 
 
+_PUBLIC_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_PUBLIC_TOKEN = re.compile(r"^[A-Za-z0-9._~=-]{20,2048}$")
+
+
+def _reject_public():
+    return FastAPIResponse(
+        content=b"Link rejected",
+        status_code=400,
+        media_type="text/plain",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _public_request_ok(request: Request, document_id: str, attachment_id: str | None = None) -> bool:
+    if request.method != "GET":
+        return False
+    if not _PUBLIC_ID.match(document_id or ""):
+        return False
+    if attachment_id is not None and not _PUBLIC_ID.match(attachment_id):
+        return False
+    token = request.query_params.get("token") or ""
+    if not _PUBLIC_TOKEN.match(token):
+        return False
+    inline = request.query_params.get("inline")
+    return inline in (None, "1")
+
+
 async def _forward_public(request: Request, path: str, *, timeout: float = 120.0):
-    """Unauthenticated proxy for QR public-file links (do not require / forward login)."""
+    """Unauthenticated proxy. Session, cookies and internal keys are never forwarded."""
     base = _correspondence_base()
     if not base:
-        return JSONResponse(status_code=503, content={"detail": "CORRESPONDENCE_SERVICE_URL is not configured"})
-    upstream_url = f"{base}/api/v1/correspondence/{path}".rstrip("/")
+        return FastAPIResponse(content=b"Unavailable", status_code=503, media_type="text/plain")
+    upstream_url = f"{base}/api/v1/correspondence/{path}"
     query = request.url.query
     if query:
         upstream_url = f"{upstream_url}?{query}"
-    headers = _request_headers_for_upstream(request)
-    for name in ("authorization", "Authorization", "cookie", "Cookie"):
-        headers.pop(name, None)
+    headers = {"Accept": (request.headers.get("accept") or "*/*")[:200]}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             upstream = await client.request(
@@ -100,8 +129,8 @@ async def _forward_public(request: Request, path: str, *, timeout: float = 120.0
                 headers=headers,
                 content=None,
             )
-    except httpx.RequestError as exc:
-        return _correspondence_upstream_503(base, exc)
+    except httpx.RequestError:
+        return FastAPIResponse(content=b"Unavailable", status_code=503, media_type="text/plain")
     out_headers = _strip_hop_and_cors(dict(upstream.headers))
     return FastAPIResponse(
         content=upstream.content,
@@ -114,6 +143,8 @@ async def _forward_public(request: Request, path: str, *, timeout: float = 120.0
 @router.get("/{document_id}/public-card")
 async def proxy_correspondence_public_card(document_id: str, request: Request):
     """Public verification page — no JWT, no session cookie forwarded."""
+    if not _public_request_ok(request, document_id):
+        return _reject_public()
     return await _forward_public(request, f"{document_id}/public-card")
 
 
@@ -123,15 +154,40 @@ async def proxy_correspondence_attachment_public_card(
     attachment_id: str,
     request: Request,
 ):
+    if not _public_request_ok(request, document_id, attachment_id):
+        return _reject_public()
     return await _forward_public(
         request,
         f"{document_id}/attachments/{attachment_id}/public-card",
     )
 
 
+@router.get("/{document_id}/public-preview")
+async def proxy_correspondence_public_preview(document_id: str, request: Request):
+    if not _public_request_ok(request, document_id):
+        return _reject_public()
+    return await _forward_public(request, f"{document_id}/public-preview")
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-preview")
+async def proxy_correspondence_attachment_public_preview(
+    document_id: str,
+    attachment_id: str,
+    request: Request,
+):
+    if not _public_request_ok(request, document_id, attachment_id):
+        return _reject_public()
+    return await _forward_public(
+        request,
+        f"{document_id}/attachments/{attachment_id}/public-preview",
+    )
+
+
 @router.get("/{document_id}/public-file")
 async def proxy_correspondence_public_file(document_id: str, request: Request):
     """Public QR download — no JWT (HMAC token in query)."""
+    if not _public_request_ok(request, document_id):
+        return _reject_public()
     return await _forward_public(request, f"{document_id}/public-file")
 
 
@@ -142,6 +198,8 @@ async def proxy_correspondence_attachment_public_file(
     request: Request,
 ):
     """Public QR download for a pinned attachment — no JWT."""
+    if not _public_request_ok(request, document_id, attachment_id):
+        return _reject_public()
     return await _forward_public(
         request,
         f"{document_id}/attachments/{attachment_id}/public-file",

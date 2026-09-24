@@ -1,3 +1,4 @@
+import html
 import logging
 import uuid
 from datetime import date, datetime, timezone
@@ -27,7 +28,7 @@ from infrastructure.config import get_settings
 from infrastructure.correspondence_mail import notify_correspondence_mail_safe
 from infrastructure.database import get_session
 from infrastructure.file_storage import delete_correspondence_storage, resolve_storage_path, save_correspondence_file
-from infrastructure.office_to_pdf import convert_office_bytes_to_pdf, is_office_document
+from infrastructure.office_to_pdf import convert_office_bytes_to_pdf, convert_pdf_bytes_to_png, is_office_document
 from infrastructure.models import (
     CorrespondenceAttachmentModel,
     CorrespondenceDocumentCommentModel,
@@ -1095,9 +1096,24 @@ def _pick_download_attachment(
     return atts[0]
 
 
+def _public_bytes_kind(path: Path) -> tuple[str, str] | None:
+    head = path.read_bytes()[:16]
+    if head.startswith(b"%PDF"):
+        return "application/pdf", "document.pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", "image.png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", "image.jpg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif", "image.gif"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "image/webp", "image.webp"
+    return None
+
+
 def _public_link_error_page(title: str, message: str, *, status_code: int = 400) -> HTMLResponse:
-    safe_title = title.replace("<", "&lt;")
-    safe_msg = message.replace("<", "&lt;")
+    safe_title = html.escape(title)
+    safe_msg = html.escape(message)
     return HTMLResponse(
         f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -1127,12 +1143,12 @@ def _serve_public_attachment_file(document_id: str, att: CorrespondenceAttachmen
             "Ссылка недействительна",
             "Документ недоступен.",
         )
-    safe_name = Path(att.file_name or "document").name or "document"
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-store",
         "X-Frame-Options": "SAMEORIGIN",
     }
+    shown = path
     if is_office_document(att.file_name, att.content_type):
         cache_path = path.with_suffix(path.suffix + ".preview.pdf")
         if not cache_path.is_file() or cache_path.stat().st_size <= 0:
@@ -1144,21 +1160,62 @@ def _serve_public_attachment_file(document_id: str, att: CorrespondenceAttachmen
                     "Просмотр недоступен",
                     "Файл нельзя показать на странице проверки.",
                 )
-        return FileResponse(
-            cache_path,
-            media_type="application/pdf",
-            filename="document.pdf",
-            content_disposition_type="inline",
-            headers=headers,
+        shown = cache_path
+    kind = _public_bytes_kind(shown)
+    if kind is None:
+        return _public_link_error_page(
+            "Просмотр недоступен",
+            "Этот файл нельзя открыть на странице проверки.",
         )
-    mime = (att.content_type or "application/octet-stream").strip() or "application/octet-stream"
+    media_type, filename = kind
     return FileResponse(
-        path,
-        media_type=mime,
-        filename=safe_name,
+        shown,
+        media_type=media_type,
+        filename=filename,
         content_disposition_type="inline",
         headers=headers,
     )
+
+
+def _serve_public_preview(document_id: str, att: CorrespondenceAttachmentModel):
+    """Raster page for the card. Never the browser PDF viewer."""
+    key = (att.storage_key or "").replace("\\", "/").lstrip("/")
+    expected_prefix = f"correspondence/{document_id}/"
+    if not key.startswith(expected_prefix) or ".." in key:
+        return _public_link_error_page("Ссылка недействительна", "Документ недоступен.")
+    path = resolve_storage_path(key)
+    if path is None or not path.is_file():
+        return _public_link_error_page("Ссылка недействительна", "Документ недоступен.")
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": "inline",
+    }
+    kind = _public_bytes_kind(path)
+    if kind and kind[0].startswith("image/"):
+        return FileResponse(path, media_type=kind[0], filename=kind[1], content_disposition_type="inline", headers=headers)
+    pdf_path = path
+    if is_office_document(att.file_name, att.content_type) or not (kind and kind[0] == "application/pdf"):
+        if is_office_document(att.file_name, att.content_type):
+            pdf_path = path.with_suffix(path.suffix + ".preview.pdf")
+            if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+                try:
+                    pdf_path.write_bytes(convert_office_bytes_to_pdf(path.read_bytes(), att.file_name))
+                except Exception:
+                    _log.exception("public preview pdf failed for %s", att.id)
+                    return _public_link_error_page("Просмотр недоступен", "Файл нельзя показать на странице проверки.")
+        elif not (kind and kind[0] == "application/pdf"):
+            return _public_link_error_page("Просмотр недоступен", "Этот файл нельзя открыть на странице проверки.")
+    png_path = Path(str(pdf_path) + ".page.png")
+    if not png_path.is_file() or png_path.stat().st_size <= 0:
+        try:
+            png_path.write_bytes(convert_pdf_bytes_to_png(pdf_path.read_bytes()))
+        except Exception:
+            _log.exception("public preview png failed for %s", att.id)
+            return _public_link_error_page("Просмотр недоступен", "Страницу письма не удалось показать.")
+    if not png_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+        return _public_link_error_page("Просмотр недоступен", "Страницу письма не удалось показать.")
+    return FileResponse(png_path, media_type="image/png", filename="page.png", content_disposition_type="inline", headers=headers)
 
 
 def _public_token_or_error(document_id: str, token: str, attachment_id: str | None):
@@ -1272,7 +1329,7 @@ async def view_document_public_card(
     row, att, missing = await _public_letter(session, document_id, bound, None)
     if missing is not None:
         return missing
-    return _card_response(row, att, f"/api/v1/correspondence/{document_id}/public-file")
+    return _card_response(row, att, f"/api/v1/correspondence/{document_id}/public-preview")
 
 
 @router.get("/{document_id}/attachments/{attachment_id}/public-card")
@@ -1291,8 +1348,45 @@ async def view_attachment_public_card(
     return _card_response(
         row,
         att,
-        f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file",
+        f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-preview",
     )
+
+
+@router.get("/{document_id}/public-preview")
+async def view_document_public_preview(
+    document_id: str,
+    token: str = Query(..., min_length=20, max_length=2048),
+    inline: int = Query(0),
+    session: AsyncSession = Depends(get_session),
+):
+    if inline != 1:
+        return _public_link_error_page("Ссылка недействительна", "Документ недоступен.")
+    bound, err = _public_token_or_error(document_id, token, None)
+    if err is not None:
+        return err
+    _row, att, missing = await _public_letter(session, document_id, bound, None)
+    if missing is not None or att is None:
+        return missing
+    return _serve_public_preview(document_id, att)
+
+
+@router.get("/{document_id}/attachments/{attachment_id}/public-preview")
+async def view_attachment_public_preview(
+    document_id: str,
+    attachment_id: str,
+    token: str = Query(..., min_length=20, max_length=2048),
+    inline: int = Query(0),
+    session: AsyncSession = Depends(get_session),
+):
+    if inline != 1:
+        return _public_link_error_page("Ссылка недействительна", "Документ недоступен.")
+    _, err = _public_token_or_error(document_id, token, attachment_id)
+    if err is not None:
+        return err
+    _row, att, missing = await _public_letter(session, document_id, None, attachment_id)
+    if missing is not None or att is None:
+        return missing
+    return _serve_public_preview(document_id, att)
 
 
 @router.get("/{document_id}/public-file")
