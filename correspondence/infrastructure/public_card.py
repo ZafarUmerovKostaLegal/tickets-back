@@ -56,18 +56,25 @@ def format_public_date(value: datetime | None) -> str:
     return f"{value.day} {month} {value.year}".strip()
 
 
-def public_card_headers(nonce: str) -> dict[str, str]:
-    csp = (
+def _csp(nonce: str, *, meta: bool) -> str:
+    policy = (
         "default-src 'none'; "
         f"script-src 'nonce-{nonce}'; "
         f"style-src 'nonce-{nonce}'; "
         "img-src 'self' data:; "
+        "font-src 'self' data:; "
         "frame-src 'self'; "
         "connect-src 'none'; "
         "base-uri 'none'; "
-        "form-action 'none'; "
-        "frame-ancestors 'none'"
+        "form-action 'none'"
     )
+    if not meta:
+        policy += "; frame-ancestors 'none'"
+    return policy
+
+
+def public_card_headers(nonce: str) -> dict[str, str]:
+    csp = _csp(nonce, meta=False)
     return {
         "Content-Security-Policy": csp,
         "Referrer-Policy": "no-referrer",
@@ -92,7 +99,7 @@ def render_public_card(
 ) -> tuple[str, str]:
     """Return (html, nonce). file_path is same-origin, token is appended in the page script."""
     nonce = secrets.token_urlsafe(16)
-    csp = public_card_headers(nonce)["Content-Security-Policy"]
+    csp = _csp(nonce, meta=True)
     number = html.escape((registry_number or "").strip() or "Без номера")
     when = html.escape(format_public_date(issued_on))
     who = html.escape((counterparty or "").strip() or "—")
@@ -106,6 +113,7 @@ def render_public_card(
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="referrer" content="no-referrer"/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23E6282C'/%3E%3C/svg%3E"/>
 <meta http-equiv="Content-Security-Policy" content="{html.escape(csp, quote=True)}"/>
 <title>Kosta Legal · {number}</title>
 <style nonce="{nonce}">
@@ -143,25 +151,60 @@ def render_public_card(
   }}
   .paper img {{ display: block; width: 100%; height: auto; background: #fff; }}
   .menu {{
-    display: none; position: fixed; z-index: 3; top: 12px; left: 12px;
+    display: none; position: fixed; z-index: 4;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
     width: 42px; height: 42px; border: 1px solid #e2e8f0; border-radius: 12px;
-    background: #fff; color: #0f172a; font-size: 1.2rem; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+    background: #fff; color: #0f172a; font-size: 1.15rem;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }}
+  .menu:active {{ transform: scale(0.96); }}
+  .backdrop {{
+    display: none; position: fixed; inset: 0; z-index: 2; border: 0; padding: 0;
+    background: rgba(15, 23, 42, 0.35); opacity: 0; pointer-events: none;
+    transition: opacity 0.28s ease;
+  }}
+  .paper {{ animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }}
+  @keyframes rise {{
+    from {{ opacity: 0; transform: translateY(10px); }}
+    to {{ opacity: 1; transform: none; }}
   }}
   @media (max-width: 800px) {{
     .layout {{ grid-template-columns: 1fr; }}
+    .menu, .backdrop {{ display: block; }}
     .menu {{ display: grid; place-items: center; }}
     .side {{
-      position: fixed; z-index: 2; inset: 0 auto 0 0; width: min(88vw, 340px);
-      transform: translateX(-105%); transition: transform 0.2s ease;
-      box-shadow: 8px 0 30px rgba(15, 23, 42, 0.12);
+      position: fixed; z-index: 3; top: 0; bottom: 0; left: 0;
+      width: min(86vw, 340px);
+      padding: 1.15rem 1.1rem calc(1.5rem + env(safe-area-inset-bottom));
+      transform: translateX(-105%);
+      transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+      box-shadow: none;
     }}
-    .side.is-open {{ transform: none; }}
-    .stage {{ padding-top: 4.2rem; }}
+    .side.is-open {{
+      transform: none;
+      box-shadow: 12px 0 40px rgba(15, 23, 42, 0.16);
+    }}
+    .side .brand {{
+      min-height: 42px;
+      margin-top: max(0px, env(safe-area-inset-top));
+      padding-left: 3.35rem;
+    }}
+    .backdrop.is-open {{ opacity: 1; pointer-events: auto; }}
+    .stage {{
+      padding: calc(4.2rem + env(safe-area-inset-top)) 0.75rem calc(1.25rem + env(safe-area-inset-bottom));
+    }}
+    .paper {{ width: 100%; border-radius: 2px; }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .paper, .side, .backdrop, .menu {{ animation: none; transition: none; }}
   }}
 </style>
 </head>
 <body>
-<button class="menu" type="button" id="open" aria-label="Сведения">☰</button>
+<button class="menu" type="button" id="open" aria-label="Сведения" aria-expanded="false">☰</button>
+<button class="backdrop" type="button" id="backdrop" aria-label="Закрыть"></button>
 <div class="layout">
   <aside class="side" id="sheet">
     <div class="brand">
@@ -196,6 +239,8 @@ def render_public_card(
   var path = {path};
   var frame = document.getElementById("doc");
   var sheet = document.getElementById("sheet");
+  var menu = document.getElementById("open");
+  var backdrop = document.getElementById("backdrop");
   function show() {{
     var params = new URLSearchParams(window.location.search);
     if (!params.get("token")) return;
@@ -203,13 +248,19 @@ def render_public_card(
     params.set("page", "1");
     frame.src = path + "?" + params.toString();
   }}
+  function setOpen(open) {{
+    sheet.classList.toggle("is-open", open);
+    backdrop.classList.toggle("is-open", open);
+    menu.setAttribute("aria-expanded", open ? "true" : "false");
+  }}
   document.getElementById("open-file").addEventListener("click", function () {{
     show();
-    sheet.classList.remove("is-open");
+    setOpen(false);
   }});
-  document.getElementById("open").addEventListener("click", function () {{
-    sheet.classList.toggle("is-open");
+  menu.addEventListener("click", function () {{
+    setOpen(!sheet.classList.contains("is-open"));
   }});
+  backdrop.addEventListener("click", function () {{ setOpen(false); }});
   show();
 }})();
 </script>
