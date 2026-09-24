@@ -121,26 +121,30 @@ def render_public_card(
   :root {{ color-scheme: light; }}
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif; }}
-  .layout {{ display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100%; }}
+  .layout {{ display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); height: 100%; }}
   .side {{
-    background: #fff; border-right: 1px solid #e2e8f0; padding: 1.25rem 1.2rem 2rem;
+    background: #fff; border-right: 1px solid #e2e8f0; padding: 1.5rem 1.35rem 2rem;
     overflow: auto; display: flex; flex-direction: column; gap: 0.15rem;
   }}
-  .brand {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.35rem; }}
-  .brand svg {{ width: 42px; height: 42px; flex-shrink: 0; }}
-  .brand strong {{ display: block; font-size: 0.95rem; letter-spacing: 0.04em; }}
-  .brand span {{ display: block; margin-top: 0.1rem; color: #64748b; font-size: 0.75rem; }}
-  .num {{ margin: 0.2rem 0 0; font-size: 1.25rem; font-weight: 720; letter-spacing: -0.03em; }}
-  .date {{ margin: 0.2rem 0 0.6rem; color: #64748b; font-size: 0.9rem; }}
-  .label {{ margin: 0.95rem 0 0.2rem; color: #64748b; font-size: 0.75rem; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }}
-  .value {{ margin: 0; font-size: 0.98rem; font-weight: 620; line-height: 1.4; }}
+  .brand {{ display: flex; align-items: center; gap: 0.85rem; margin-bottom: 1.6rem; }}
+  .brand svg {{ width: 46px; height: 46px; flex-shrink: 0; }}
+  .brand strong {{ display: block; font-size: 1rem; letter-spacing: 0.04em; }}
+  .brand span {{ display: block; margin-top: 0.15rem; color: #64748b; font-size: 0.78rem; }}
+  .close {{
+    display: none; margin-left: auto; width: 40px; height: 40px; border: 0; border-radius: 12px;
+    background: #f1f5f9; color: #0f172a; font-size: 1.25rem; cursor: pointer;
+  }}
+  .num {{ margin: 0.35rem 0 0; font-size: 1.35rem; font-weight: 720; letter-spacing: -0.03em; }}
+  .date {{ margin: 0.25rem 0 0.75rem; color: #64748b; font-size: 0.95rem; }}
+  .label {{ margin: 1.15rem 0 0.28rem; color: #64748b; font-size: 0.72rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }}
+  .value {{ margin: 0; font-size: 1.02rem; font-weight: 620; line-height: 1.45; }}
   .file {{
-    display: flex; gap: 0.55rem; align-items: flex-start; width: 100%; margin-top: 0.35rem;
-    padding: 0.7rem 0.75rem; border: 1px solid #e2e8f0; border-radius: 12px;
+    display: flex; gap: 0.55rem; align-items: flex-start; width: 100%; margin-top: 0.4rem;
+    padding: 0.85rem 0.9rem; border: 1px solid #e2e8f0; border-radius: 14px;
     background: #f8fafc; color: inherit; font: inherit; text-align: left; cursor: pointer;
   }}
   .file:hover {{ border-color: #c7d2fe; background: #eef2ff; }}
-  .file strong {{ font-weight: 640; line-height: 1.35; word-break: break-word; }}
+  .file strong {{ font-weight: 640; line-height: 1.4; overflow-wrap: anywhere; }}
   .stage {{
     min-width: 0; height: 100%; overflow: auto; background: #eef2f7;
     padding: 1.5rem 1.25rem 2.5rem;
@@ -177,8 +181,8 @@ def render_public_card(
     .menu {{ display: grid; place-items: center; }}
     .side {{
       position: fixed; z-index: 3; top: 0; bottom: 0; left: 0;
-      width: min(86vw, 340px);
-      padding: 1.15rem 1.1rem calc(1.5rem + env(safe-area-inset-bottom));
+      width: min(100vw, 440px);
+      padding: calc(1rem + env(safe-area-inset-top)) 1.25rem calc(1.75rem + env(safe-area-inset-bottom));
       transform: translateX(-105%);
       transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
       box-shadow: none;
@@ -187,16 +191,20 @@ def render_public_card(
       transform: none;
       box-shadow: 12px 0 40px rgba(15, 23, 42, 0.16);
     }}
-    .side .brand {{
-      min-height: 42px;
-      margin-top: max(0px, env(safe-area-inset-top));
-      padding-left: 3.35rem;
-    }}
+    body:has(.side.is-open) .menu {{ visibility: hidden; }}
+    .close {{ display: grid; place-items: center; flex-shrink: 0; }}
+    .brand {{ margin-bottom: 1.35rem; }}
+    .brand svg {{ width: 40px; height: 40px; }}
+    .num {{ font-size: 1.45rem; }}
     .backdrop.is-open {{ opacity: 1; pointer-events: auto; }}
     .stage {{
-      padding: calc(4.2rem + env(safe-area-inset-top)) 0.75rem calc(1.25rem + env(safe-area-inset-bottom));
+      padding: calc(4.5rem + env(safe-area-inset-top)) 0.85rem calc(1.5rem + env(safe-area-inset-bottom));
     }}
     .paper {{ width: 100%; border-radius: 2px; }}
+  }}
+  @media (max-width: 480px) {{
+    .side {{ width: 100%; }}
+    .stage {{ padding-left: 0.65rem; padding-right: 0.65rem; }}
   }}
   @media (prefers-reduced-motion: reduce) {{
     .paper, .side, .backdrop, .menu {{ animation: none; transition: none; }}
@@ -219,6 +227,7 @@ def render_public_card(
         <strong>KOSTA LEGAL</strong>
         <span>Проверка документа</span>
       </div>
+      <button class="close" type="button" id="close" aria-label="Закрыть">×</button>
     </div>
     <p class="num">{number}</p>
     <p class="date">{when}</p>
@@ -262,6 +271,7 @@ def render_public_card(
     setOpen(!sheet.classList.contains("is-open"));
   }});
   backdrop.addEventListener("click", function () {{ setOpen(false); }});
+  document.getElementById("close").addEventListener("click", function () {{ setOpen(false); }});
   show();
 }})();
 </script>
