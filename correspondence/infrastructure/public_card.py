@@ -200,6 +200,7 @@ def render_public_card(
     var params = new URLSearchParams(window.location.search);
     if (!params.get("token")) return;
     params.set("inline", "1");
+    params.set("page", "1");
     frame.src = path + "?" + params.toString();
   }}
   document.getElementById("open-file").addEventListener("click", function () {{

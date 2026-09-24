@@ -96,7 +96,7 @@ def convert_pdf_bytes_to_png(content: bytes) -> bytes:
             "--norestore",
             f"-env:UserInstallation={profile.resolve().as_uri()}",
             "--convert-to",
-            "png",
+            "png:draw_png_Export",
             "--outdir",
             str(work),
             str(src),
@@ -105,7 +105,7 @@ def convert_pdf_bytes_to_png(content: bytes) -> bytes:
             proc = subprocess.run(cmd, check=False, timeout=90, capture_output=True)
         except subprocess.TimeoutExpired as e:
             raise RuntimeError("Преобразование страницы превысило время ожидания") from e
-        png = work / "source.png"
-        if proc.returncode != 0 or not png.is_file():
+        pngs = sorted(work.glob("*.png"))
+        if proc.returncode != 0 or not pngs:
             raise RuntimeError("LibreOffice не создал изображение страницы")
-        return png.read_bytes()
+        return pngs[0].read_bytes()

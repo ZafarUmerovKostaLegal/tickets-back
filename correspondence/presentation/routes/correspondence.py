@@ -1329,7 +1329,7 @@ async def view_document_public_card(
     row, att, missing = await _public_letter(session, document_id, bound, None)
     if missing is not None:
         return missing
-    return _card_response(row, att, f"/api/v1/correspondence/{document_id}/public-preview")
+    return _card_response(row, att, f"/api/v1/correspondence/{document_id}/public-file")
 
 
 @router.get("/{document_id}/attachments/{attachment_id}/public-card")
@@ -1348,7 +1348,7 @@ async def view_attachment_public_card(
     return _card_response(
         row,
         att,
-        f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-preview",
+        f"/api/v1/correspondence/{document_id}/attachments/{attachment_id}/public-file",
     )
 
 
@@ -1394,9 +1394,18 @@ async def download_document_public_file(
     document_id: str,
     token: str = Query(..., min_length=20, max_length=2048, description="HMAC-токен из QR"),
     inline: int = Query(0),
+    page: int = Query(0),
     session: AsyncSession = Depends(get_session),
 ):
     """File for the verification page. A bare QR link opens the card instead."""
+    if page == 1 and inline == 1:
+        bound_aid, err = _public_token_or_error(document_id, token, None)
+        if err is not None:
+            return err
+        _row, att, missing = await _public_letter(session, document_id, bound_aid, None)
+        if missing is not None or att is None:
+            return missing
+        return _serve_public_preview(document_id, att)
     if inline != 1:
         return RedirectResponse(
             url=f"/api/v1/correspondence/{quote(document_id, safe='')}/public-card?token={quote(token, safe='')}",
