@@ -129,8 +129,8 @@ def render_public_card(
     padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
   }}
   .file strong {{ font-weight: 650; line-height: 1.35; }}
-  .stage {{ min-width: 0; min-height: 0; background: #c5ced8; }}
-  .stage iframe {{ width: 100%; height: 100%; border: 0; background: #fff; }}
+  .stage {{ min-width: 0; height: 100%; background: #e7edf3; }}
+  .stage iframe {{ display: block; width: 100%; height: 100%; border: 0; background: #fff; }}
   .menu {{
     display: none; position: fixed; z-index: 3; top: 12px; left: 12px;
     width: 42px; height: 42px; border: 0; border-radius: 12px;

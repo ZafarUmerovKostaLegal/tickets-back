@@ -1131,7 +1131,6 @@ def _serve_public_attachment_file(document_id: str, att: CorrespondenceAttachmen
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-store",
-        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
         "X-Frame-Options": "SAMEORIGIN",
     }
     if is_office_document(att.file_name, att.content_type):
