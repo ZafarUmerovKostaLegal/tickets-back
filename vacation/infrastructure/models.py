@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -76,6 +77,22 @@ class AbsenceDay(Base):
     )
 
     employee: Mapped["ScheduleEmployee"] = relationship("ScheduleEmployee", back_populates="absence_days")
+
+
+class ScheduleRosterHidden(Base):
+    """Люди, скрытые в боковом списке графика для всех пользователей."""
+
+    __tablename__ = "schedule_roster_hidden"
+    __table_args__ = (
+        CheckConstraint(
+            "(auth_user_id IS NOT NULL AND employee_id IS NULL) OR (auth_user_id IS NULL AND employee_id IS NOT NULL)",
+            name="ck_schedule_roster_hidden_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+    employee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
 
 
 class LeaveRequest(Base):

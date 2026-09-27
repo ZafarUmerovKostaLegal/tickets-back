@@ -14,7 +14,7 @@ from application.schedule_employee_sync import (
 )
 from infrastructure.auth_lookup import list_staff_users
 from infrastructure.database import get_session
-from infrastructure.models import AbsenceDay, ScheduleEmployee
+from infrastructure.models import AbsenceDay, ScheduleEmployee, ScheduleRosterHidden
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -212,6 +212,67 @@ async def sync_employees_from_auth(
         updated=result.updated,
         skipped_archived=result.skipped_archived,
         skipped_hidden=result.skipped_hidden,
+    )
+
+
+class RosterHiddenOut(BaseModel):
+    auth_user_ids: list[int] = Field(default_factory=list, alias="authUserIds")
+    employee_ids: list[int] = Field(default_factory=list, alias="employeeIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class RosterHiddenPatchBody(BaseModel):
+    auth_user_id: int | None = Field(None, alias="authUserId")
+    employee_id: int | None = Field(None, alias="employeeId")
+    hidden: bool
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def one_target(self):
+        has_user = self.auth_user_id is not None
+        has_employee = self.employee_id is not None
+        if has_user == has_employee:
+            raise ValueError("Укажите authUserId или employeeId")
+        if self.auth_user_id is not None and self.auth_user_id <= 0:
+            raise ValueError("authUserId должен быть положительным")
+        if self.employee_id is not None and self.employee_id <= 0:
+            raise ValueError("employeeId должен быть положительным")
+        return self
+
+
+@router.get("/roster-hidden", response_model=RosterHiddenOut)
+async def get_roster_hidden(session: AsyncSession = Depends(get_session)):
+    rows = (await session.execute(select(ScheduleRosterHidden))).scalars().all()
+    return RosterHiddenOut(
+        auth_user_ids=[row.auth_user_id for row in rows if row.auth_user_id is not None],
+        employee_ids=[row.employee_id for row in rows if row.employee_id is not None],
+    )
+
+
+@router.patch("/roster-hidden", response_model=RosterHiddenOut)
+async def patch_roster_hidden(
+    body: RosterHiddenPatchBody,
+    session: AsyncSession = Depends(get_session),
+):
+    if body.auth_user_id is not None:
+        q = select(ScheduleRosterHidden).where(ScheduleRosterHidden.auth_user_id == body.auth_user_id)
+    else:
+        q = select(ScheduleRosterHidden).where(ScheduleRosterHidden.employee_id == body.employee_id)
+    existing = (await session.execute(q)).scalar_one_or_none()
+    if body.hidden and existing is None:
+        session.add(ScheduleRosterHidden(
+            auth_user_id=body.auth_user_id,
+            employee_id=body.employee_id,
+        ))
+    elif not body.hidden and existing is not None:
+        await session.delete(existing)
+    await session.commit()
+    rows = (await session.execute(select(ScheduleRosterHidden))).scalars().all()
+    return RosterHiddenOut(
+        auth_user_ids=[row.auth_user_id for row in rows if row.auth_user_id is not None],
+        employee_ids=[row.employee_id for row in rows if row.employee_id is not None],
     )
 
 

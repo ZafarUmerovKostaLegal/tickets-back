@@ -40,7 +40,24 @@ async def apply_leave_request_final_decision(conn: AsyncConnection) -> None:
         await conn.execute(text(stmt))
 
 
+async def apply_schedule_roster_hidden(conn: AsyncConnection) -> None:
+    await conn.execute(text(
+        """
+        CREATE TABLE IF NOT EXISTS schedule_roster_hidden (
+            id SERIAL PRIMARY KEY,
+            auth_user_id INTEGER UNIQUE,
+            employee_id INTEGER UNIQUE,
+            CONSTRAINT ck_schedule_roster_hidden_target CHECK (
+                (auth_user_id IS NOT NULL AND employee_id IS NULL)
+                OR (auth_user_id IS NULL AND employee_id IS NOT NULL)
+            )
+        )
+        """
+    ))
+
+
 REGISTERED_VACATION_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("vacation_auth_user_and_absence_fks", apply_vacation_auth_user_and_absence_fks),
     ("vacation_leave_request_final_decision", apply_leave_request_final_decision),
+    ("vacation_schedule_roster_hidden", apply_schedule_roster_hidden),
 ]
