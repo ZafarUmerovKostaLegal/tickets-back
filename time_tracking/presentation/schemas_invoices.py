@@ -58,6 +58,17 @@ class InvoiceCreateBody(BaseModel):
         alias="partnerConfirmationRequestId",
         description="ID запроса подтверждения партнёров, из которого создан счёт",
     )
+    defer_partner_confirmation: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "deferPartnerConfirmation",
+            "skipPartnerInvoiceConfirmation",
+        ),
+        description=(
+            "Выпустить счёт до подписей всех партнёров. "
+            "Отчёт должен быть уже отправлен на проверку и остаётся на подписи."
+        ),
+    )
     billed_amount: Optional[Decimal] = Field(
         None,
         alias="billedAmount",

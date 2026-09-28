@@ -415,6 +415,44 @@ async def _apply_billed_amount_override(
     return sort_order + 1
 
 
+_DEFERRED_PARTNER_STATUSES = frozenset({"fully_confirmed", "pending_partners"})
+
+
+async def _deferred_partner_request_id(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    date_from: date,
+    date_to: date,
+    partner_confirmation_request_id: str | None,
+    defer: bool,
+) -> str | None:
+    """Id заявки, если счёт можно выпустить до оставшихся подписей. None — обычный шлюз."""
+    if not defer:
+        return None
+    from infrastructure.repository_partner_report_confirmations import (
+        PartnerReportConfirmationRepository,
+    )
+
+    repo = PartnerReportConfirmationRepository(session)
+    rid = (partner_confirmation_request_id or "").strip()
+    if rid:
+        req = await repo.get_request_by_id(rid, load_signatures=False)
+        status = (getattr(req, "status", None) or "").strip() if req is not None else ""
+        if (
+            req is not None
+            and (req.project_id or "").strip() == (project_id or "").strip()
+            and req.date_from <= date_from
+            and req.date_to >= date_to
+            and status in _DEFERRED_PARTNER_STATUSES
+        ):
+            return req.id
+    covering = await repo.find_submitted_covering_project_period(project_id, date_from, date_to)
+    if covering is None:
+        return None
+    return covering.id
+
+
 async def create_invoice(
     session: AsyncSession,
     *,
@@ -438,6 +476,7 @@ async def create_invoice(
     partner_confirmation_request_id: str | None = None,
     billed_amount: Decimal | None = None,
     service_description: str | None = None,
+    defer_partner_confirmation: bool = False,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -512,12 +551,28 @@ async def create_invoice(
                 )
             if partner_billing_period_to < partner_billing_period_from:
                 raise HTTPException(status_code=400, detail="partnerBillingPeriodTo не может быть раньше partnerBillingPeriodFrom")
-            await ensure_fully_confirmed_partner_period_or_403(
+            deferred_request_id = await _deferred_partner_request_id(
                 session,
                 project_id=eff_pid,
                 date_from=partner_billing_period_from,
                 date_to=partner_billing_period_to,
+                partner_confirmation_request_id=partner_confirmation_request_id,
+                defer=defer_partner_confirmation,
             )
+            if deferred_request_id:
+                partner_confirmation_request_id = deferred_request_id
+                defer_note = (
+                    "Счёт сформирован до подписей всех партнёров. "
+                    "Отчёт остаётся на проверке — партнёр должен подписать его позже."
+                )
+                internal_note = f"{internal_note.rstrip()}\n{defer_note}" if (internal_note or "").strip() else defer_note
+            else:
+                await ensure_fully_confirmed_partner_period_or_403(
+                    session,
+                    project_id=eff_pid,
+                    date_from=partner_billing_period_from,
+                    date_to=partner_billing_period_to,
+                )
 
     partner_preview = None
     if (

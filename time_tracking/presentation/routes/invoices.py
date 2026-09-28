@@ -305,6 +305,7 @@ async def create_invoice_route(
         partner_confirmation_request_id=body.partner_confirmation_request_id,
         billed_amount=body.billed_amount,
         service_description=body.service_description,
+        defer_partner_confirmation=bool(body.defer_partner_confirmation),
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(inv.id)
