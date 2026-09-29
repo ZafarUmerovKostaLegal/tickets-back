@@ -120,7 +120,6 @@ def _send_one(subscription: dict[str, Any], payload: str, private_pem: str, subj
             vapid_private_key=private_pem,
             vapid_claims={"sub": subject},
             ttl=60 * 60 * 12,
-            timeout=8,
         )
         return None
     except WebPushException as exc:
