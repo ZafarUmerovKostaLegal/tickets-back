@@ -194,6 +194,12 @@ class AddRoomMembersBody(BaseModel):
     user_ids: list[int] = Field(..., min_length=1, alias="userIds")
 
 
+class PatchGroupRoomBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str = Field(..., min_length=1, max_length=200)
+
+
 class RoomMembersListOut(BaseModel):
     items: list[RoomMemberOut]
 

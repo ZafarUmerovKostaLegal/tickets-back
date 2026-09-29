@@ -13,6 +13,7 @@ from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
 from presentation.schemas import (
     AddRoomMembersBody,
+    PatchGroupRoomBody,
     CreateChannelRoomBody,
     CreateDmRoomBody,
     CreateGroupRoomBody,
@@ -216,6 +217,78 @@ async def add_room_members(
     return RoomMembersListOut(
         items=[
             RoomMemberOut(user_id=m.user_id, role=m.role, joined_at=m.joined_at) for m in (members or [])
+        ]
+    )
+
+
+@router.patch("/{room_id}", response_model=RoomOut)
+async def rename_group_room(
+    room_id: int,
+    body: PatchGroupRoomBody,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = ChatRepository(session)
+    room = await repo.rename_group_room(user_id, room_id, body.title)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Группа не найдена или нет прав на изменение")
+    await session.commit()
+    out = await _room_out_for_user(repo, user_id, room_id)
+    if not out:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    recipients = await repo.member_user_ids(room_id)
+    await push_chat_event(
+        recipient_user_ids=[u for u in recipients if u != user_id],
+        room_id=room_id,
+        event="room_updated",
+        payload={"room_id": room_id, "title": room.title},
+    )
+    return out
+
+
+@router.delete("/{room_id}", status_code=204)
+async def delete_group_room(
+    room_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = ChatRepository(session)
+    recipients = await repo.delete_group_room(user_id, room_id)
+    if recipients is None:
+        raise HTTPException(status_code=404, detail="Группа не найдена или нет прав на удаление")
+    await session.commit()
+    await push_chat_event(
+        recipient_user_ids=[u for u in recipients if u != user_id],
+        room_id=room_id,
+        event="room_deleted",
+        payload={"room_id": room_id},
+    )
+
+
+@router.delete("/{room_id}/members/{target_user_id}", response_model=RoomMembersListOut)
+async def remove_group_member(
+    room_id: int,
+    target_user_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    session: AsyncSession = Depends(get_session),
+):
+    repo = ChatRepository(session)
+    if target_user_id == user_id:
+        raise HTTPException(status_code=400, detail="Нельзя исключить себя. Удалите группу, если она больше не нужна")
+    members = await repo.remove_group_member(user_id, room_id, target_user_id)
+    if members is None:
+        raise HTTPException(status_code=404, detail="Участник не найден или нет прав на изменение группы")
+    await session.commit()
+    recipients = await repo.member_user_ids(room_id)
+    await push_chat_event(
+        recipient_user_ids=[u for u in recipients if u != user_id],
+        room_id=room_id,
+        event="members_removed",
+        payload={"removed_user_id": target_user_id, "room_id": room_id},
+    )
+    return RoomMembersListOut(
+        items=[
+            RoomMemberOut(user_id=m.user_id, role=m.role, joined_at=m.joined_at) for m in members
         ]
     )
 

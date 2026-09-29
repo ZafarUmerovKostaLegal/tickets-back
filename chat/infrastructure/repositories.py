@@ -519,6 +519,77 @@ class ChatRepository:
         await self._session.flush()
         return added
 
+    def _can_manage_group(
+        self,
+        room: ChatRoomModel | None,
+        member: ChatRoomMemberModel | None,
+        actor_id: int,
+    ) -> bool:
+        if room is None or member is None or room.room_type != ROOM_TYPE_GROUP:
+            return False
+        if room.slug:
+            return False
+        return member.role == MEMBER_ROLE_ADMIN or room.created_by_user_id == actor_id
+
+    async def rename_group_room(self, actor_id: int, room_id: int, title: str) -> ChatRoomModel | None:
+        room = await self.get_room(room_id)
+        member = await self.is_member(actor_id, room_id)
+        if room is None or not self._can_manage_group(room, member, actor_id):
+            return None
+        cleaned = title.strip()[:200]
+        if not cleaned:
+            return None
+        room.title = cleaned
+        await self._session.flush()
+        return room
+
+    async def remove_group_member(
+        self,
+        actor_id: int,
+        room_id: int,
+        target_user_id: int,
+    ) -> list[ChatRoomMemberModel] | None:
+        """Remove another member. None when the actor cannot manage this group."""
+        room = await self.get_room(room_id)
+        member = await self.is_member(actor_id, room_id)
+        if not self._can_manage_group(room, member, actor_id):
+            return None
+        if target_user_id == actor_id:
+            return None
+        target = await self.is_member(target_user_id, room_id)
+        if target is None:
+            return None
+        if target.role == MEMBER_ROLE_ADMIN:
+            members = await self.list_members(actor_id, room_id) or []
+            admin_count = sum(1 for row in members if row.role == MEMBER_ROLE_ADMIN)
+            if admin_count <= 1:
+                return None
+        await self._session.delete(target)
+        await self._session.execute(
+            delete(ChatReadStateModel).where(
+                ChatReadStateModel.room_id == room_id,
+                ChatReadStateModel.user_id == target_user_id,
+            )
+        )
+        await self._session.flush()
+        return await self.list_members(actor_id, room_id)
+
+    async def delete_group_room(self, actor_id: int, room_id: int) -> list[int] | None:
+        """Delete a group. Returns member ids notified, or None when not allowed."""
+        room = await self.get_room(room_id)
+        member = await self.is_member(actor_id, room_id)
+        if room is None or not self._can_manage_group(room, member, actor_id):
+            return None
+        recipients = await self.member_user_ids(room_id)
+        await self._session.execute(
+            update(ChatMessageModel)
+            .where(ChatMessageModel.room_id == room_id)
+            .values(reply_to_message_id=None)
+        )
+        await self._session.delete(room)
+        await self._session.flush()
+        return recipients
+
 
     async def reactions_for_message_ids(
         self, message_ids: list[int]
