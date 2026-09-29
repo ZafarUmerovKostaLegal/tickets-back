@@ -194,6 +194,18 @@ class ChatPinnedMessageModel(Base):
     pinned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ChatPushSubscriptionModel(Base):
+    __tablename__ = "chat_push_subscriptions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(255), nullable=False)
+    auth: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ChatReadStateModel(Base):
     __tablename__ = "chat_read_state"
 

@@ -15,6 +15,7 @@ from presentation.routes import (
     messages_routes,
     pins_routes,
     polls_routes,
+    push_routes,
     retention_routes,
     rooms_routes,
 )
@@ -57,5 +58,6 @@ app.include_router(messages_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(polls_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(pins_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(checklists_routes.router, prefix=CHAT_API_PREFIX)
+app.include_router(push_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(attachments_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(retention_routes.router, prefix=CHAT_API_PREFIX)

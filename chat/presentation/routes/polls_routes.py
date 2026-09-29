@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from infrastructure.database import get_session
 from infrastructure.models import ChatMessageModel
 from infrastructure.realtime_push import push_chat_event
+from infrastructure.web_push import deliver_chat_browser_push
 from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
 from presentation.schemas import (
@@ -86,6 +87,13 @@ async def create_poll(
         room_id=room_id,
         event="message",
         payload={"message": out.model_dump(by_alias=True, mode="json")},
+    )
+    await deliver_chat_browser_push(
+        session,
+        room_id=room_id,
+        author_user_id=user_id,
+        body=body.question,
+        message_kind=body.kind if getattr(body, "kind", None) else "poll",
     )
     return out
 

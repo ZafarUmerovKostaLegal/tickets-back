@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
 from infrastructure.realtime_push import push_chat_event
+from infrastructure.web_push import deliver_chat_browser_push
 from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
 from presentation.routes.rooms_routes import _enrich_messages
@@ -42,6 +43,13 @@ async def create_checklist(
         room_id=room_id,
         event="message",
         payload={"message": out.model_dump(by_alias=True, mode="json")},
+    )
+    await deliver_chat_browser_push(
+        session,
+        room_id=room_id,
+        author_user_id=user_id,
+        body=body.title,
+        message_kind="checklist",
     )
     return out
 

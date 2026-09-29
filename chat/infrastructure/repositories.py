@@ -30,6 +30,7 @@ from infrastructure.models import (
     ChatMessageAttachmentModel,
     ChatMessageModel,
     ChatPinnedMessageModel,
+    ChatPushSubscriptionModel,
     ChatMessageReactionModel,
     ChatPollModel,
     ChatPollVoteModel,
@@ -401,6 +402,51 @@ class ChatRepository:
             select(ChatRoomMemberModel.user_id).where(ChatRoomMemberModel.room_id == room_id)
         )
         return [int(x[0]) for x in r.all()]
+
+    async def upsert_push_subscription(self, user_id: int, endpoint: str, p256dh: str, auth: str) -> None:
+        now = _utc_now()
+        existing = await self._session.execute(
+            select(ChatPushSubscriptionModel).where(ChatPushSubscriptionModel.endpoint == endpoint)
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            row.user_id = user_id
+            row.p256dh = p256dh
+            row.auth = auth
+            row.updated_at = now
+            return
+        self._session.add(
+            ChatPushSubscriptionModel(
+                user_id=user_id,
+                endpoint=endpoint,
+                p256dh=p256dh,
+                auth=auth,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def delete_push_subscription(self, user_id: int, endpoint: str) -> None:
+        await self._session.execute(
+            delete(ChatPushSubscriptionModel).where(
+                ChatPushSubscriptionModel.user_id == user_id,
+                ChatPushSubscriptionModel.endpoint == endpoint,
+            )
+        )
+
+    async def delete_push_subscription_by_endpoint(self, endpoint: str) -> None:
+        await self._session.execute(
+            delete(ChatPushSubscriptionModel).where(ChatPushSubscriptionModel.endpoint == endpoint)
+        )
+
+    async def push_subscriptions_for_users(self, user_ids: list[int]) -> list[ChatPushSubscriptionModel]:
+        ids = sorted({int(x) for x in user_ids if int(x) > 0})
+        if not ids:
+            return []
+        r = await self._session.execute(
+            select(ChatPushSubscriptionModel).where(ChatPushSubscriptionModel.user_id.in_(ids))
+        )
+        return list(r.scalars().all())
 
     async def _create_multi_user_room(
         self,

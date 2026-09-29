@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     auth_service_url: str = ""
     chat_push_url: str = ""
     ws_internal_secret: str = ""
+    chat_vapid_public_key: str = ""
+    chat_vapid_private_key: str = ""
+    chat_vapid_subject: str = "mailto:notifications@kostalegal.com"
     max_message_length: int = 4000
     media_path: str = "/app/media"
     max_file_bytes: int = 15 * 1024 * 1024

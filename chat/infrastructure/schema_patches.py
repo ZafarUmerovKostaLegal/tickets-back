@@ -180,10 +180,35 @@ async def apply_chat_pinned_messages_table(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_chat_push_subscriptions_table(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_push_subscriptions (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh VARCHAR(255) NOT NULL,
+                auth VARCHAR(255) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_push_subscriptions_user_id "
+            "ON chat_push_subscriptions(user_id)"
+        )
+    )
+
+
 REGISTERED_CHAT_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("chat_reply_and_kind_columns", apply_chat_reply_and_kind_columns),
     ("chat_reactions_table", apply_chat_reactions_table),
     ("chat_polls_tables", apply_chat_polls_tables),
     ("chat_checklists_tables", apply_chat_checklists_tables),
     ("chat_pinned_messages_table", apply_chat_pinned_messages_table),
+    ("chat_push_subscriptions_table", apply_chat_push_subscriptions_table),
 ]

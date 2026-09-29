@@ -308,6 +308,9 @@ services:
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - CHAT_VAPID_PUBLIC_KEY=${CHAT_VAPID_PUBLIC_KEY:-}
+      - CHAT_VAPID_PRIVATE_KEY=${CHAT_VAPID_PRIVATE_KEY:-}
+      - CHAT_VAPID_SUBJECT=${CHAT_VAPID_SUBJECT:-mailto:notifications@kostalegal.com}
       - MEDIA_PATH=${MEDIA_PATH:-/app/media}
       - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
     volumes:
