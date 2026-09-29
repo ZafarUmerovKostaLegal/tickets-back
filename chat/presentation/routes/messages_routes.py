@@ -12,6 +12,7 @@ from infrastructure.models import ChatMessageModel
 from infrastructure.realtime_push import push_chat_event
 from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
+from presentation.routes.pins_routes import _push_pins
 from presentation.schemas import (
     MessageOut,
     PatchMessageBody,
@@ -102,4 +103,5 @@ async def delete_message(
         event="message_deleted",
         payload={"message": out.model_dump(by_alias=True, mode="json")},
     )
+    await _push_pins(repo, msg.room_id)
     return out

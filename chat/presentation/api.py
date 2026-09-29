@@ -13,6 +13,7 @@ from presentation.routes import (
     checklists_routes,
     health,
     messages_routes,
+    pins_routes,
     polls_routes,
     retention_routes,
     rooms_routes,
@@ -54,6 +55,7 @@ app.include_router(health.router)
 app.include_router(rooms_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(messages_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(polls_routes.router, prefix=CHAT_API_PREFIX)
+app.include_router(pins_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(checklists_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(attachments_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(retention_routes.router, prefix=CHAT_API_PREFIX)

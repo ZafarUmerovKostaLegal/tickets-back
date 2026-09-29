@@ -23,6 +23,7 @@ MESSAGE_KIND_CHECKLIST = "checklist"
 CHECKLIST_TITLE_MAX = 255
 CHECKLIST_ITEM_MAX = 200
 CHECKLIST_ITEMS_MAX = 30
+PINNED_MESSAGES_MAX = 20
 
 POLL_KIND_POLL = "poll"
 POLL_KIND_QUIZ = "quiz"
@@ -178,6 +179,19 @@ class ChatChecklistCompletionModel(Base):
     )
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatPinnedMessageModel(Base):
+    __tablename__ = "chat_pinned_messages"
+
+    room_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_rooms.id", ondelete="CASCADE"), primary_key=True
+    )
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    pinned_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pinned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ChatReadStateModel(Base):

@@ -15,6 +15,7 @@ from infrastructure.models import (
     CHECKLIST_ITEMS_MAX,
     CHECKLIST_TITLE_MAX,
     MESSAGE_KIND_CHECKLIST,
+    PINNED_MESSAGES_MAX,
     MESSAGE_KIND_POLL,
     MESSAGE_KIND_QUIZ,
     POLL_KIND_QUIZ,
@@ -28,6 +29,7 @@ from infrastructure.models import (
     ChatChecklistModel,
     ChatMessageAttachmentModel,
     ChatMessageModel,
+    ChatPinnedMessageModel,
     ChatMessageReactionModel,
     ChatPollModel,
     ChatPollVoteModel,
@@ -338,6 +340,9 @@ class ChatRepository:
             return None
         msg.deleted_at = _utc_now()
         self._session.add(msg)
+        await self._session.execute(
+            delete(ChatPinnedMessageModel).where(ChatPinnedMessageModel.message_id == message_id)
+        )
         return msg
 
     async def mark_read(
@@ -1045,6 +1050,82 @@ class ChatRepository:
         await self._session.delete(item)
         await self._session.flush()
         return msg
+
+
+    async def viewer_can_pin(self, user_id: int, room_id: int) -> bool:
+        room = await self.get_room(room_id)
+        member = await self.is_member(user_id, room_id)
+        if room is None or member is None:
+            return False
+        return self._can_pin_in_room(room, member, user_id)
+
+    def _can_pin_in_room(self, room: ChatRoomModel, member: ChatRoomMemberModel, user_id: int) -> bool:
+        if room.room_type == ROOM_TYPE_DM or room.room_type == ROOM_TYPE_COMPANY:
+            return True
+        if room.room_type == ROOM_TYPE_GROUP:
+            return self._can_manage_group(room, member, user_id)
+        return member.role == MEMBER_ROLE_ADMIN
+
+    async def list_room_pins(self, room_id: int) -> list[tuple[ChatPinnedMessageModel, ChatMessageModel]]:
+        r = await self._session.execute(
+            select(ChatPinnedMessageModel, ChatMessageModel)
+            .join(ChatMessageModel, ChatMessageModel.id == ChatPinnedMessageModel.message_id)
+            .where(
+                ChatPinnedMessageModel.room_id == room_id,
+                ChatMessageModel.deleted_at.is_(None),
+            )
+            .order_by(ChatPinnedMessageModel.pinned_at.desc(), ChatPinnedMessageModel.message_id.desc())
+        )
+        return [(pin, msg) for pin, msg in r.all()]
+
+    async def pin_message(
+        self, user_id: int, room_id: int, message_id: int
+    ) -> tuple[str, list[tuple[ChatPinnedMessageModel, ChatMessageModel]]]:
+        room = await self.get_room(room_id)
+        member = await self.is_member(user_id, room_id)
+        if room is None or member is None or not self._can_pin_in_room(room, member, user_id):
+            return "forbidden", []
+        msg = await self.get_message_in_room(message_id, room_id)
+        if msg is None or msg.deleted_at is not None:
+            return "missing", []
+        existing = await self._session.execute(
+            select(ChatPinnedMessageModel).where(
+                ChatPinnedMessageModel.room_id == room_id,
+                ChatPinnedMessageModel.message_id == message_id,
+            )
+        )
+        if existing.scalars().one_or_none() is None:
+            count_r = await self._session.execute(
+                select(func.count()).select_from(ChatPinnedMessageModel).where(
+                    ChatPinnedMessageModel.room_id == room_id
+                )
+            )
+            if int(count_r.scalar_one()) >= PINNED_MESSAGES_MAX:
+                return "limit", []
+            self._session.add(
+                ChatPinnedMessageModel(
+                    room_id=room_id,
+                    message_id=message_id,
+                    pinned_by_user_id=user_id,
+                    pinned_at=_utc_now(),
+                )
+            )
+            await self._session.flush()
+        return "ok", await self.list_room_pins(room_id)
+
+    async def unpin_message(self, user_id: int, room_id: int, message_id: int) -> list[tuple[ChatPinnedMessageModel, ChatMessageModel]] | None:
+        room = await self.get_room(room_id)
+        member = await self.is_member(user_id, room_id)
+        if room is None or member is None or not self._can_pin_in_room(room, member, user_id):
+            return None
+        await self._session.execute(
+            delete(ChatPinnedMessageModel).where(
+                ChatPinnedMessageModel.room_id == room_id,
+                ChatPinnedMessageModel.message_id == message_id,
+            )
+        )
+        await self._session.flush()
+        return await self.list_room_pins(room_id)
 
 
 class HealthRepository:

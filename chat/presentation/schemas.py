@@ -108,6 +108,29 @@ class CreateChecklistBody(BaseModel):
         return cleaned[:30]
 
 
+class PinnedMessageOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_id: int = Field(..., alias="messageId")
+    preview: str
+    message_kind: str = Field("text", alias="messageKind")
+    author_user_id: int = Field(..., alias="authorUserId")
+    pinned_at: datetime = Field(..., alias="pinnedAt")
+
+
+class PinsListOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[PinnedMessageOut] = Field(default_factory=list)
+    can_pin: bool = Field(False, alias="canPin")
+
+
+class PinMessageBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_id: int = Field(..., alias="messageId")
+
+
 class AppendChecklistTaskBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -329,6 +352,39 @@ def poll_to_out(poll, votes: list, *, viewer_id: int | None = None) -> PollOut:
         explanation=poll.explanation if show_correct and my_votes else None,
         total_voters=len({int(v.user_id) for v in votes}),
         my_votes=my_votes,
+    )
+
+
+def pin_preview(msg) -> str:
+    kind = getattr(msg, "message_kind", None) or "text"
+    body = (msg.body or "").replace("\n", " ").strip()
+    if not body:
+        if kind == "checklist":
+            body = "Чеклист"
+        elif kind == "quiz":
+            body = "Викторина"
+        elif kind == "poll":
+            body = "Опрос"
+        else:
+            body = "Файл"
+    if len(body) > 140:
+        body = body[:137] + "…"
+    return body
+
+
+def pins_to_out(rows, *, can_pin: bool) -> PinsListOut:
+    return PinsListOut(
+        items=[
+            PinnedMessageOut(
+                message_id=msg.id,
+                preview=pin_preview(msg),
+                message_kind=getattr(msg, "message_kind", None) or "text",
+                author_user_id=msg.author_user_id,
+                pinned_at=pin.pinned_at,
+            )
+            for pin, msg in rows
+        ],
+        can_pin=can_pin,
     )
 
 

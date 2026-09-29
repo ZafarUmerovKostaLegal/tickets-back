@@ -158,9 +158,32 @@ async def apply_chat_checklists_tables(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_chat_pinned_messages_table(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_pinned_messages (
+                room_id BIGINT NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+                message_id BIGINT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                pinned_by_user_id BIGINT NOT NULL,
+                pinned_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (room_id, message_id)
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_pinned_messages_room_pinned_at "
+            "ON chat_pinned_messages(room_id, pinned_at DESC)"
+        )
+    )
+
+
 REGISTERED_CHAT_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("chat_reply_and_kind_columns", apply_chat_reply_and_kind_columns),
     ("chat_reactions_table", apply_chat_reactions_table),
     ("chat_polls_tables", apply_chat_polls_tables),
     ("chat_checklists_tables", apply_chat_checklists_tables),
+    ("chat_pinned_messages_table", apply_chat_pinned_messages_table),
 ]
