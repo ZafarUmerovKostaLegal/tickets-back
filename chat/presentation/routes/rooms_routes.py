@@ -41,6 +41,10 @@ async def _enrich_messages(repo: ChatRepository, items, user_id: int):
     polls_by_msg = await repo.polls_for_message_ids(msg_ids)
     poll_ids = [p.id for p in polls_by_msg.values()]
     votes_by_poll = await repo.votes_for_poll_ids(poll_ids)
+    checklists_by_msg = await repo.checklists_for_message_ids(msg_ids)
+    items_by_checklist = await repo.items_for_checklist_ids([c.id for c in checklists_by_msg.values()])
+    item_ids = [item.id for rows in items_by_checklist.values() for item in rows]
+    completions_by_item = await repo.completions_for_item_ids(item_ids)
     return messages_to_out_list(
         items,
         atts_by_msg,
@@ -49,6 +53,9 @@ async def _enrich_messages(repo: ChatRepository, items, user_id: int):
         polls_by_msg,
         votes_by_poll,
         viewer_id=user_id,
+        checklists_by_msg=checklists_by_msg,
+        items_by_checklist=items_by_checklist,
+        completions_by_item=completions_by_item,
     )
 
 

@@ -11,6 +11,10 @@ from infrastructure.models import (
     KOSTA_DAILY_SLUG,
     MEMBER_ROLE_ADMIN,
     MEMBER_ROLE_MEMBER,
+    CHECKLIST_ITEM_MAX,
+    CHECKLIST_ITEMS_MAX,
+    CHECKLIST_TITLE_MAX,
+    MESSAGE_KIND_CHECKLIST,
     MESSAGE_KIND_POLL,
     MESSAGE_KIND_QUIZ,
     POLL_KIND_QUIZ,
@@ -19,6 +23,9 @@ from infrastructure.models import (
     ROOM_TYPE_COMPANY,
     ROOM_TYPE_DM,
     ROOM_TYPE_GROUP,
+    ChatChecklistCompletionModel,
+    ChatChecklistItemModel,
+    ChatChecklistModel,
     ChatMessageAttachmentModel,
     ChatMessageModel,
     ChatMessageReactionModel,
@@ -807,6 +814,237 @@ class ChatRepository:
         self._session.add(poll)
         await self._session.flush()
         return poll
+
+    async def checklists_for_message_ids(self, message_ids: list[int]) -> dict[int, ChatChecklistModel]:
+        out: dict[int, ChatChecklistModel] = {}
+        if not message_ids:
+            return out
+        r = await self._session.execute(
+            select(ChatChecklistModel).where(ChatChecklistModel.message_id.in_(message_ids))
+        )
+        for row in r.scalars().all():
+            out[row.message_id] = row
+        return out
+
+    async def items_for_checklist_ids(self, checklist_ids: list[int]) -> dict[int, list[ChatChecklistItemModel]]:
+        out: dict[int, list[ChatChecklistItemModel]] = {}
+        if not checklist_ids:
+            return out
+        r = await self._session.execute(
+            select(ChatChecklistItemModel)
+            .where(ChatChecklistItemModel.checklist_id.in_(checklist_ids))
+            .order_by(ChatChecklistItemModel.position, ChatChecklistItemModel.id)
+        )
+        for row in r.scalars().all():
+            out.setdefault(row.checklist_id, []).append(row)
+        return out
+
+    async def completions_for_item_ids(self, item_ids: list[int]) -> dict[int, ChatChecklistCompletionModel]:
+        out: dict[int, ChatChecklistCompletionModel] = {}
+        if not item_ids:
+            return out
+        r = await self._session.execute(
+            select(ChatChecklistCompletionModel).where(ChatChecklistCompletionModel.item_id.in_(item_ids))
+        )
+        for row in r.scalars().all():
+            out[row.item_id] = row
+        return out
+
+    async def get_checklist(self, checklist_id: int) -> ChatChecklistModel | None:
+        r = await self._session.execute(
+            select(ChatChecklistModel).where(ChatChecklistModel.id == checklist_id)
+        )
+        return r.scalars().one_or_none()
+
+    async def _checklist_room_allowed(self, user_id: int, room_id: int) -> ChatRoomModel | None:
+        room = await self.get_room(room_id)
+        if room is None or room.room_type not in (ROOM_TYPE_GROUP, ROOM_TYPE_DM):
+            return None
+        if await self.is_member(user_id, room_id) is None:
+            return None
+        if not await self.can_user_post(user_id, room_id):
+            return None
+        return room
+
+    async def create_checklist_message(
+        self,
+        user_id: int,
+        room_id: int,
+        *,
+        title: str,
+        tasks: list[str],
+        others_can_complete: bool,
+        others_can_append: bool,
+    ) -> tuple[ChatMessageModel, ChatChecklistModel] | None:
+        cleaned_title = title.strip()[:CHECKLIST_TITLE_MAX]
+        cleaned_tasks = [t.strip()[:CHECKLIST_ITEM_MAX] for t in tasks if t and t.strip()]
+        if not cleaned_title or not cleaned_tasks or len(cleaned_tasks) > CHECKLIST_ITEMS_MAX:
+            return None
+        if await self._checklist_room_allowed(user_id, room_id) is None:
+            return None
+        msg = await self.create_message(
+            user_id,
+            room_id,
+            cleaned_title,
+            message_kind=MESSAGE_KIND_CHECKLIST,
+        )
+        if not msg:
+            return None
+        now = _utc_now()
+        checklist = ChatChecklistModel(
+            message_id=msg.id,
+            title=cleaned_title,
+            others_can_complete=others_can_complete,
+            others_can_append=others_can_append,
+            created_at=now,
+        )
+        self._session.add(checklist)
+        await self._session.flush()
+        for index, text_value in enumerate(cleaned_tasks):
+            self._session.add(
+                ChatChecklistItemModel(
+                    checklist_id=checklist.id,
+                    text=text_value,
+                    position=index,
+                    created_by_user_id=user_id,
+                    created_at=now,
+                )
+            )
+        await self._session.flush()
+        return msg, checklist
+
+    def _viewer_can_toggle(self, checklist: ChatChecklistModel, author_id: int, user_id: int) -> bool:
+        return user_id == author_id or checklist.others_can_complete
+
+    def _viewer_can_append(self, checklist: ChatChecklistModel, author_id: int, user_id: int) -> bool:
+        return user_id == author_id or checklist.others_can_append
+
+    async def toggle_checklist_item(
+        self,
+        user_id: int,
+        checklist_id: int,
+        item_id: int,
+    ) -> ChatMessageModel | None:
+        checklist = await self.get_checklist(checklist_id)
+        if not checklist:
+            return None
+        msg_r = await self._session.execute(
+            select(ChatMessageModel).where(ChatMessageModel.id == checklist.message_id)
+        )
+        msg = msg_r.scalars().one_or_none()
+        if not msg or msg.deleted_at is not None or await self.is_member(user_id, msg.room_id) is None:
+            return None
+        if not self._viewer_can_toggle(checklist, msg.author_user_id, user_id):
+            return None
+        item_r = await self._session.execute(
+            select(ChatChecklistItemModel).where(
+                ChatChecklistItemModel.id == item_id,
+                ChatChecklistItemModel.checklist_id == checklist_id,
+            )
+        )
+        item = item_r.scalars().one_or_none()
+        if not item:
+            return None
+        done_r = await self._session.execute(
+            select(ChatChecklistCompletionModel).where(ChatChecklistCompletionModel.item_id == item_id)
+        )
+        done = done_r.scalars().one_or_none()
+        if done:
+            await self._session.delete(done)
+        else:
+            self._session.add(
+                ChatChecklistCompletionModel(
+                    item_id=item_id,
+                    user_id=user_id,
+                    created_at=_utc_now(),
+                )
+            )
+        await self._session.flush()
+        return msg
+
+    async def append_checklist_task(
+        self,
+        user_id: int,
+        checklist_id: int,
+        text_value: str,
+    ) -> ChatMessageModel | None:
+        cleaned = text_value.strip()[:CHECKLIST_ITEM_MAX]
+        if not cleaned:
+            return None
+        checklist = await self.get_checklist(checklist_id)
+        if not checklist:
+            return None
+        msg_r = await self._session.execute(
+            select(ChatMessageModel).where(ChatMessageModel.id == checklist.message_id)
+        )
+        msg = msg_r.scalars().one_or_none()
+        if not msg or msg.deleted_at is not None or await self.is_member(user_id, msg.room_id) is None:
+            return None
+        if not self._viewer_can_append(checklist, msg.author_user_id, user_id):
+            return None
+        count_r = await self._session.execute(
+            select(func.count()).select_from(ChatChecklistItemModel).where(
+                ChatChecklistItemModel.checklist_id == checklist_id
+            )
+        )
+        count = int(count_r.scalar_one())
+        if count >= CHECKLIST_ITEMS_MAX:
+            return None
+        pos_r = await self._session.execute(
+            select(func.max(ChatChecklistItemModel.position)).where(
+                ChatChecklistItemModel.checklist_id == checklist_id
+            )
+        )
+        max_pos = pos_r.scalar_one()
+        position = 0 if max_pos is None else int(max_pos) + 1
+        self._session.add(
+            ChatChecklistItemModel(
+                checklist_id=checklist_id,
+                text=cleaned,
+                position=position,
+                created_by_user_id=user_id,
+                created_at=_utc_now(),
+            )
+        )
+        await self._session.flush()
+        return msg
+
+    async def remove_checklist_task(
+        self,
+        user_id: int,
+        checklist_id: int,
+        item_id: int,
+    ) -> ChatMessageModel | None:
+        checklist = await self.get_checklist(checklist_id)
+        if not checklist:
+            return None
+        msg_r = await self._session.execute(
+            select(ChatMessageModel).where(ChatMessageModel.id == checklist.message_id)
+        )
+        msg = msg_r.scalars().one_or_none()
+        if not msg or msg.deleted_at is not None or await self.is_member(user_id, msg.room_id) is None:
+            return None
+        if msg.author_user_id != user_id:
+            return None
+        item_r = await self._session.execute(
+            select(ChatChecklistItemModel).where(
+                ChatChecklistItemModel.id == item_id,
+                ChatChecklistItemModel.checklist_id == checklist_id,
+            )
+        )
+        item = item_r.scalars().one_or_none()
+        if not item:
+            return None
+        count_r = await self._session.execute(
+            select(func.count()).select_from(ChatChecklistItemModel).where(
+                ChatChecklistItemModel.checklist_id == checklist_id
+            )
+        )
+        if int(count_r.scalar_one()) <= 1:
+            return None
+        await self._session.delete(item)
+        await self._session.flush()
+        return msg
 
 
 class HealthRepository:

@@ -101,8 +101,66 @@ async def apply_chat_polls_tables(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_chat_checklists_tables(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_checklists (
+                id BIGSERIAL PRIMARY KEY,
+                message_id BIGINT NOT NULL UNIQUE REFERENCES chat_messages(id) ON DELETE CASCADE,
+                title VARCHAR(255) NOT NULL,
+                others_can_complete BOOLEAN NOT NULL DEFAULT FALSE,
+                others_can_append BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_chat_checklists_message_id ON chat_checklists(message_id)")
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_checklist_items (
+                id BIGSERIAL PRIMARY KEY,
+                checklist_id BIGINT NOT NULL REFERENCES chat_checklists(id) ON DELETE CASCADE,
+                text VARCHAR(200) NOT NULL,
+                position INTEGER NOT NULL,
+                created_by_user_id BIGINT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_checklist_items_checklist_id "
+            "ON chat_checklist_items(checklist_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS chat_checklist_completions (
+                item_id BIGINT PRIMARY KEY REFERENCES chat_checklist_items(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_checklist_completions_user_id "
+            "ON chat_checklist_completions(user_id)"
+        )
+    )
+
+
 REGISTERED_CHAT_SCHEMA_PATCHES: list[tuple[str, PatchFn]] = [
     ("chat_reply_and_kind_columns", apply_chat_reply_and_kind_columns),
     ("chat_reactions_table", apply_chat_reactions_table),
     ("chat_polls_tables", apply_chat_polls_tables),
+    ("chat_checklists_tables", apply_chat_checklists_tables),
 ]

@@ -18,6 +18,11 @@ MEMBER_ROLE_ADMIN = "admin"
 MESSAGE_KIND_TEXT = "text"
 MESSAGE_KIND_POLL = "poll"
 MESSAGE_KIND_QUIZ = "quiz"
+MESSAGE_KIND_CHECKLIST = "checklist"
+
+CHECKLIST_TITLE_MAX = 255
+CHECKLIST_ITEM_MAX = 200
+CHECKLIST_ITEMS_MAX = 30
 
 POLL_KIND_POLL = "poll"
 POLL_KIND_QUIZ = "quiz"
@@ -137,6 +142,42 @@ class ChatPollVoteModel(Base):
     __table_args__ = (
         UniqueConstraint("poll_id", "user_id", "option_index", name="uq_chat_poll_vote"),
     )
+
+
+class ChatChecklistModel(Base):
+    __tablename__ = "chat_checklists"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(CHECKLIST_TITLE_MAX), nullable=False)
+    others_can_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    others_can_append: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatChecklistItemModel(Base):
+    __tablename__ = "chat_checklist_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    checklist_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_checklists.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    text: Mapped[str] = mapped_column(String(CHECKLIST_ITEM_MAX), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatChecklistCompletionModel(Base):
+    __tablename__ = "chat_checklist_completions"
+
+    item_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_checklist_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ChatReadStateModel(Base):

@@ -8,7 +8,15 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import Base, engine
 from infrastructure.schema_patches import REGISTERED_CHAT_SCHEMA_PATCHES
-from presentation.routes import attachments_routes, health, messages_routes, polls_routes, retention_routes, rooms_routes
+from presentation.routes import (
+    attachments_routes,
+    checklists_routes,
+    health,
+    messages_routes,
+    polls_routes,
+    retention_routes,
+    rooms_routes,
+)
 
 CHAT_API_PREFIX = "/api/v1/chat"
 
@@ -46,5 +54,6 @@ app.include_router(health.router)
 app.include_router(rooms_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(messages_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(polls_routes.router, prefix=CHAT_API_PREFIX)
+app.include_router(checklists_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(attachments_routes.router, prefix=CHAT_API_PREFIX)
 app.include_router(retention_routes.router, prefix=CHAT_API_PREFIX)

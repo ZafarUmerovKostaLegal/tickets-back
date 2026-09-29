@@ -68,6 +68,52 @@ class PollOut(BaseModel):
     my_votes: list[int] = Field(default_factory=list, alias="myVotes")
 
 
+class ChecklistTaskOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    text: str
+    completed_by_user_id: int | None = Field(None, alias="completedByUserId")
+    completed_by_me: bool = Field(False, alias="completedByMe")
+
+
+class ChecklistOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    title: str
+    others_can_complete: bool = Field(False, alias="othersCanComplete")
+    others_can_append: bool = Field(False, alias="othersCanAppend")
+    can_toggle: bool = Field(False, alias="canToggle")
+    can_append: bool = Field(False, alias="canAppend")
+    can_remove: bool = Field(False, alias="canRemove")
+    done_count: int = Field(0, alias="doneCount")
+    tasks: list[ChecklistTaskOut] = Field(default_factory=list)
+
+
+class CreateChecklistBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str = Field(..., min_length=1, max_length=255)
+    tasks: list[str] = Field(..., min_length=1, max_length=30)
+    others_can_complete: bool = Field(False, alias="othersCanComplete")
+    others_can_append: bool = Field(False, alias="othersCanAppend")
+
+    @field_validator("tasks")
+    @classmethod
+    def _strip_tasks(cls, v: list[str]) -> list[str]:
+        cleaned = [t.strip() for t in v if t and t.strip()]
+        if not cleaned:
+            raise ValueError("At least 1 task required")
+        return cleaned[:30]
+
+
+class AppendChecklistTaskBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str = Field(..., min_length=1, max_length=200)
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -83,6 +129,7 @@ class MessageOut(BaseModel):
     reply_to: ReplyToOut | None = Field(None, alias="replyTo")
     reactions: list[ReactionCountOut] = Field(default_factory=list)
     poll: PollOut | None = None
+    checklist: ChecklistOut | None = None
 
 
 class RoomMemberOut(BaseModel):
@@ -285,6 +332,44 @@ def poll_to_out(poll, votes: list, *, viewer_id: int | None = None) -> PollOut:
     )
 
 
+def checklist_to_out(
+    checklist,
+    items: list,
+    completions: dict,
+    *,
+    author_user_id: int,
+    viewer_id: int | None = None,
+) -> ChecklistOut:
+    viewer = int(viewer_id) if viewer_id is not None else None
+    is_author = viewer is not None and viewer == int(author_user_id)
+    can_toggle = is_author or bool(checklist.others_can_complete)
+    can_append = is_author or bool(checklist.others_can_append)
+    tasks: list[ChecklistTaskOut] = []
+    done = 0
+    for item in items:
+        completion = completions.get(item.id)
+        completed_by = int(completion.user_id) if completion is not None else None
+        if completed_by is not None:
+            done += 1
+        tasks.append(ChecklistTaskOut(
+            id=item.id,
+            text=item.text,
+            completed_by_user_id=completed_by,
+            completed_by_me=viewer is not None and completed_by == viewer,
+        ))
+    return ChecklistOut(
+        id=checklist.id,
+        title=checklist.title,
+        others_can_complete=checklist.others_can_complete,
+        others_can_append=checklist.others_can_append,
+        can_toggle=can_toggle,
+        can_append=can_append,
+        can_remove=is_author,
+        done_count=done,
+        tasks=tasks,
+    )
+
+
 def message_to_out(
     msg,
     attachments=None,
@@ -293,6 +378,9 @@ def message_to_out(
     reactions: list | None = None,
     poll=None,
     poll_votes: list | None = None,
+    checklist=None,
+    checklist_items: list | None = None,
+    checklist_completions: dict | None = None,
     viewer_id: int | None = None,
 ) -> MessageOut:
     deleted = msg.deleted_at is not None
@@ -300,6 +388,15 @@ def message_to_out(
     poll_out = None
     if poll and not deleted:
         poll_out = poll_to_out(poll, poll_votes or [], viewer_id=viewer_id)
+    checklist_out = None
+    if checklist and not deleted:
+        checklist_out = checklist_to_out(
+            checklist,
+            checklist_items or [],
+            checklist_completions or {},
+            author_user_id=msg.author_user_id,
+            viewer_id=viewer_id,
+        )
     kind = getattr(msg, "message_kind", None) or "text"
     return MessageOut(
         id=msg.id,
@@ -314,6 +411,7 @@ def message_to_out(
         reply_to=reply_to,
         reactions=reactions_to_out(reactions or []),
         poll=poll_out,
+        checklist=checklist_out,
     )
 
 
@@ -325,10 +423,16 @@ def messages_to_out_list(
     polls_by_msg: dict | None = None,
     votes_by_poll: dict | None = None,
     viewer_id: int | None = None,
+    checklists_by_msg: dict | None = None,
+    items_by_checklist: dict | None = None,
+    completions_by_item: dict | None = None,
 ) -> list[MessageOut]:
     rxmap = reactions_by_msg or {}
     pmap = polls_by_msg or {}
     vmap = votes_by_poll or {}
+    cmap = checklists_by_msg or {}
+    imap = items_by_checklist or {}
+    done_map = completions_by_item or {}
     out: list[MessageOut] = []
     for m in items:
         reply_out = None
@@ -339,6 +443,9 @@ def messages_to_out_list(
                 reply_out = reply_to_out(parent)
         poll = pmap.get(m.id)
         poll_votes = vmap.get(poll.id, []) if poll else []
+        checklist = cmap.get(m.id)
+        checklist_items = imap.get(checklist.id, []) if checklist else []
+        checklist_done = {item.id: done_map[item.id] for item in checklist_items if item.id in done_map}
         out.append(message_to_out(
             m,
             atts_by_msg.get(m.id),
@@ -346,6 +453,9 @@ def messages_to_out_list(
             reactions=rxmap.get(m.id),
             poll=poll,
             poll_votes=poll_votes,
+            checklist=checklist,
+            checklist_items=checklist_items,
+            checklist_completions=checklist_done,
             viewer_id=viewer_id,
         ))
     return out
