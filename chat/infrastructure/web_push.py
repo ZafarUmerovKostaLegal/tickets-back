@@ -110,7 +110,7 @@ async def _sender_profile(user_id: int) -> tuple[str, str | None]:
         return "", None
 
 
-def _send_one(subscription: dict[str, Any], payload: str, private_pem: str, subject: str) -> int | None:
+def _send_one(subscription: dict[str, Any], payload: str, private_pem: str, subject: str, topic: str) -> int | None:
     from pywebpush import WebPushException, webpush
 
     try:
@@ -119,14 +119,28 @@ def _send_one(subscription: dict[str, Any], payload: str, private_pem: str, subj
             data=payload,
             vapid_private_key=private_pem,
             vapid_claims={"sub": subject},
+            content_encoding="aes128gcm",
             ttl=60 * 60 * 12,
+            headers={"Urgency": "high", "Topic": topic},
         )
         return None
     except WebPushException as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
         if status in (404, 410):
             return int(status)
-        _log.warning("web push failed status=%s endpoint=%s", status, subscription.get("endpoint", "")[:80])
+        detail = ""
+        if response is not None:
+            try:
+                detail = (response.text or "")[:300]
+            except Exception:
+                detail = ""
+        _log.warning(
+            "web push failed status=%s detail=%s endpoint=%s",
+            status,
+            detail,
+            subscription.get("endpoint", "")[:80],
+        )
         return None
     except Exception as exc:
         _log.warning("web push request failed: %r", exc)
@@ -211,6 +225,7 @@ async def _deliver(
             payload,
             private_pem,
             subject,
+            f"room{int(room_id)}"[:32],
         )
         if status in (404, 410):
             return row.endpoint
