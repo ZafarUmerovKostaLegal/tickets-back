@@ -17,6 +17,17 @@ def _parse_csv_emails(raw: str) -> list[str]:
     return [x.strip() for x in (raw or "").split(",") if x.strip()]
 
 
+# Эти ящики получают обычные заявки на расходы, но не письма «расход партнёра учтён».
+PARTNER_EXPENSE_NOTIFY_EXCLUDE = frozenset({
+    "gtemirova@kostalegal.com",
+    "kyusupova@kostalegal.com",
+})
+
+
+def without_partner_expense_notify_excluded(emails: list[str]) -> list[str]:
+    return [e for e in emails if e.strip().lower() not in PARTNER_EXPENSE_NOTIFY_EXCLUDE]
+
+
 def _dedupe_preserve(emails: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

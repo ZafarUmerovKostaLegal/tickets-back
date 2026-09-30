@@ -1,7 +1,10 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
-from infrastructure.expense_notify_routing import resolve_expense_notify_recipients
+from infrastructure.expense_notify_routing import (
+    resolve_expense_notify_recipients,
+    without_partner_expense_notify_excluded,
+)
 
 
 def _settings(**kwargs) -> SimpleNamespace:
@@ -13,6 +16,16 @@ def _settings(**kwargs) -> SimpleNamespace:
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
+
+
+def test_partner_notify_drops_only_named_mailboxes():
+    recipients = without_partner_expense_notify_excluded([
+        "zumerov@kostalegal.com",
+        "Gtemirova@kostalegal.com",
+        "kyusupova@kostalegal.com",
+        "oidrisova@kostalegal.com",
+    ])
+    assert recipients == ["zumerov@kostalegal.com", "oidrisova@kostalegal.com"]
 
 
 def test_low_limit_routes_to_low_recipients():

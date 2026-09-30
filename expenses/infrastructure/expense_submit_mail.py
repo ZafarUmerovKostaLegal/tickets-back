@@ -18,7 +18,10 @@ from urllib.parse import quote, urlparse, urlunparse, parse_qs, urlencode
 
 import aiosmtplib
 
-from infrastructure.expense_notify_routing import resolve_expense_notify_recipients
+from infrastructure.expense_notify_routing import (
+    resolve_expense_notify_recipients,
+    without_partner_expense_notify_excluded,
+)
 
 if TYPE_CHECKING:
     from infrastructure.config import Settings
@@ -720,13 +723,15 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
             ctx.expense_id,
         )
         return
-    recipients = resolve_expense_notify_recipients(
-        settings,
-        department_id=ctx.department_id,
-        expense_type=ctx.expense_type,
-        project_id=ctx.project_id,
-        is_reimbursable=ctx.is_reimbursable,
-        amount_uzs=ctx.amount_uzs,
+    recipients = without_partner_expense_notify_excluded(
+        resolve_expense_notify_recipients(
+            settings,
+            department_id=ctx.department_id,
+            expense_type=ctx.expense_type,
+            project_id=ctx.project_id,
+            is_reimbursable=ctx.is_reimbursable,
+            amount_uzs=ctx.amount_uzs,
+        ),
     )
     if not recipients:
         _log.warning("expense partner notify: нет получателей (ROUTING / EXPENSE_NOTIFY_TO), skip")
