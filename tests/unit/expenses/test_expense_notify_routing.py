@@ -2,8 +2,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from infrastructure.expense_notify_routing import (
+    recipients_for_expense_notify,
     resolve_expense_notify_recipients,
-    without_partner_expense_notify_excluded,
 )
 
 
@@ -18,13 +18,28 @@ def _settings(**kwargs) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def test_partner_notify_drops_only_named_mailboxes():
-    recipients = without_partner_expense_notify_excluded([
+def test_client_expense_notify_adds_named_mailboxes():
+    recipients = recipients_for_expense_notify(
+        ["zumerov@kostalegal.com", "gtemirova@kostalegal.com"],
+        "client_expense",
+    )
+    assert recipients == [
         "zumerov@kostalegal.com",
-        "Gtemirova@kostalegal.com",
+        "gtemirova@kostalegal.com",
         "kyusupova@kostalegal.com",
-        "oidrisova@kostalegal.com",
-    ])
+    ]
+
+
+def test_other_expense_notify_drops_named_mailboxes():
+    recipients = recipients_for_expense_notify(
+        [
+            "zumerov@kostalegal.com",
+            "Gtemirova@kostalegal.com",
+            "kyusupova@kostalegal.com",
+            "oidrisova@kostalegal.com",
+        ],
+        "partner_expense",
+    )
     assert recipients == ["zumerov@kostalegal.com", "oidrisova@kostalegal.com"]
 
 

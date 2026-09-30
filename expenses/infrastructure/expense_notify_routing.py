@@ -17,15 +17,19 @@ def _parse_csv_emails(raw: str) -> list[str]:
     return [x.strip() for x in (raw or "").split(",") if x.strip()]
 
 
-# Эти ящики получают обычные заявки на расходы, но не письма «расход партнёра учтён».
-PARTNER_EXPENSE_NOTIFY_EXCLUDE = frozenset({
+# Эти ящики получают только письма о клиентских расходах.
+CLIENT_EXPENSE_ONLY_NOTIFY = (
     "gtemirova@kostalegal.com",
     "kyusupova@kostalegal.com",
-})
+)
+_CLIENT_EXPENSE_ONLY_NOTIFY = frozenset(CLIENT_EXPENSE_ONLY_NOTIFY)
 
 
-def without_partner_expense_notify_excluded(emails: list[str]) -> list[str]:
-    return [e for e in emails if e.strip().lower() not in PARTNER_EXPENSE_NOTIFY_EXCLUDE]
+def recipients_for_expense_notify(emails: list[str], expense_type: str | None) -> list[str]:
+    """Клиентский расход — добавить ящики из CLIENT_EXPENSE_ONLY_NOTIFY. Остальные типы — убрать их."""
+    if (expense_type or "").strip() == "client_expense":
+        return _dedupe_preserve([*emails, *CLIENT_EXPENSE_ONLY_NOTIFY])
+    return [e for e in emails if e.strip().lower() not in _CLIENT_EXPENSE_ONLY_NOTIFY]
 
 
 def _dedupe_preserve(emails: list[str]) -> list[str]:
