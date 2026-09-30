@@ -163,25 +163,41 @@ async def get_cbu_rates(
     check_view_role(user)
     origin = (os.getenv("CBU_ORIGIN") or "https://cbu.uz").rstrip("/")
     path = "/ru/arkhiv-kursov-valyut/json"
-    timeout = httpx.Timeout(4.0, connect=3.0)
+    # Сайт ЦБ иногда открывается дольше нескольких секунд. Один запрос на дату,
+    # затем соседние дни только если сервер ответил (выходные). Резерв — если связи нет.
+    timeout = httpx.Timeout(12.0, connect=8.0)
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
+    }
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        network_down = False
-        for back in range(3):
-            if network_down:
+        site_down = False
+        for back in range(4):
+            if site_down:
                 break
             day = date_param - timedelta(days=back)
             url = f"{origin}{path}/all/{day.isoformat()}/"
             try:
-                res = await client.get(url, headers={"Accept": "application/json", "User-Agent": "KostaLegalExpenses/1.0"})
-                if res.status_code >= 400:
-                    continue
-                rows = res.json()
-                if isinstance(rows, list) and rows:
-                    return {"date": date_param.isoformat(), "rows": rows, "source": "cbu"}
+                res = await client.get(url, headers=headers)
             except httpx.HTTPError:
-                network_down = True
+                site_down = True
+                continue
+            if res.status_code == 404:
+                continue
+            if res.status_code >= 400:
+                site_down = True
+                continue
+            try:
+                rows = res.json()
             except Exception:
                 continue
+            if isinstance(rows, dict):
+                rows = rows.get("data") or rows.get("rows") or []
+            if isinstance(rows, list) and rows:
+                return {"date": date_param.isoformat(), "rows": rows, "source": "cbu"}
         try:
             rows = await _market_cbu_rows(client, date_param)
         except Exception as exc:
