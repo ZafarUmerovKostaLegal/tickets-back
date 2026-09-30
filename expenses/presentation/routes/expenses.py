@@ -268,11 +268,15 @@ async def _resolve_partner_user_id(
     return partner_user_id
 
 
-def _validate_partner_expense_date(expense_type: str, expense_date: date) -> None:
-    if not is_partner_expense(expense_type):
-        return
-    if expense_date > date.today():
-        raise HTTPException(status_code=400, detail="Дата расхода партнёра не может быть в будущем")
+def _validate_expense_date(expense_type: str, expense_date: date) -> None:
+    today = date.today()
+    if expense_date > today:
+        raise HTTPException(status_code=400, detail="Дата расхода не может быть в будущем")
+    if (expense_type or "").strip() == "client_expense" and expense_date != today:
+        raise HTTPException(
+            status_code=400,
+            detail="Для расхода за клиента дата должна быть сегодняшней",
+        )
 
 
 def _list_item(
@@ -608,7 +612,7 @@ async def create_expense(
     exchange_rate = body.exchange_rate
     eq = calc_equivalent(amount_uzs, exchange_rate)
     exp_d = body.expense_date
-    _validate_partner_expense_date(body.expense_type, exp_d)
+    _validate_expense_date(body.expense_type, exp_d)
     partner_uid = await _resolve_partner_user_id(
         expense_type=body.expense_type,
         partner_user_id=body.partner_user_id,
@@ -772,7 +776,7 @@ async def update_expense(
     exp_d = row.expense_date
     if "expense_date" in data:
         exp_d = data["expense_date"]
-    _validate_partner_expense_date(eff_type, exp_d)
+    _validate_expense_date(eff_type, exp_d)
     partner_user_id_arg: int | None | object = _MISSING
     if "partner_user_id" in data or "expense_type" in data:
         partner_user_id_arg = eff_partner_uid

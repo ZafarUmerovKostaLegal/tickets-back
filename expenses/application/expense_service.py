@@ -41,6 +41,7 @@ PARTNER_EXPENSE_SUBTYPES = frozenset(
         "partner_meetings_food",
         "partner_shop",
         "partner_misc",
+        "partner_general",
     }
 )
 
