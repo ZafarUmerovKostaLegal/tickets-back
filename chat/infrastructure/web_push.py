@@ -59,19 +59,17 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(padded)
 
 
-def vapid_private_key_pem(raw_b64: str) -> str:
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
+def vapid_private_key_raw(raw_b64: str) -> str:
+    """Chrome's push service accepts the 32-byte raw VAPID key.
 
-    raw = _b64url_decode(raw_b64)
-    if len(raw) != 32:
+    A PEM string is decoded as garbage by py-vapid, the request is never
+    signed, and FCM drops it. Edge's Windows service still showed the
+    local notification, so the failure looked Chrome-only.
+    """
+    cleaned = "".join((raw_b64 or "").split())
+    if len(_b64url_decode(cleaned)) != 32:
         raise ValueError("VAPID private key must be 32 bytes")
-    key = ec.derive_private_key(int.from_bytes(raw, "big"), ec.SECP256R1())
-    return key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode("ascii")
+    return cleaned
 
 
 def _vapid_ready() -> tuple[str, str, str] | None:
@@ -110,18 +108,18 @@ async def _sender_profile(user_id: int) -> tuple[str, str | None]:
         return "", None
 
 
-def _send_one(subscription: dict[str, Any], payload: str, private_pem: str, subject: str, topic: str) -> int | None:
+def _send_one(subscription: dict[str, Any], payload: str, private_key: str, subject: str) -> int | None:
     from pywebpush import WebPushException, webpush
 
     try:
         webpush(
             subscription_info=subscription,
             data=payload,
-            vapid_private_key=private_pem,
+            vapid_private_key=private_key,
             vapid_claims={"sub": subject},
             content_encoding="aes128gcm",
             ttl=60 * 60 * 12,
-            headers={"Urgency": "high", "Topic": topic},
+            headers={"Urgency": "high"},
         )
         return None
     except WebPushException as exc:
@@ -210,7 +208,7 @@ async def _deliver(
         ensure_ascii=False,
     )
     try:
-        private_pem = vapid_private_key_pem(private_key)
+        private_raw = vapid_private_key_raw(private_key)
     except Exception as exc:
         _log.warning("vapid private key is invalid: %r", exc)
         return
@@ -223,9 +221,8 @@ async def _deliver(
                 "keys": {"p256dh": row.p256dh, "auth": row.auth},
             },
             payload,
-            private_pem,
+            private_raw,
             subject,
-            f"room{int(room_id)}"[:32],
         )
         if status in (404, 410):
             return row.endpoint
