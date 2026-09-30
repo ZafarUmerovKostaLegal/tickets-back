@@ -1,6 +1,6 @@
 
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -151,7 +151,11 @@ async def get_cbu_rates(
     date_param: date = Query(..., alias="date"),
     user: dict = Depends(get_current_user),
 ):
-    """Proxy ЦБ РУз JSON so the browser never calls cbu.uz (CORS / 404 spam)."""
+    """Proxy ЦБ РУз JSON so the browser never calls cbu.uz (CORS / 404 spam).
+
+    cbu.uz often hangs from this network. After a short try, a public daily
+    USD table supplies the same date so a backdated expense can still be saved.
+    """
     import os
 
     import httpx
@@ -159,25 +163,66 @@ async def get_cbu_rates(
     check_view_role(user)
     origin = (os.getenv("CBU_ORIGIN") or "https://cbu.uz").rstrip("/")
     path = "/ru/arkhiv-kursov-valyut/json"
-    urls: list[str] = []
-    for back in range(0, 3):
-        d = date.fromordinal(date_param.toordinal() - back)
-        urls.append(f"{origin}{path}/all/{d.isoformat()}/")
-    urls.append(f"{origin}{path}/")
-    last_err: Exception | None = None
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        for url in urls:
+    timeout = httpx.Timeout(4.0, connect=3.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        network_down = False
+        for back in range(3):
+            if network_down:
+                break
+            day = date_param - timedelta(days=back)
+            url = f"{origin}{path}/all/{day.isoformat()}/"
             try:
-                res = await client.get(url, headers={"Accept": "application/json"})
-                res.raise_for_status()
+                res = await client.get(url, headers={"Accept": "application/json", "User-Agent": "KostaLegalExpenses/1.0"})
+                if res.status_code >= 400:
+                    continue
                 rows = res.json()
-                if not isinstance(rows, list) or not rows:
-                    raise ValueError("empty CBU rates list")
-                return {"date": date_param.isoformat(), "rows": rows}
-            except Exception as exc:
-                last_err = exc
+                if isinstance(rows, list) and rows:
+                    return {"date": date_param.isoformat(), "rows": rows, "source": "cbu"}
+            except httpx.HTTPError:
+                network_down = True
+            except Exception:
                 continue
-    raise HTTPException(
-        status_code=502,
-        detail=f"Не удалось загрузить курсы ЦБ РУз на {date_param.isoformat()}: {last_err}",
+        try:
+            rows = await _market_cbu_rows(client, date_param)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не удалось загрузить курс на {date_param.isoformat()}: {exc}",
+            ) from exc
+    return {"date": date_param.isoformat(), "rows": rows, "source": "market"}
+
+
+async def _market_cbu_rows(client, day: date) -> list[dict]:
+    url = (
+        "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@"
+        f"{day.isoformat()}/v1/currencies/usd.min.json"
     )
+    res = await client.get(url, headers={"Accept": "application/json", "User-Agent": "KostaLegalExpenses/1.0"})
+    res.raise_for_status()
+    payload = res.json()
+    usd = payload.get("usd") if isinstance(payload, dict) else None
+    if not isinstance(usd, dict):
+        raise ValueError("пустой ответ резервного курса")
+    uzs = float(usd.get("uzs") or 0)
+    if uzs <= 0:
+        raise ValueError("в резервном курсе нет UZS")
+    date_ru = day.strftime("%d.%m.%Y")
+    rows: list[dict] = [{
+        "id": 1,
+        "Ccy": "USD",
+        "Nominal": "1",
+        "Rate": str(uzs),
+        "Date": date_ru,
+    }]
+    for code in ("EUR", "RUB", "GBP"):
+        per_usd = float(usd.get(code.lower()) or 0)
+        if per_usd <= 0:
+            continue
+        rows.append({
+            "id": len(rows) + 1,
+            "Ccy": code,
+            "Nominal": "1",
+            "Rate": str(uzs / per_usd),
+            "Date": date_ru,
+        })
+    return rows
