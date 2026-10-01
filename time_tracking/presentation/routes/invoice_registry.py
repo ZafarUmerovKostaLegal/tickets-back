@@ -135,6 +135,7 @@ class RegistryRowBody(BaseModel):
     statusNote: str = ""
     advanceFee: str = ""
     balance: str = ""
+    uzbSia: str = ""
 
 
 class RegistryRowsReplaceBody(BaseModel):

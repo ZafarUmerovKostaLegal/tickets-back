@@ -48,6 +48,34 @@ _SYSTEM_STATUS_LABELS = {
 }
 
 
+def _short_registry_details(note: str, descriptions: list[str], *, limit: int = 2) -> str:
+    """Одна-две формулировки вместо полного списка работ по строкам счёта."""
+    brief = " ".join((note or "").split())
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw in descriptions:
+        text = " ".join((raw or "").split())
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(text)
+    if brief and len(brief) <= 140 and not unique:
+        return brief
+    if brief and len(brief) <= 140 and "\n" not in (note or ""):
+        return brief
+    if not unique:
+        return brief[:140]
+    head = unique[:limit]
+    rest = len(unique) - len(head)
+    text = "; ".join(head)
+    if rest > 0:
+        text = f"{text} (+{rest})"
+    return text
+
+
 def _system_status(inv: InvoiceModel) -> str:
     from datetime import date
     from decimal import Decimal
@@ -128,7 +156,7 @@ class InvoiceRegistryRepository:
                 )
             )
         loaded = list((await self._s.execute(stmt)).all())
-        details_by_id: dict[str, str] = {}
+        details_by_id: dict[str, list[str]] = {}
         ids = [inv.id for inv, _name in loaded]
         if ids:
             from infrastructure.models_invoices import InvoiceLineItemModel
@@ -139,11 +167,7 @@ class InvoiceRegistryRepository:
                 .order_by(InvoiceLineItemModel.sort_order.asc())
             )
             for invoice_id, description in (await self._s.execute(line_stmt)).all():
-                text = (description or "").strip()
-                if not text:
-                    continue
-                prev = details_by_id.get(invoice_id, "")
-                details_by_id[invoice_id] = text if not prev else f"{prev}\n{text}"
+                details_by_id.setdefault(invoice_id, []).append(description or "")
         out: list[dict[str, str]] = []
         for index, (inv, client_name) in enumerate(loaded, start=1):
             total = inv.total_amount
@@ -152,11 +176,10 @@ class InvoiceRegistryRepository:
                 balance = float(total or 0) - float(paid or 0)
             except (TypeError, ValueError):
                 balance = 0
-            note = (inv.client_note or "").strip()
-            lines = details_by_id.get(inv.id, "")
-            details = note if note else lines
+            details = _short_registry_details(inv.client_note or "", details_by_id.get(inv.id, []))
             out.append({
                 "id": f"sys-{inv.id}",
+                "invoiceId": str(inv.id),
                 "seqNo": str(index),
                 "billedTo": client_name or "",
                 "currency": (inv.currency or "").strip().upper(),

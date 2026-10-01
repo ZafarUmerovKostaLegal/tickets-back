@@ -57,6 +57,28 @@ def test_system_status_partial_and_overdue():
     assert _system_status(partial_overdue) == "Просрочен"
 
 
+def test_system_details_keep_two_unique_lines():
+    ensure_service_in_path("time_tracking")
+    from infrastructure.repository_invoice_registry import _short_registry_details
+
+    text = _short_registry_details("", [
+        "Drafting",
+        "Drafting",
+        "Document Review",
+        "Emails",
+        "Research",
+    ])
+    assert text == "Drafting; Document Review (+2)"
+
+
+def test_system_details_prefer_a_short_client_note():
+    ensure_service_in_path("time_tracking")
+    from infrastructure.repository_invoice_registry import _short_registry_details
+
+    text = _short_registry_details("Legal services in September 2026", ["Drafting", "Emails"])
+    assert text == "Legal services in September 2026"
+
+
 def test_manual_rows_sort_by_number_not_text():
     ensure_service_in_path("time_tracking")
     from infrastructure.repository_invoice_registry import _seq_sort_key
