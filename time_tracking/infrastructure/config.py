@@ -57,6 +57,18 @@ class Settings(BaseSettings):
         default="oidrisova@kostalegal.com",
         validation_alias="TT_INVOICE_SENT_NOTIFY_TO",
     )
+    notification_push_url: str = Field(
+        default="",
+        validation_alias="NOTIFICATION_PUSH_URL",
+    )
+    ws_internal_secret: str = Field(
+        default="",
+        validation_alias="WS_INTERNAL_SECRET",
+    )
+    frontend_url: str = Field(
+        default="",
+        validation_alias="FRONTEND_URL",
+    )
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -396,8 +396,29 @@ async def send_invoice_route(
     inv = await InvoiceRepository(session).get_with_children(invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Счёт не найден")
+    first_issue = is_first_client_issue(inv.status)
     inv = await send_invoice(session, inv, actor_auth_user_id=actor)
     await session.commit()
+    if first_issue:
+        from infrastructure.config import get_settings
+        from infrastructure.invoice_issued_notify import (
+            is_first_client_issue,
+            notify_invoice_issued_to_accounting,
+        )
+
+        client_name = None
+        if inv.client_id:
+            client = await session.get(TimeManagerClientModel, inv.client_id)
+            if client is not None:
+                client_name = (getattr(client, "name", None) or "").strip() or None
+        await notify_invoice_issued_to_accounting(
+            get_settings(),
+            invoice_id=inv.id,
+            invoice_number=inv.invoice_number or inv.id,
+            client_name=client_name,
+            total_amount=inv.total_amount,
+            currency=inv.currency,
+        )
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
     assert inv2
     return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)

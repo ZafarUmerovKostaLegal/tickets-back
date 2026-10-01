@@ -142,3 +142,67 @@ async def send_invoice_last_page_to_accounting(
         raise
 
     return {"sent": True, "recipients": recipients}
+
+
+async def send_invoice_issued_notice(
+    settings: Settings,
+    *,
+    invoice_number: str,
+    client_name: str | None,
+    amount_label: str,
+    invoice_url: str,
+) -> dict[str, object]:
+    """Письмо, что счёт выставлен клиенту. Без PDF — срабатывает в момент отправки счёта."""
+    if not settings.notify_invoice_sent_accounting:
+        return {"sent": False, "recipients": [], "skippedReason": "disabled"}
+    recipients = _parse_recipients(settings.invoice_sent_notify_to)
+    if not recipients:
+        return {"sent": False, "recipients": [], "skippedReason": "no_recipients"}
+    if not smtp_ready(settings):
+        _log.warning("invoice issued notice: SMTP не настроен, invoice=%s", invoice_number)
+        return {"sent": False, "recipients": recipients, "skippedReason": "smtp_not_configured"}
+    from_addr = (settings.mail_from or settings.smtp_user or "").strip()
+    if not from_addr:
+        return {"sent": False, "recipients": recipients, "skippedReason": "no_from"}
+
+    inv = (invoice_number or "").strip() or "invoice"
+    client = (client_name or "").strip() or "—"
+    amount = (amount_label or "").strip() or "—"
+    link = (invoice_url or "").strip()
+    subject = f"Счёт выставлен клиенту — {inv}"
+    lines = [
+        "Добрый день.",
+        "",
+        f"Клиенту выставлен счёт {inv}.",
+        f"Клиент: {client}.",
+        f"Сумма: {amount}.",
+    ]
+    if link:
+        lines.extend(["", f"Открыть счёт: {link}"])
+    text_body = "\n".join(lines) + "\n"
+    link_html = ""
+    if link:
+        href = html.escape(link, quote=True)
+        link_html = f'<p><a href="{href}">Открыть счёт</a></p>'
+    html_body = (
+        "<p>Добрый день.</p>"
+        f"<p>Клиенту выставлен счёт <strong>{html.escape(inv)}</strong>.</p>"
+        f"<p>Клиент: {html.escape(client)}.<br/>Сумма: {html.escape(amount)}.</p>"
+        f"{link_html}"
+    )
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.smtp_host.strip(),
+        port=int(settings.smtp_port),
+        username=settings.smtp_user.strip(),
+        password=settings.smtp_password,
+        start_tls=bool(settings.smtp_use_tls),
+    )
+    _log.info("invoice issued notice: отправлено to=%s invoice=%s", recipients, inv)
+    return {"sent": True, "recipients": recipients}

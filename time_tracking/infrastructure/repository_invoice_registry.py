@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, extract, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from infrastructure.models import TimeManagerClientModel
+from infrastructure.models_invoices import InvoiceModel
 from infrastructure.models_invoice_registry import (
     InvoiceRegistryArchiveSheetModel,
     InvoiceRegistryRowModel,
@@ -20,6 +22,57 @@ def _str(v: Any) -> str:
     if v is None:
         return ""
     return str(v)
+
+
+def _seq_sort_key(seq: str) -> tuple[int, str]:
+    digits = "".join(ch for ch in (seq or "") if ch.isdigit())
+    return (int(digits) if digits else 10**9, seq or "")
+
+
+def _money_cell(value: Any) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{n:,.2f}"
+
+
+_SYSTEM_STATUS_LABELS = {
+    "draft": "Черновик",
+    "sent": "Отправлен",
+    "viewed": "Просмотрен",
+    "partial_paid": "Частично оплачен",
+    "paid": "Оплачен",
+    "canceled": "Отменён",
+    "overdue": "Просрочен",
+}
+
+
+def _system_status(inv: InvoiceModel) -> str:
+    from datetime import date
+    from decimal import Decimal
+
+    raw = (inv.status or "").strip()
+    if raw == "canceled":
+        return _SYSTEM_STATUS_LABELS["canceled"]
+    try:
+        total = Decimal(str(inv.total_amount or 0))
+        paid = Decimal(str(inv.amount_paid or 0))
+    except Exception:
+        total = Decimal(0)
+        paid = Decimal(0)
+    balance = total - paid
+    if total > 0 and balance <= Decimal("0.009"):
+        key = "paid"
+    elif raw == "paid":
+        key = "paid"
+    elif paid > 0 and balance > 0:
+        key = "partial_paid"
+    else:
+        key = raw or "draft"
+    if key in ("sent", "viewed", "partial_paid") and inv.due_date and inv.due_date < date.today() and balance > 0:
+        key = "overdue"
+    return _SYSTEM_STATUS_LABELS.get(key, key)
 
 
 class InvoiceRegistryRepository:
@@ -44,8 +97,80 @@ class InvoiceRegistryRepository:
                 | InvoiceRegistryRowModel.advance_fee.ilike(like)
                 | InvoiceRegistryRowModel.balance.ilike(like)
             )
-        stmt = stmt.order_by(InvoiceRegistryRowModel.id.asc())
-        return list((await self._s.execute(stmt)).scalars().all())
+        rows = list((await self._s.execute(stmt)).scalars().all())
+        rows.sort(key=lambda row: (_seq_sort_key(row.seq_no), row.id))
+        return rows
+
+    async def count_system_invoices_2026(self) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(InvoiceModel)
+            .where(extract("year", InvoiceModel.issue_date) == 2026)
+        )
+        return int((await self._s.execute(stmt)).scalar_one() or 0)
+
+    async def list_system_invoice_rows_2026(self, q: str | None = None) -> list[dict[str, str]]:
+        stmt = (
+            select(InvoiceModel, TimeManagerClientModel.name)
+            .join(TimeManagerClientModel, TimeManagerClientModel.id == InvoiceModel.client_id)
+            .where(extract("year", InvoiceModel.issue_date) == 2026)
+            .order_by(InvoiceModel.issue_date.asc(), InvoiceModel.invoice_number.asc())
+        )
+        if q and q.strip():
+            like = f"%{q.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    TimeManagerClientModel.name.ilike(like),
+                    InvoiceModel.invoice_number.ilike(like),
+                    InvoiceModel.currency.ilike(like),
+                    InvoiceModel.client_note.ilike(like),
+                    InvoiceModel.status.ilike(like),
+                )
+            )
+        loaded = list((await self._s.execute(stmt)).all())
+        details_by_id: dict[str, str] = {}
+        ids = [inv.id for inv, _name in loaded]
+        if ids:
+            from infrastructure.models_invoices import InvoiceLineItemModel
+
+            line_stmt = (
+                select(InvoiceLineItemModel.invoice_id, InvoiceLineItemModel.description)
+                .where(InvoiceLineItemModel.invoice_id.in_(ids))
+                .order_by(InvoiceLineItemModel.sort_order.asc())
+            )
+            for invoice_id, description in (await self._s.execute(line_stmt)).all():
+                text = (description or "").strip()
+                if not text:
+                    continue
+                prev = details_by_id.get(invoice_id, "")
+                details_by_id[invoice_id] = text if not prev else f"{prev}\n{text}"
+        out: list[dict[str, str]] = []
+        for index, (inv, client_name) in enumerate(loaded, start=1):
+            total = inv.total_amount
+            paid = inv.amount_paid
+            try:
+                balance = float(total or 0) - float(paid or 0)
+            except (TypeError, ValueError):
+                balance = 0
+            note = (inv.client_note or "").strip()
+            lines = details_by_id.get(inv.id, "")
+            details = note if note else lines
+            out.append({
+                "id": f"sys-{inv.id}",
+                "seqNo": str(index),
+                "billedTo": client_name or "",
+                "currency": (inv.currency or "").strip().upper(),
+                "amount": _money_cell(total),
+                "details": details,
+                "partner": "",
+                "issueDate": inv.issue_date.isoformat() if inv.issue_date else "",
+                "dueOrPayment": inv.due_date.isoformat() if inv.due_date else "",
+                "clientNumber": inv.invoice_number or "",
+                "statusNote": _system_status(inv),
+                "advanceFee": "",
+                "balance": _money_cell(balance) if balance > 0.009 else "",
+            })
+        return out
 
     async def count_2026_rows(self) -> int:
         stmt = select(func.count()).select_from(InvoiceRegistryRowModel).where(InvoiceRegistryRowModel.year == 2026)

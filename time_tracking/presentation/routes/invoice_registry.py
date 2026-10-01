@@ -15,8 +15,12 @@ router = APIRouter(prefix="/invoice-registry", tags=["invoice_registry"])
 
 
 ARCHIVE_YEARS: tuple[str, ...] = ("2025", "2024", "2023", "2022", "2021", "2020", "checklist")
+SYSTEM_YEAR = "2026-system"
+MANUAL_2026_SEED = "manual-excel-2026-v1"
+SEED_META_ID = "__seed2026"
 SHEET_NAMES: dict[str, str] = {
     "2026": "Инвойс 2026",
+    SYSTEM_YEAR: "2026 (система)",
     "2025": "Инвойс 2025",
     "2024": "Инвойс 2024",
     "2023": "Инвойс 2023",
@@ -144,10 +148,17 @@ async def list_invoice_registry_years(
 ):
     repo = InvoiceRegistryRepository(session)
     active_count = await repo.count_2026_rows()
+    system_count = await repo.count_system_invoices_2026()
     archive_rows = await repo.list_archive_sheets()
-    archive_count_by_id = {r.year_id: len(_safe_rows_json(r.rows_json)) for r in archive_rows}
+    seed_meta = next((r for r in archive_rows if r.year_id == SEED_META_ID), None)
+    archive_count_by_id = {
+        r.year_id: len(_safe_rows_json(r.rows_json))
+        for r in archive_rows
+        if r.year_id != SEED_META_ID
+    }
     years = [
         {"id": "2026", "sheetName": SHEET_NAMES["2026"], "mode": "active", "rowCount": active_count},
+        {"id": SYSTEM_YEAR, "sheetName": SHEET_NAMES[SYSTEM_YEAR], "mode": "system", "rowCount": system_count},
         *[
             {
                 "id": y,
@@ -158,7 +169,10 @@ async def list_invoice_registry_years(
             for y in ARCHIVE_YEARS
         ],
     ]
-    return {"years": years}
+    return {
+        "years": years,
+        "seedRevision2026": (seed_meta.sheet_name if seed_meta else ""),
+    }
 
 
 def _safe_rows_json(raw: str) -> list[dict[str, Any]]:
@@ -240,6 +254,16 @@ async def get_invoice_registry_sheet(
             "rows": [_row_to_payload(r) for r in rows],
             "statuses": sorted(CANON_STATUSES),
         }
+    if year_id == SYSTEM_YEAR:
+        rows = await repo.list_system_invoice_rows_2026(q=q)
+        return {
+            "year": SYSTEM_YEAR,
+            "sheetName": SHEET_NAMES[SYSTEM_YEAR],
+            "mode": "system",
+            "columns": COL_2026,
+            "rows": rows,
+            "statuses": sorted(CANON_STATUSES),
+        }
     if year_id not in ARCHIVE_YEARS:
         raise HTTPException(status_code=404, detail="Unknown sheet")
     archive = await repo.get_archive_sheet(year_id)
@@ -318,6 +342,7 @@ async def delete_invoice_registry_row_2026(
 async def replace_invoice_registry_rows_2026(
     body: RegistryRowsReplaceBody,
     force: bool = Query(False, description="Allow replacing a non-empty sheet with an empty list"),
+    seed_revision: str | None = Query(None, alias="seedRevision"),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_bearer_user),
 ):
@@ -329,6 +354,9 @@ async def replace_invoice_registry_rows_2026(
             detail="Отказ: пустая замена сотрёт реестр 2026. Передайте force=true для подтверждения.",
         )
     n = await repo.replace_2026_rows([r.model_dump() for r in body.rows], updated_by=int(user.get("id") or 0))
+    revision = (seed_revision or "").strip()
+    if revision:
+        await repo.upsert_archive_sheet(SEED_META_ID, sheet_name=revision, rows=[])
     await session.commit()
     return {"ok": True, "rows": n}
 

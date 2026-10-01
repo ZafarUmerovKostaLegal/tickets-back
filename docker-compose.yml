@@ -618,6 +618,10 @@ services:
       - TT_SMTP_USE_TLS=${TT_SMTP_USE_TLS:-${EXPENSE_SMTP_USE_TLS:-true}}
       - TT_MAIL_FROM=${TT_MAIL_FROM:-${EXPENSE_MAIL_FROM:-}}
       - TT_NOTIFY_PROJECT_ACCESS_ADDED=${TT_NOTIFY_PROJECT_ACCESS_ADDED:-true}
+      - TT_NOTIFY_INVOICE_SENT_ACCOUNTING=${TT_NOTIFY_INVOICE_SENT_ACCOUNTING:-true}
+      - TT_INVOICE_SENT_NOTIFY_TO=${TT_INVOICE_SENT_NOTIFY_TO:-oidrisova@kostalegal.com}
+      - NOTIFICATION_PUSH_URL=${NOTIFICATION_PUSH_URL:-http://gateway:1234/api/v1/notifications/system}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1241/health\", timeout=3)"' ]
       interval: 10s

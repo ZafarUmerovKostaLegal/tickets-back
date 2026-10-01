@@ -1772,6 +1772,9 @@ async def invoice_registry_replace_rows(
     params = {}
     if str(request.query_params.get("force", "")).lower() in ("1", "true", "yes"):
         params["force"] = "true"
+    revision = str(request.query_params.get("seedRevision", "")).strip()
+    if revision:
+        params["seedRevision"] = revision
     return await _tt_json("PUT", "/invoice-registry/2026/rows", json=body, params=params or None, timeout=90.0)
 
 
