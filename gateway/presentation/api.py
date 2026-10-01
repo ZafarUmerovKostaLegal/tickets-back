@@ -30,6 +30,7 @@ from presentation.routes import (
     chat_routes,
     contacts_routes,
     correspondence_routes,
+    hr_routes,
     chat_ws,
     call_schedule_routes,
     smart_home_routes,
@@ -149,6 +150,7 @@ app.include_router(chat_ws.router)
 app.include_router(chat_routes.router)
 app.include_router(contacts_routes.router)
 app.include_router(correspondence_routes.router)
+app.include_router(hr_routes.router)
 app.include_router(call_schedule_routes.router)
 app.include_router(smart_home_routes.router)
 app.include_router(media.router)

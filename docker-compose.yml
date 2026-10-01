@@ -25,6 +25,7 @@ services:
       - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
+      - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
       - AUTH_DATABASE_URL=${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
       - TICKETS_DATABASE_URL=${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
@@ -96,6 +97,8 @@ services:
         condition: service_started
       correspondence:
         condition: service_started
+      hr:
+        condition: service_started
 
   contacts:
     build:
@@ -119,6 +122,27 @@ services:
         condition: service_healthy
       time_tracking:
         condition: service_started
+
+  hr:
+    build:
+      context: .
+      dockerfile: hr/Dockerfile
+    restart: unless-stopped
+    environment:
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - AUTH_SESSION_COOKIE_NAME=${AUTH_SESSION_COOKIE_NAME:-kl_access_token}
+      - DATABASE_URL=${HR_DATABASE_URL:-sqlite+aiosqlite:///./data/hr.db}
+    volumes:
+      - hr_data:/app/data
+    healthcheck:
+      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1250/health\", timeout=3)"' ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      auth:
+        condition: service_healthy
 
   correspondence:
     build:
@@ -859,3 +883,4 @@ volumes:
   correspondence_db_data:
   call_schedule_db_data:
   contacts_data:
+  hr_data:

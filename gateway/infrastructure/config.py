@@ -18,6 +18,7 @@ _DEFAULT_SERVICE_URLS: dict[str, str] = {
     "chat_service_url": "http://chat:1246",
     "contacts_service_url": "http://contacts:1248",
     "correspondence_service_url": "http://correspondence:1249",
+    "hr_service_url": "http://hr:1250",
     "smart_home_service_url": "",
 }
 
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     chat_service_url: str = ""
     contacts_service_url: str = ""
     correspondence_service_url: str = ""
+    hr_service_url: str = ""
     smart_home_service_url: str = ""
     frontend_url: str = ""
 

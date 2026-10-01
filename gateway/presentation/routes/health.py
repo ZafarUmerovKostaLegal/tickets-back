@@ -330,3 +330,39 @@ async def health_smart_home():
             "api_prefix": "/api/v1/smart-home",
         }
     )
+
+
+@router.get("/hr", summary="Проверка HR с gateway")
+async def health_hr():
+    base = (get_settings().hr_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "HR_SERVICE_URL not configured",
+                "hint": "Задайте HR_SERVICE_URL, например http://hr:1250",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "HR unreachable from gateway",
+                "hr_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "HR health failed",
+                "hr_service_url": base,
+                "upstream_status": r.status_code,
+            },
+        )
+    return JSONResponse(content={"status": "ok", "hr": "reachable", "hr_service_url": base})

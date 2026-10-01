@@ -17,6 +17,7 @@ _SERVICE_DIR_NAMES = (
     "call_schedule",
     "vacation",
     "telegram_bot",
+    "hr",
 )
 
 
