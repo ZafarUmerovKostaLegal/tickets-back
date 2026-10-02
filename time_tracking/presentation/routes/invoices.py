@@ -37,6 +37,7 @@ from infrastructure.repository_partner_report_confirmations import (
     PartnerReportConfirmationRepository,
 )
 from presentation.deps import invoice_actor_auth_user_id
+from infrastructure.invoice_issued_notify import is_first_client_issue
 from presentation.schemas_invoices import (
     InvoiceCreateBody,
     InvoiceAccountingLastPageNotifyBody,
@@ -401,10 +402,7 @@ async def send_invoice_route(
     await session.commit()
     if first_issue:
         from infrastructure.config import get_settings
-        from infrastructure.invoice_issued_notify import (
-            is_first_client_issue,
-            notify_invoice_issued_to_accounting,
-        )
+        from infrastructure.invoice_issued_notify import notify_invoice_issued_to_accounting
 
         client_name = None
         if inv.client_id:

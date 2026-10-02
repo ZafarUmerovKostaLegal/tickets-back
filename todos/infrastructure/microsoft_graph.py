@@ -275,6 +275,7 @@ async def create_mail_draft(
     to_name: str | None = None,
     pdf_base64: str | None = None,
     pdf_file_name: str | None = None,
+    logo_png_base64: str | None = None,
 ) -> dict[str, Any]:
     """Create an Outlook draft via Graph (does not send). Returns message with webLink when available."""
     to = (to_email or "").strip()
@@ -299,6 +300,21 @@ async def create_mail_draft(
         "toRecipients": [recipient],
     }
 
+    attachments: list[dict[str, Any]] = []
+    logo_b64 = (logo_png_base64 or "").strip()
+    if logo_b64:
+        if "," in logo_b64 and logo_b64.lower().startswith("data:"):
+            logo_b64 = logo_b64.split(",", 1)[1]
+        if logo_b64:
+            attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": "kosta-legal-logo.png",
+                "contentType": "image/png",
+                "contentBytes": logo_b64,
+                "isInline": True,
+                "contentId": "kosta-legal-logo",
+            })
+
     pdf_b64 = (pdf_base64 or "").strip()
     if pdf_b64:
         # Strip data-URL prefix if the client sent one.
@@ -314,14 +330,14 @@ async def create_mail_draft(
                 "PDF attachment is too large for Outlook draft upload (max ~3 MB). "
                 "Reduce the invoice PDF size or send without embedding."
             )
-        payload["attachments"] = [
-            {
-                "@odata.type": "#microsoft.graph.fileAttachment",
-                "name": fname,
-                "contentType": "application/pdf",
-                "contentBytes": pdf_b64,
-            }
-        ]
+        attachments.append({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": fname,
+            "contentType": "application/pdf",
+            "contentBytes": pdf_b64,
+        })
+    if attachments:
+        payload["attachments"] = attachments
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         r = await client.post(

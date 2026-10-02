@@ -26,6 +26,7 @@ class OutlookMailDraftBody(BaseModel):
     bodyText: str | None = None
     pdfBase64: str | None = None
     pdfFileName: str | None = None
+    logoPngBase64: str | None = None
 
 
 def _outlook_compose_web_link(message_id: str | None, graph_web_link: str | None) -> str | None:
@@ -85,6 +86,7 @@ async def create_outlook_mail_draft(
             body_text=body.bodyText,
             pdf_base64=body.pdfBase64,
             pdf_file_name=body.pdfFileName,
+            logo_png_base64=body.logoPngBase64,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
