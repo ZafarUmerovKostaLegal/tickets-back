@@ -71,32 +71,12 @@ _SYSTEM_STATUS_LABELS = {
 }
 
 
-def _short_registry_details(note: str, descriptions: list[str], *, limit: int = 2) -> str:
-    """Одна-две формулировки вместо полного списка работ по строкам счёта."""
-    brief = " ".join((note or "").split())
-    unique: list[str] = []
-    seen: set[str] = set()
-    for raw in descriptions:
-        text = " ".join((raw or "").split())
-        if not text:
-            continue
-        key = text.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(text)
-    if brief and len(brief) <= 140 and not unique:
-        return brief
-    if brief and len(brief) <= 140 and "\n" not in (note or ""):
-        return brief
-    if not unique:
-        return brief[:140]
-    head = unique[:limit]
-    rest = len(unique) - len(head)
-    text = "; ".join(head)
-    if rest > 0:
-        text = f"{text} (+{rest})"
-    return text
+def _short_registry_details(internal_note: str, *, limit: int = 180) -> str:
+    """Внутреннее примечание счёта, одной строкой. Текст работ из отчёта сюда не попадает."""
+    text = " ".join((internal_note or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _system_status(inv: InvoiceModel) -> str:
@@ -175,11 +155,11 @@ class InvoiceRegistryRepository:
                     InvoiceModel.invoice_number.ilike(like),
                     InvoiceModel.currency.ilike(like),
                     InvoiceModel.client_note.ilike(like),
+                    InvoiceModel.internal_note.ilike(like),
                     InvoiceModel.status.ilike(like),
                 )
             )
         loaded = list((await self._s.execute(stmt)).all())
-        details_by_id: dict[str, list[str]] = {}
         workers_by_invoice: dict[str, list[int]] = {}
         ids = [inv.id for inv, _name in loaded]
         partner_by_worker: dict[int, int] = {}
@@ -189,13 +169,11 @@ class InvoiceRegistryRepository:
             from infrastructure.models_invoices import InvoiceLineItemModel
 
             line_stmt = (
-                select(InvoiceLineItemModel.invoice_id, InvoiceLineItemModel.description, TimeEntryModel.auth_user_id)
+                select(InvoiceLineItemModel.invoice_id, TimeEntryModel.auth_user_id)
                 .outerjoin(TimeEntryModel, TimeEntryModel.id == InvoiceLineItemModel.time_entry_id)
                 .where(InvoiceLineItemModel.invoice_id.in_(ids))
-                .order_by(InvoiceLineItemModel.sort_order.asc())
             )
-            for invoice_id, description, auth_user_id in (await self._s.execute(line_stmt)).all():
-                details_by_id.setdefault(invoice_id, []).append(description or "")
+            for invoice_id, auth_user_id in (await self._s.execute(line_stmt)).all():
                 if auth_user_id is not None:
                     workers_by_invoice.setdefault(invoice_id, []).append(int(auth_user_id))
             team_rows = (
@@ -221,7 +199,7 @@ class InvoiceRegistryRepository:
                 balance = float(total or 0) - float(paid or 0)
             except (TypeError, ValueError):
                 balance = 0
-            details = _short_registry_details(inv.client_note or "", details_by_id.get(inv.id, []))
+            details = _short_registry_details(inv.internal_note or "")
             out.append({
                 "id": f"sys-{inv.id}",
                 "invoiceId": str(inv.id),
