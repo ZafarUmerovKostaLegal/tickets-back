@@ -85,3 +85,15 @@ def test_manual_rows_sort_by_number_not_text():
 
     ordered = sorted(["10", "2", "1", "100", ""], key=_seq_sort_key)
     assert ordered == ["1", "2", "10", "100", ""]
+
+
+def test_registry_partner_codes_lists_each_partner_once():
+    ensure_service_in_path("time_tracking")
+    from infrastructure.repository_invoice_registry import _registry_partner_codes
+
+    label = _registry_partner_codes(
+        [10, 11, 10],
+        {10: 1, 11: 2},
+        {1: "AAA", 2: "vgb"},
+    )
+    assert label == "AAA, vgb"

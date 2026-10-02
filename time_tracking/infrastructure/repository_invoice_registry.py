@@ -24,6 +24,29 @@ def _str(v: Any) -> str:
     return str(v)
 
 
+def _registry_partner_codes(
+    worker_ids: list[int],
+    partner_by_worker: dict[int, int],
+    initials_by_user: dict[int, str | None],
+) -> str:
+    """Partner initials for the people who logged the invoice hours. Several partners stay listed."""
+    codes: list[str] = []
+    seen: set[str] = set()
+    for worker_id in worker_ids:
+        partner_id = partner_by_worker.get(worker_id)
+        if partner_id is None and worker_id in initials_by_user and any(
+            partner == worker_id for partner in partner_by_worker.values()
+        ):
+            partner_id = worker_id
+        raw = (initials_by_user.get(partner_id) or "").strip() if partner_id is not None else ""
+        key = raw.upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        codes.append(raw)
+    return ", ".join(codes)
+
+
 def _seq_sort_key(seq: str) -> tuple[int, str]:
     digits = "".join(ch for ch in (seq or "") if ch.isdigit())
     return (int(digits) if digits else 10**9, seq or "")
@@ -157,17 +180,39 @@ class InvoiceRegistryRepository:
             )
         loaded = list((await self._s.execute(stmt)).all())
         details_by_id: dict[str, list[str]] = {}
+        workers_by_invoice: dict[str, list[int]] = {}
         ids = [inv.id for inv, _name in loaded]
+        partner_by_worker: dict[int, int] = {}
+        initials_by_user: dict[int, str | None] = {}
         if ids:
+            from infrastructure.models import TimeEntryModel, TimeTrackingTeamMemberModel, TimeTrackingTeamModel
             from infrastructure.models_invoices import InvoiceLineItemModel
 
             line_stmt = (
-                select(InvoiceLineItemModel.invoice_id, InvoiceLineItemModel.description)
+                select(InvoiceLineItemModel.invoice_id, InvoiceLineItemModel.description, TimeEntryModel.auth_user_id)
+                .outerjoin(TimeEntryModel, TimeEntryModel.id == InvoiceLineItemModel.time_entry_id)
                 .where(InvoiceLineItemModel.invoice_id.in_(ids))
                 .order_by(InvoiceLineItemModel.sort_order.asc())
             )
-            for invoice_id, description in (await self._s.execute(line_stmt)).all():
+            for invoice_id, description, auth_user_id in (await self._s.execute(line_stmt)).all():
                 details_by_id.setdefault(invoice_id, []).append(description or "")
+                if auth_user_id is not None:
+                    workers_by_invoice.setdefault(invoice_id, []).append(int(auth_user_id))
+            team_rows = (
+                await self._s.execute(
+                    select(TimeTrackingTeamMemberModel.auth_user_id, TimeTrackingTeamModel.partner_auth_user_id)
+                    .join(TimeTrackingTeamModel, TimeTrackingTeamModel.id == TimeTrackingTeamMemberModel.team_id)
+                    .where(TimeTrackingTeamModel.is_archived.is_(False))
+                )
+            ).all()
+            for worker_id, partner_id in team_rows:
+                partner_by_worker.setdefault(int(worker_id), int(partner_id))
+            worker_ids = {uid for group in workers_by_invoice.values() for uid in group}
+            lookup_ids = set(partner_by_worker.values()) | worker_ids
+            if lookup_ids:
+                from application.user_initials import fetch_auth_initials_by_user_id
+
+                initials_by_user = await fetch_auth_initials_by_user_id(sorted(lookup_ids))
         out: list[dict[str, str]] = []
         for index, (inv, client_name) in enumerate(loaded, start=1):
             total = inv.total_amount
@@ -185,7 +230,11 @@ class InvoiceRegistryRepository:
                 "currency": (inv.currency or "").strip().upper(),
                 "amount": _money_cell(total),
                 "details": details,
-                "partner": "",
+                "partner": _registry_partner_codes(
+                    workers_by_invoice.get(inv.id, []),
+                    partner_by_worker,
+                    initials_by_user,
+                ),
                 "issueDate": inv.issue_date.isoformat() if inv.issue_date else "",
                 "dueOrPayment": inv.due_date.isoformat() if inv.due_date else "",
                 "clientNumber": inv.invoice_number or "",
