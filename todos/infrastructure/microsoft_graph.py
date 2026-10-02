@@ -1,5 +1,6 @@
 
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -278,8 +279,8 @@ async def create_mail_draft(
     logo_png_base64: str | None = None,
 ) -> dict[str, Any]:
     """Create an Outlook draft via Graph (does not send). Returns message with webLink when available."""
-    to = (to_email or "").strip()
-    if not to or "@" not in to:
+    addresses = [part.strip() for part in re.split(r"[;,]", to_email or "") if part.strip()]
+    if not addresses or any("@" not in part or " " in part for part in addresses):
         raise ValueError("toEmail is required")
     subj = (subject or "").strip() or "(no subject)"
     html = (body_html or "").strip()
@@ -289,15 +290,18 @@ async def create_mail_draft(
     else:
         body = {"contentType": "Text", "content": text or ""}
 
-    recipient: dict[str, Any] = {"emailAddress": {"address": to}}
     name = (to_name or "").strip()
-    if name:
-        recipient["emailAddress"]["name"] = name
+    recipients: list[dict[str, Any]] = []
+    for index, address in enumerate(addresses):
+        recipient: dict[str, Any] = {"emailAddress": {"address": address}}
+        if name and index == 0 and len(addresses) == 1:
+            recipient["emailAddress"]["name"] = name
+        recipients.append(recipient)
 
     payload: dict[str, Any] = {
         "subject": subj,
         "body": body,
-        "toRecipients": [recipient],
+        "toRecipients": recipients,
     }
 
     attachments: list[dict[str, Any]] = []
