@@ -29,6 +29,7 @@ ALLOWED_EXPENSE_TYPES = frozenset(
         "entertainment",
         "client_expense",
         "partner_expense",
+        "company_expense",
         "other",
     }
 )

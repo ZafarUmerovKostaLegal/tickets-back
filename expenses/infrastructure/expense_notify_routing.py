@@ -26,7 +26,12 @@ _CLIENT_EXPENSE_ONLY_NOTIFY = frozenset(CLIENT_EXPENSE_ONLY_NOTIFY)
 
 
 def recipients_for_expense_notify(emails: list[str], expense_type: str | None) -> list[str]:
-    """Клиентский расход — добавить ящики из CLIENT_EXPENSE_ONLY_NOTIFY. Остальные типы — убрать их."""
+    """Клиентский расход — добавить ящики из CLIENT_EXPENSE_ONLY_NOTIFY. Остальные типы — убрать их.
+    Расход компании видят и согласовывают только три адресата."""
+    if (expense_type or "").strip() == "company_expense":
+        from application.company_expense_access import COMPANY_EXPENSE_ACTOR_EMAILS
+
+        return list(COMPANY_EXPENSE_ACTOR_EMAILS)
     if (expense_type or "").strip() == "client_expense":
         return _dedupe_preserve([*emails, *CLIENT_EXPENSE_ONLY_NOTIFY])
     return [e for e in emails if e.strip().lower() not in _CLIENT_EXPENSE_ONLY_NOTIFY]

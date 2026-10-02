@@ -13,6 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
 from application.cash_ledger import sync_cash_reimbursements
+from application.company_expense_access import (
+    COMPANY_EXPENSE_TYPE,
+    can_act_on_company_expense,
+    can_view_company_expense,
+    is_company_expense,
+)
 from application.expense_service import (
     calc_equivalent,
     is_employee_personal_funds_payout,
@@ -181,8 +187,18 @@ def _can_author_edit(row: ExpenseRequestModel, user_id: int) -> bool:
     return row.created_by_user_id == user_id and row.status in ("draft", "revision_required")
 
 
+def _require_company_expense_actor(user: dict, expense_type: str | None) -> None:
+    if is_company_expense(expense_type) and not can_act_on_company_expense(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Расход компании создают и согласовывают только назначенные сотрудники",
+        )
+
+
 async def _ensure_access(row: ExpenseRequestModel, user: dict) -> None:
     uid_filter = created_by_filter_for_user(user)
+    if is_company_expense(row.expense_type) and not can_view_company_expense(user):
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
     if uid_filter is None:
         return
     if row.created_by_user_id == uid_filter:
@@ -587,6 +603,7 @@ async def list_expenses(
         scope_mode=scope_mode,
         partner_user_id=partner_user_id,
         expense_subtype=expense_subtype,
+        hide_expense_type=None if can_view_company_expense(user) else COMPANY_EXPENSE_TYPE,
     )
     return await _list_with_authors(
         rows,
@@ -607,6 +624,7 @@ async def create_expense(
     session: AsyncSession = Depends(get_session),
 ):
     check_view_role(user)
+    _require_company_expense_actor(user, body.expense_type)
     settings = get_settings()
     amount_uzs = body.amount_uzs
     exchange_rate = body.exchange_rate
@@ -738,6 +756,9 @@ async def update_expense(
         validate_expense_subtype_rules(eff_type, eff_subtype)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _require_company_expense_actor(user, eff_type)
+    if is_company_expense(row.expense_type):
+        _require_company_expense_actor(user, row.expense_type)
 
     try:
         payment_method, reimbursement_card_number = validate_payment_details(
@@ -841,6 +862,7 @@ async def submit_expense(
     row = await repo.get_by_id(expense_id, load_children=True)
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
+    _require_company_expense_actor(user, row.expense_type)
     if row.created_by_user_id != int(user["id"]):
         raise HTTPException(status_code=403, detail="Отправить может только автор")
     if row.status not in ("draft", "revision_required"):
@@ -945,6 +967,7 @@ async def approve_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status == "approved":
         return await _detail_response(row, authorization)
     if row.status != "pending_approval":
@@ -1017,6 +1040,7 @@ async def reject_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status == "rejected":
         return await _detail_response(row, authorization)
     if row.status != "pending_approval":
@@ -1074,6 +1098,7 @@ async def revise_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status != "pending_approval":
         raise HTTPException(
             status_code=409,
@@ -1128,6 +1153,7 @@ async def pay_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status != "approved":
         raise HTTPException(status_code=400, detail="Выплата только для approved")
     personal_payout = is_employee_personal_funds_payout(row.payment_method, row.expense_type)
@@ -1196,6 +1222,7 @@ async def unpay_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status != "paid":
         raise HTTPException(status_code=400, detail="Отмена оплаты только для статуса paid")
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
@@ -1242,6 +1269,7 @@ async def unapprove_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     if row.status != "approved":
         raise HTTPException(status_code=400, detail="Снять согласование можно только у approved")
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
@@ -1285,6 +1313,7 @@ async def close_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     if row.status == "paid":
@@ -1378,6 +1407,7 @@ async def delete_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     _ensure_can_delete(row, user)
     storage_keys = [a.storage_key for a in (row.attachments or []) if a.storage_key]
     ok = await repo.delete_request(expense_id)
@@ -1466,6 +1496,7 @@ async def upload_attachment(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     kind_norm: str | None = None
     if attachment_kind is not None and str(attachment_kind).strip():
         k = str(attachment_kind).strip()
@@ -1573,6 +1604,7 @@ async def delete_attachment(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    _require_company_expense_actor(user, row.expense_type)
     att_row = next((a for a in (row.attachments or []) if a.id == attachment_id), None)
     if not att_row:
         raise HTTPException(status_code=404, detail="Вложение не найдено")

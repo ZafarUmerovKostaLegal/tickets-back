@@ -43,6 +43,18 @@ def test_other_expense_notify_drops_named_mailboxes():
     assert recipients == ["zumerov@kostalegal.com", "oidrisova@kostalegal.com"]
 
 
+def test_company_expense_notify_is_only_three_actors():
+    recipients = recipients_for_expense_notify(
+        ["gtemirova@kostalegal.com", "high@kostalegal.com", "kyusupova@kostalegal.com"],
+        "company_expense",
+    )
+    assert recipients == [
+        "oidrisova@kostalegal.com",
+        "zumerov@kostalegal.com",
+        "aakhmadjonov@kostalegal.com",
+    ]
+
+
 def test_low_limit_routes_to_low_recipients():
     s = _settings()
     to = resolve_expense_notify_recipients(

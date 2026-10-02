@@ -105,6 +105,7 @@ class ExpenseRepository:
         payment_method: str | None = None,
         awaiting_payment: bool = False,
         awaiting_reimbursement: bool = False,
+        hide_expense_type: str | None = None,
     ) -> tuple[list[ExpenseRequestModel], int, Decimal, Decimal]:
         q = select(ExpenseRequestModel)
         cnt = select(func.count()).select_from(ExpenseRequestModel)
@@ -129,6 +130,8 @@ class ExpenseRepository:
                 stmt = stmt.where(ExpenseRequestModel.expense_type == expense_type)
             elif exclude_expense_type and exclude_expense_type.strip():
                 stmt = stmt.where(ExpenseRequestModel.expense_type != exclude_expense_type.strip())
+            if hide_expense_type and hide_expense_type.strip():
+                stmt = stmt.where(ExpenseRequestModel.expense_type != hide_expense_type.strip())
             if partner_user_id is not None:
                 stmt = stmt.where(ExpenseRequestModel.partner_user_id == partner_user_id)
             if expense_subtype and expense_subtype.strip():
