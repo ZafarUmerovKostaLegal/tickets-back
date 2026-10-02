@@ -186,7 +186,12 @@ class InvoiceRegistryRepository:
             for worker_id, partner_id in team_rows:
                 partner_by_worker.setdefault(int(worker_id), int(partner_id))
             worker_ids = {uid for group in workers_by_invoice.values() for uid in group}
-            lookup_ids = set(partner_by_worker.values()) | worker_ids
+            creator_ids = {
+                int(inv.created_by_auth_user_id)
+                for inv, _name in loaded
+                if int(inv.created_by_auth_user_id or 0) > 0
+            }
+            lookup_ids = set(partner_by_worker.values()) | worker_ids | creator_ids
             if lookup_ids:
                 from application.user_initials import fetch_auth_initials_by_user_id
 
@@ -200,6 +205,14 @@ class InvoiceRegistryRepository:
             except (TypeError, ValueError):
                 balance = 0
             details = _short_registry_details(inv.internal_note or "")
+            workers = workers_by_invoice.get(inv.id, [])
+            partner = _registry_partner_codes(workers, partner_by_worker, initials_by_user)
+            if not partner and int(inv.created_by_auth_user_id or 0) > 0:
+                partner = _registry_partner_codes(
+                    [int(inv.created_by_auth_user_id)],
+                    partner_by_worker,
+                    initials_by_user,
+                )
             out.append({
                 "id": f"sys-{inv.id}",
                 "invoiceId": str(inv.id),
@@ -208,11 +221,7 @@ class InvoiceRegistryRepository:
                 "currency": (inv.currency or "").strip().upper(),
                 "amount": _money_cell(total),
                 "details": details,
-                "partner": _registry_partner_codes(
-                    workers_by_invoice.get(inv.id, []),
-                    partner_by_worker,
-                    initials_by_user,
-                ),
+                "partner": partner,
                 "issueDate": inv.issue_date.isoformat() if inv.issue_date else "",
                 "dueOrPayment": inv.due_date.isoformat() if inv.due_date else "",
                 "clientNumber": inv.invoice_number or "",
