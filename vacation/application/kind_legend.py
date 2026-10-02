@@ -14,7 +14,7 @@ class KindLegendEntry(BaseModel):
 
 
                                                                                    
-REQUESTABLE_KIND_CODES: tuple[int, ...] = (1, 3, 5)
+REQUESTABLE_KIND_CODES: tuple[int, ...] = (1, 2, 3, 5)
 
                                                                                     
                                                                                      
