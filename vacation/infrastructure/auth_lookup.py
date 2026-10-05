@@ -74,21 +74,41 @@ async def get_user_public(user_id: int, authorization: str) -> Optional[AuthUser
     return _to_user(r.json())
 
 
+def _unwrap_staff_list(data: object) -> list[dict]:
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        items = data.get("items")
+        if isinstance(items, list):
+            return [x for x in items if isinstance(x, dict)]
+    return []
+
+
 async def list_staff_users(authorization: str) -> list[dict]:
-    """Список пользователей auth для синхронизации графика (нужен Bearer вызывающего)."""
+    """Список сотрудников auth для синхронизации графика (нужен Bearer вызывающего).
+
+    Сначала ``/users/colleagues`` — полный каталог активных сотрудников для любого
+    авторизованного пользователя. Запасной вариант — ``/users`` (каталог с правами).
+    """
     settings = get_settings()
     base = (settings.auth_service_url or "").rstrip("/")
     if not base:
         raise HTTPException(status_code=503, detail="AUTH_SERVICE_URL not configured for vacation")
+    headers = {"Authorization": authorization.strip()}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(f"{base}/users/colleagues", headers=headers)
+            if r.status_code == 200:
+                staff = _unwrap_staff_list(r.json())
+                if staff:
+                    return staff
             r = await client.get(
                 f"{base}/users",
                 params={"include_archived": "false"},
-                headers={"Authorization": authorization.strip()},
+                headers=headers,
             )
     except httpx.RequestError as exc:
-        _log.warning("auth /users unreachable: %r", exc)
+        _log.warning("auth staff list unreachable: %r", exc)
         raise HTTPException(status_code=503, detail="Auth service unavailable") from None
     if r.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -99,10 +119,7 @@ async def list_staff_users(authorization: str) -> list[dict]:
         )
     if r.status_code >= 400:
         raise HTTPException(status_code=503, detail="Auth service error")
-    data = r.json()
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    return []
+    return _unwrap_staff_list(r.json())
 
 
 async def list_partners(authorization: str) -> list[AuthUser]:

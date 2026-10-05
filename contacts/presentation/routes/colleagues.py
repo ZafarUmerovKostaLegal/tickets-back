@@ -29,14 +29,31 @@ def _unwrap_user_list(raw: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _merge_colleague(base: ColleagueOut, extra: ColleagueOut) -> ColleagueOut:
+    """Keep the richer of two rows for the same id (prefer non-empty fields)."""
+    return base.model_copy(update={
+        "email": (base.email or "").strip() or extra.email,
+        "display_name": (base.display_name or "").strip() or extra.display_name,
+        "picture": base.picture or extra.picture,
+        "role": (base.role or "").strip() or extra.role,
+        "position": (base.position or "").strip() or extra.position,
+    })
+
+
 @router.get("", response_model=list[ColleagueOut])
 async def list_colleagues(
     user: dict = Depends(require_colleagues_access),
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ):
     auth_header = (authorization or "").strip()
-    tt_rows_raw = await tt_json("GET", "/users", authorization=auth_header)
-    tt_rows = _unwrap_user_list(tt_rows_raw)
+
+    tt_rows: list[dict[str, Any]] = []
+    try:
+        tt_rows_raw = await tt_json("GET", "/users", authorization=auth_header)
+        tt_rows = _unwrap_user_list(tt_rows_raw)
+    except HTTPException:
+        # Auth directory is the source of truth for the org roster; TT is enrichment.
+        tt_rows = []
 
     auth_rows: list[dict[str, Any]] = []
     try:
@@ -50,29 +67,26 @@ async def list_colleagues(
         auth_rows = []
 
     by_id: dict[int, ColleagueOut] = {}
-    for raw in tt_rows:
-        row = normalize_colleague(raw)
-        if not row or row.is_archived or row.is_blocked or is_hidden_system_user(raw):
-            continue
-        by_id[row.id] = row
 
+    # Auth first: complete active staff directory for any signed-in employee.
     for raw in auth_rows:
         if is_hidden_system_user(raw):
             continue
         row = normalize_colleague(raw)
         if not row or row.is_archived or row.is_blocked:
             continue
+        by_id[row.id] = row
+
+    # TT overlays capacity/manual users and fills any empty fields.
+    for raw in tt_rows:
+        row = normalize_colleague(raw)
+        if not row or row.is_archived or row.is_blocked or is_hidden_system_user(raw):
+            continue
         existing = by_id.get(row.id)
         if existing is None:
             by_id[row.id] = row
             continue
-        by_id[row.id] = existing.model_copy(update={
-            "email": existing.email.strip() or row.email,
-            "display_name": (existing.display_name or "").strip() or row.display_name,
-            "picture": existing.picture or row.picture,
-            "role": (existing.role or "").strip() or row.role,
-            "position": (existing.position or "").strip() or row.position,
-        })
+        by_id[row.id] = _merge_colleague(existing, row)
 
     out = sorted(by_id.values(), key=_employee_label)
     return out
