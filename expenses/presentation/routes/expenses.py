@@ -99,6 +99,7 @@ def _moderation_email_context(
     user: dict,
     *,
     partner_profile: dict | None = None,
+    authorization: str | None = None,
 ) -> ExpenseModerationEmailContext:
     attachments = [
         AttachmentEmailItem(
@@ -132,6 +133,7 @@ def _moderation_email_context(
         partner_user_name=(partner_profile or {}).get("display_name"),
         partner_user_email=(partner_profile or {}).get("email"),
         attachments=attachments,
+        authorization=authorization,
     )
 
 
@@ -690,7 +692,7 @@ async def create_expense(
         if partner_uid is not None:
             partner_profile = await fetch_user_by_id(settings.auth_service_url, authorization, partner_uid)
         await _run_partner_recorded_mail(
-            _moderation_email_context(row, user, partner_profile=partner_profile),
+            _moderation_email_context(row, user, partner_profile=partner_profile, authorization=authorization),
         )
     return await _detail_response(row, authorization)
 
@@ -925,7 +927,7 @@ async def submit_expense(
                 row.partner_user_id,
             )
         await _run_partner_recorded_mail(
-            _moderation_email_context(row, user, partner_profile=partner_profile),
+            _moderation_email_context(row, user, partner_profile=partner_profile, authorization=authorization),
         )
         return await _detail_response(row, authorization)
 
@@ -950,7 +952,7 @@ async def submit_expense(
     )
     await session.commit()
     row = await repo.get_by_id(expense_id, load_children=True)
-    await _run_moderation_mail(_moderation_email_context(row, user))
+    await _run_moderation_mail(_moderation_email_context(row, user, authorization=authorization))
     return await _detail_response(row, authorization)
 
 

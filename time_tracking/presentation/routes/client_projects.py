@@ -351,6 +351,29 @@ async def list_project_participants(
     return ProjectParticipantsListOut.model_validate(payload)
 
 
+@_global_projects_router.get("/projects/{project_id}/ref")
+async def get_project_ref(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Короткий справочник проекта для писем/расходов (имя + клиент)."""
+    repo = ClientProjectRepository(session)
+    row = await repo.get_by_id_global(project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from infrastructure.repositories import ClientRepository
+
+    client = await ClientRepository(session).get_by_id(row.client_id)
+    return {
+        "id": row.id,
+        "name": row.name,
+        "code": row.code,
+        "clientId": row.client_id,
+        "clientName": client.name if client is not None else None,
+        "isArchived": bool(row.is_archived),
+    }
+
+
 @_global_projects_router.get("/projects/{project_id}/expense-categories")
 async def list_expense_categories_for_project(
     project_id: str,

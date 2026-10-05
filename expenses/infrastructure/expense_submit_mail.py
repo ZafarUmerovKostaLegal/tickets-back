@@ -71,6 +71,8 @@ class ExpenseModerationEmailContext:
     attachments: list[AttachmentEmailItem]
     partner_user_name: str | None = None
     partner_user_email: str | None = None
+    authorization: str | None = None
+    project_label: str | None = None
 
 
 def append_url_intent(url: str, param: str, value: str) -> str:
@@ -127,12 +129,49 @@ _PAYMENT_METHOD_LABELS = {
     "card": "Корпоративная карта офиса",
 }
 
+_EXPENSE_TYPE_LABELS = {
+    "transport": "Транспорт",
+    "food": "Питание",
+    "accommodation": "Проживание",
+    "purchase": "Закупка",
+    "services": "Услуги",
+    "entertainment": "Представительские",
+    "client_expense": "За клиента",
+    "partner_expense": "Расход партнёра",
+    "company_expense": "Расход компании",
+    "other": "Прочее",
+}
+
 
 def _format_payment_method(value: str | None) -> str:
     key = (value or "").strip().lower()
-    if not key:
+    return _PAYMENT_METHOD_LABELS.get(key, (value or "").strip() or "—")
+
+
+def _format_expense_type(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
         return "—"
-    return _PAYMENT_METHOD_LABELS.get(key, value or "—")
+    return _EXPENSE_TYPE_LABELS.get(raw, raw)
+
+
+async def _format_project_label(ctx: ExpenseModerationEmailContext) -> str:
+    preset = (ctx.project_label or "").strip()
+    if preset:
+        return preset
+    pid = (ctx.project_id or "").strip()
+    if not pid:
+        return "—"
+    try:
+        from infrastructure.tt_projects import fetch_tt_project_label
+
+        resolved = await fetch_tt_project_label(pid, authorization=ctx.authorization)
+    except Exception:
+        _log.exception("expense mail: project label resolve failed id=%s", pid)
+        resolved = None
+    if resolved:
+        return resolved
+    return pid
 
 
 def _format_money(amount: Decimal | None) -> str:
@@ -437,14 +476,14 @@ async def _send_moderation_message(settings: Settings, ctx: ExpenseModerationEma
 
     reimb = "да" if ctx.is_reimbursable else "нет"
     desc = (ctx.description or "").strip() or "—"
-    et = (ctx.expense_type or "").strip() or "—"
+    et = _format_expense_type(ctx.expense_type)
     sub = (ctx.expense_subtype or "").strip() or "—"
     vendor = (ctx.vendor or "").strip() or "—"
     bp = (ctx.business_purpose or "").strip() or "—"
     comment = (ctx.comment or "").strip() or "—"
     pm = _format_payment_method(ctx.payment_method)
     dept = (ctx.department_id or "").strip() or "—"
-    proj = (ctx.project_id or "").strip() or "—"
+    proj = await _format_project_label(ctx)
 
     safe_desc = html.escape(desc).replace("\n", "<br/>")
     safe_et = html.escape(et)
@@ -753,7 +792,7 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
         partner_line = f"{pn or '—'}" + (f" ({pe})" if pe else "")
 
     desc = (ctx.description or "").strip() or "—"
-    et = (ctx.expense_type or "").strip() or "—"
+    et = _format_expense_type(ctx.expense_type)
     sub = (ctx.expense_subtype or "").strip() or "—"
     vendor = (ctx.vendor or "").strip() or "—"
     expense_date_fmt = _format_date(ctx.expense_date)
@@ -762,7 +801,7 @@ async def notify_partner_expense_recorded(settings: Settings, ctx: ExpenseModera
     eq_fmt = _format_money(ctx.equivalent_amount)
     reimb = "да" if ctx.is_reimbursable else "нет"
     dept = (ctx.department_id or "").strip() or "—"
-    proj = (ctx.project_id or "").strip() or "—"
+    proj = await _format_project_label(ctx)
 
     open_link = _build_open_link(settings, expense_id)
     link_plain = open_link or ""
