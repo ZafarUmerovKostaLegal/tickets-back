@@ -62,8 +62,17 @@ async def list_colleagues(
         row = normalize_colleague(raw)
         if not row or row.is_archived or row.is_blocked:
             continue
-        if row.id not in by_id:
+        existing = by_id.get(row.id)
+        if existing is None:
             by_id[row.id] = row
+            continue
+        by_id[row.id] = existing.model_copy(update={
+            "email": existing.email.strip() or row.email,
+            "display_name": (existing.display_name or "").strip() or row.display_name,
+            "picture": existing.picture or row.picture,
+            "role": (existing.role or "").strip() or row.role,
+            "position": (existing.position or "").strip() or row.position,
+        })
 
     out = sorted(by_id.values(), key=_employee_label)
     return out
