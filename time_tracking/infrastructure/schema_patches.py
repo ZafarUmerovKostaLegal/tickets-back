@@ -288,7 +288,11 @@ async def apply_client_tasks_project_scope_migration(conn: AsyncConnection) -> N
 
 
 async def apply_client_tasks_flat_fee_schema_patch(conn: AsyncConnection) -> None:
-    """Add per-task flat fee billing (e.g. My mehnat registration = 230000 UZS per entry)."""
+    """Add per-task flat fee billing (e.g. My mehnat registration = 230000 UZS per entry).
+
+    Only seeds tasks that still look untouched (hourly + no amount). Never overwrite a
+    project that was switched to employee hourly billing on purpose.
+    """
     await add_columns_if_missing(
         conn,
         "time_tracking_client_tasks",
@@ -306,14 +310,16 @@ async def apply_client_tasks_flat_fee_schema_patch(conn: AsyncConnection) -> Non
                 flat_fee_amount = 230000,
                 flat_fee_currency = 'UZS'
             WHERE lower(trim(name)) = 'my mehnat registration'
-              AND (
-                    billing_mode IS DISTINCT FROM 'flat_fee'
-                 OR flat_fee_amount IS DISTINCT FROM 230000
-                 OR coalesce(flat_fee_currency, '') IS DISTINCT FROM 'UZS'
-              )
+              AND coalesce(billing_mode, 'hourly') = 'hourly'
+              AND flat_fee_amount IS NULL
             """
         )
     )
+
+
+async def apply_client_tasks_mehnat_preserve_hourly_patch(conn: AsyncConnection) -> None:
+    """No-op marker: mehnat flat-fee seed must not reset projects set to hourly billing."""
+    return None
 
 
 async def apply_client_expense_categories_schema_patch(conn: AsyncConnection) -> None:
@@ -1418,6 +1424,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("client_tasks", apply_client_tasks_schema_patch),
     ("client_tasks_project_scope", apply_client_tasks_project_scope_migration),
     ("client_tasks_flat_fee", apply_client_tasks_flat_fee_schema_patch),
+    ("client_tasks_mehnat_preserve_hourly", apply_client_tasks_mehnat_preserve_hourly_patch),
     ("user_project_access", apply_user_project_access_patch),
     ("time_entries_task_id", apply_time_entries_task_id_schema_patch),
     ("time_entries_project_date_index", apply_time_entries_project_date_index_patch),
