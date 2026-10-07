@@ -12,9 +12,9 @@ from infrastructure.upstream_auth_context import merge_upstream_headers
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
 _CHAT_503_HINT = (
-    "Gateway не достучался до микросервиса chat_api. Проверьте: "
-    "1) контейнер chat_api запущен и в сети стека; "
-    "2) CHAT_SERVICE_URL=http://chat_api:1252; "
+    "Gateway не достучался до chat_api (sidecar на localhost:1252). Проверьте: "
+    "1) контейнер chat_api запущен (network_mode=service:gateway); "
+    "2) CHAT_SERVICE_URL=http://127.0.0.1:1252; "
     "3) GET /health/chat"
 )
 
@@ -84,7 +84,7 @@ async def proxy_chat(request: Request, path: str):
             status_code=503,
             content={
                 "detail": "CHAT_SERVICE_URL not configured",
-                "hint": "Задайте CHAT_SERVICE_URL для gateway, например http://chat_api:1252",
+                "hint": "Задайте CHAT_SERVICE_URL=http://127.0.0.1:1252 (chat_api sidecar)",
             },
         )
     url = f"{base}/api/v1/chat/{path}" if path else f"{base}/api/v1/chat"

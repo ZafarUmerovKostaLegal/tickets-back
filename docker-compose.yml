@@ -22,7 +22,8 @@ services:
       - ATTENDANCE_SERVICE_URL=${ATTENDANCE_SERVICE_URL:-http://attendance:1239}
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
-      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat_api:1252}
+      # Sidecar: chat_api shares gateway network → localhost, no Docker DNS needed
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://127.0.0.1:1252}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
@@ -90,8 +91,6 @@ services:
       vacation:
         condition: service_started
       call_schedule:
-        condition: service_started
-      chat_api:
         condition: service_started
       contacts:
         condition: service_started
@@ -322,17 +321,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # App only — starts without waiting for DB. Set CHAT_DISABLE_DB=1 to skip Postgres entirely.
+  # Shares gateway's network namespace (sidecar). Gateway calls http://127.0.0.1:1252.
+  # Bypasses broken Docker DNS for chat_*. chat_db stays on the stack network; chat_api
+  # reaches it via gateway's DNS (hostname chat_db).
   chat_api:
     build:
       context: .
       dockerfile: chat/Dockerfile
     restart: unless-stopped
+    network_mode: "service:gateway"
     environment:
       - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
-      - CHAT_DISABLE_DB=${CHAT_DISABLE_DB:-1}
+      - CHAT_DISABLE_DB=${CHAT_DISABLE_DB:-0}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
-      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
+      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://127.0.0.1:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
       - CHAT_VAPID_PUBLIC_KEY=${CHAT_VAPID_PUBLIC_KEY:-}
       - CHAT_VAPID_PRIVATE_KEY=${CHAT_VAPID_PRIVATE_KEY:-}
@@ -346,7 +348,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 8
-      start_period: 20s
+      start_period: 40s
+    depends_on:
+      gateway:
+        condition: service_started
 
   # Keep running independently — chat history volume untouched.
   chat_db:

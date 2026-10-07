@@ -3,6 +3,7 @@ name: kosta-e2e-stack
 # Subset of docker-compose.yml for CI. `extends` keeps parent depends_on, so
 # every referenced DB/service must be listed here, and gateway/contacts override
 # depends_on so the full prod graph is not required.
+# chat_api in e2e does NOT use network_mode:service:gateway (prod-only sidecar).
 
 services:
   users_db:
@@ -63,12 +64,21 @@ services:
         condition: service_healthy
 
   chat_api:
-    extends:
-      file: docker-compose.yml
-      service: chat_api
+    build:
+      context: .
+      dockerfile: chat/Dockerfile
+    restart: unless-stopped
     environment:
-      CHAT_DISABLE_DB: "0"
-    depends_on: !override
+      - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - CHAT_DISABLE_DB=0
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
+    volumes:
+      - media_storage:/app/media
+    depends_on:
       chat_db:
         condition: service_healthy
       auth:
@@ -84,6 +94,7 @@ services:
       AUTH_SESSION_COOKIE_SECURE: "false"
       ATTENDANCE_RANGE_SNAPSHOT_ENABLED: "false"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      CHAT_SERVICE_URL: http://chat_api:1252
     depends_on: !override
       users_db:
         condition: service_healthy
