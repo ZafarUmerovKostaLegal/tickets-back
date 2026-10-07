@@ -401,11 +401,19 @@ async def health_kosta_daily():
                 "upstream_status": r.status_code,
             },
         )
+    body: dict = {}
+    try:
+        raw = r.json()
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:
+        body = {}
     return JSONResponse(
         content={
             "status": "ok",
             "kosta_daily": "reachable",
             "kosta_daily_service_url": base,
             "api_prefix": "/api/v1/kosta-daily",
+            "database": body.get("database", "unknown"),
         }
     )

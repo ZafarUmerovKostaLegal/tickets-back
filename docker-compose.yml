@@ -148,19 +148,34 @@ services:
       auth:
         condition: service_healthy
 
+  # Same chat_db + media as chat_api; API under /api/v1/kosta-daily/*.
   kosta_daily:
     build:
       context: .
       dockerfile: kosta_daily/Dockerfile
     restart: unless-stopped
     environment:
+      - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - KOSTA_DAILY_DISABLE_DB=${KOSTA_DAILY_DISABLE_DB:-0}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - CHAT_VAPID_PUBLIC_KEY=${CHAT_VAPID_PUBLIC_KEY:-}
+      - CHAT_VAPID_PRIVATE_KEY=${CHAT_VAPID_PRIVATE_KEY:-}
+      - CHAT_VAPID_SUBJECT=${CHAT_VAPID_SUBJECT:-mailto:notifications@kostalegal.com}
+      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
+      - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
+    volumes:
+      - media_storage:/app/media
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1251/health\", timeout=3)"' ]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 20s
+      retries: 8
+      start_period: 30s
+    depends_on:
+      chat_db:
+        condition: service_started
 
   correspondence:
     build:

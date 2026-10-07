@@ -98,7 +98,7 @@ async def proxy_kosta_daily(request: Request, path: str = ""):
     headers = merge_upstream_headers(_request_headers_for_upstream(request))
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
             upstream = await client.request(
                 request.method,
                 upstream_url,
