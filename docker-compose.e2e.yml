@@ -62,10 +62,10 @@ services:
       auth:
         condition: service_healthy
 
-  chat:
+  chat_api:
     extends:
       file: docker-compose.yml
-      service: chat
+      service: chat_api
     depends_on: !override
       chat_db:
         condition: service_healthy
@@ -93,7 +93,7 @@ services:
         condition: service_started
       contacts:
         condition: service_started
-      chat:
+      chat_api:
         condition: service_started
 
 volumes:

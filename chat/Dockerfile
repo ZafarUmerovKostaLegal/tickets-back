@@ -17,9 +17,9 @@ RUN python -c "from pathlib import Path; p=Path('/usr/local/bin/uvicorn'); p.wri
 COPY backend_common ./backend_common
 COPY chat/ ./
 
-EXPOSE 1246
+EXPOSE 1252
 
 RUN chown -R appuser:root /app
 USER appuser
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1246", "--no-access-log", "--log-level", "info"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1252", "--no-access-log", "--log-level", "info"]

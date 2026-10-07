@@ -38,7 +38,7 @@ async def _prepare_database() -> None:
 
 
 async def _prepare_database_forever() -> None:
-    """Never exit the process if DB/DNS is down — restart loops drop Docker DNS for `chat`."""
+    """Never exit the process if DB/DNS is down — restart loops drop Docker DNS for chat_api."""
     delay = 2.0
     while True:
         try:

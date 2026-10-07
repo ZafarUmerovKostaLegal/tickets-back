@@ -22,7 +22,7 @@ services:
       - ATTENDANCE_SERVICE_URL=${ATTENDANCE_SERVICE_URL:-http://attendance:1239}
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
-      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat_api:1252}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
@@ -91,7 +91,7 @@ services:
         condition: service_started
       call_schedule:
         condition: service_started
-      chat:
+      chat_api:
         condition: service_started
       contacts:
         condition: service_started
@@ -322,7 +322,8 @@ services:
       timeout: 5s
       retries: 5
 
-  chat:
+  # Fresh app service (replaces broken chat/chat2). Same Postgres volume chat_db_data — messages kept.
+  chat_api:
     build:
       context: .
       dockerfile: chat/Dockerfile
@@ -339,20 +340,19 @@ services:
       - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
     volumes:
       - media_storage:/app/media
-    networks:
-      - default
     healthcheck:
-      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1246/health\", timeout=3)"' ]
+      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1252/health\", timeout=3)"' ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 90s
+      retries: 8
+      start_period: 60s
     depends_on:
       chat_db:
         condition: service_healthy
       auth:
         condition: service_healthy
 
+  # Unchanged DB — do not recreate volume chat_db_data (preserves chat history).
   chat_db:
     image: postgres:16-alpine
     restart: unless-stopped
