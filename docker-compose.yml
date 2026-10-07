@@ -22,7 +22,7 @@ services:
       - ATTENDANCE_SERVICE_URL=${ATTENDANCE_SERVICE_URL:-http://attendance:1239}
       - VACATION_SERVICE_URL=${VACATION_SERVICE_URL:-http://vacation:1244}
       - CALL_SCHEDULE_SERVICE_URL=${CALL_SCHEDULE_SERVICE_URL:-http://call_schedule:1245}
-      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat2:1251}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat:1246}
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
@@ -91,7 +91,7 @@ services:
         condition: service_started
       call_schedule:
         condition: service_started
-      chat2:
+      chat:
         condition: service_started
       contacts:
         condition: service_started
@@ -341,48 +341,6 @@ services:
       - media_storage:/app/media
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1246/health\", timeout=3)"' ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 90s
-    depends_on:
-      chat_db:
-        condition: service_healthy
-      auth:
-        condition: service_healthy
-
-  # Replacement for the broken `chat` service. Same database and media, different DNS name and port.
-  chat2:
-    build:
-      context: .
-      dockerfile: chat/Dockerfile
-    restart: unless-stopped
-    command:
-      - python
-      - -m
-      - uvicorn
-      - main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "1251"
-      - --no-access-log
-      - --log-level
-      - info
-    environment:
-      - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
-      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
-      - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
-      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
-      - CHAT_VAPID_PUBLIC_KEY=${CHAT_VAPID_PUBLIC_KEY:-}
-      - CHAT_VAPID_PRIVATE_KEY=${CHAT_VAPID_PRIVATE_KEY:-}
-      - CHAT_VAPID_SUBJECT=${CHAT_VAPID_SUBJECT:-mailto:notifications@kostalegal.com}
-      - MEDIA_PATH=${MEDIA_PATH:-/app/media}
-      - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
-    volumes:
-      - media_storage:/app/media
-    healthcheck:
-      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1251/health\", timeout=3)"' ]
       interval: 10s
       timeout: 5s
       retries: 5

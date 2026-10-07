@@ -18,7 +18,18 @@ class HealthResponse(BaseModel):
 
 
 @router.get("", response_model=HealthResponse)
-async def health(session: AsyncSession = Depends(get_session)):
+async def health():
+    """Liveness — no DB. Gateway and Docker healthcheck use this."""
+    return HealthResponse(
+        status="ok",
+        service=get_settings().service_name,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+@router.get("/ready", response_model=HealthResponse)
+async def health_ready(session: AsyncSession = Depends(get_session)):
+    """Readiness — requires a working database connection."""
     ok = await HealthRepository(session).check()
     return HealthResponse(
         status="ok" if ok else "degraded",
