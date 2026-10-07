@@ -3,8 +3,6 @@ name: kosta-e2e-stack
 # Subset of docker-compose.yml for CI. `extends` keeps parent depends_on, so
 # every referenced DB/service must be listed here, and gateway/contacts override
 # depends_on so the full prod graph is not required.
-# chat_api in e2e does NOT use network_mode:service:gateway (prod-only sidecar).
-
 services:
   users_db:
     extends:

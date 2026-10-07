@@ -15,7 +15,7 @@ _DEFAULT_SERVICE_URLS: dict[str, str] = {
     "attendance_service_url": "http://attendance:1239",
     "vacation_service_url": "http://vacation:1244",
     "call_schedule_service_url": "http://call_schedule:1245",
-    "chat_service_url": "http://127.0.0.1:1252",
+    "chat_service_url": "http://chat_api:1252",
     "contacts_service_url": "http://contacts:1248",
     "correspondence_service_url": "http://correspondence:1249",
     "hr_service_url": "http://hr:1250",
