@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,6 +23,7 @@ from presentation.routes import (
 )
 
 CHAT_API_PREFIX = "/api/v1/chat"
+_log = logging.getLogger("chat.startup")
 
 
 async def _prepare_database() -> None:
@@ -34,10 +37,41 @@ async def _prepare_database() -> None:
         )
 
 
+async def _prepare_database_forever() -> None:
+    """Never exit the process if DB/DNS is down — restart loops drop Docker DNS for `chat`."""
+    delay = 2.0
+    while True:
+        try:
+            await connect_with_retry(_prepare_database, attempts=10)
+            _log.info("chat database is ready")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.error(
+                "chat database init failed; HTTP stays up, retrying in %.0fs: %s",
+                delay,
+                exc,
+            )
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, 30.0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await connect_with_retry(_prepare_database)
-    yield
+    task = asyncio.create_task(_prepare_database_forever(), name="chat-db-init")
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(

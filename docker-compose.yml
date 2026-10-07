@@ -339,6 +339,8 @@ services:
       - MAX_FILE_BYTES=${CHAT_MAX_FILE_BYTES:-15728640}
     volumes:
       - media_storage:/app/media
+    networks:
+      - default
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1246/health\", timeout=3)"' ]
       interval: 10s
