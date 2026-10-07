@@ -70,8 +70,21 @@ async def _get_valid_token(
             )
             await session.commit()
             row = await repo.get_by_user_id(user_id)
-        except Exception:
+        except Exception as exc:
+            _log.warning(
+                "Outlook token refresh failed for user_id=%s: %s — reconnect required",
+                user_id,
+                exc,
+            )
             return None
+    access = (row.access_token or "").strip() if row else ""
+    if row and (not access or access.startswith("fernet:v1:")):
+        # Still encrypted blob = wrong/missing OUTLOOK_TOKEN_FERNET_KEY
+        _log.warning(
+            "Outlook token unreadable for user_id=%s (fernet/decrypt) — reconnect required",
+            user_id,
+        )
+        return None
     return row
 
 

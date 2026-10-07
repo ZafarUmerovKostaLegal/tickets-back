@@ -626,8 +626,9 @@ services:
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-${GATEWAY_BASE_URL:-http://localhost:1234}/api/v1/todos/calendar/callback}
-      - CALENDAR_CONNECTED_REDIRECT_URL=${CALENDAR_CONNECTED_REDIRECT_URL:-${FRONTEND_URL:-http://localhost:5173}}
+      # Portainer breaks nested ${A:-${B}} — set absolute URLs in stack env (.env.server).
+      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-}
+      - CALENDAR_CONNECTED_REDIRECT_URL=${CALENDAR_CONNECTED_REDIRECT_URL:-}
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1240/health\", timeout=3)"' ]
       interval: 10s
