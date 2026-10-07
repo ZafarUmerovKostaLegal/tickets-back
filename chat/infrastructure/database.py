@@ -1,13 +1,13 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from infrastructure.config import get_settings
+from infrastructure.config import get_settings, resolve_database_url
 
 
 def make_async_url(url: str) -> str:
     if not url or not url.strip():
         raise RuntimeError(
-            "DATABASE_URL is not set. Set CHAT_DATABASE_URL in .env "
+            "DATABASE_URL is not set. Set CHAT_DATABASE_URL or CHAT_DB_PASSWORD in .env "
             "(e.g. postgresql://chat:chat@chat_db:5432/kosta_chat)."
         )
     if url.startswith("postgresql://"):
@@ -17,7 +17,7 @@ def make_async_url(url: str) -> str:
     raise RuntimeError("DATABASE_URL must be postgresql:// or postgresql+asyncpg://")
 
 
-engine = create_async_engine(make_async_url(get_settings().database_url), echo=False)
+engine = create_async_engine(make_async_url(resolve_database_url(get_settings())), echo=False)
 
 async_session_factory = async_sessionmaker(
     engine,

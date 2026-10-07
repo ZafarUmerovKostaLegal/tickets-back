@@ -328,7 +328,15 @@ services:
       dockerfile: chat/Dockerfile
     restart: unless-stopped
     environment:
+      # chat_db is created with CHAT_DB_PASSWORD. A URL left at chat:chat is ignored
+      # in the app when CHAT_DB_PASSWORD is set (see resolve_database_url).
       - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - CHAT_DATABASE_URL=${CHAT_DATABASE_URL:-}
+      - CHAT_DB_USER=${CHAT_DB_USER:-chat}
+      - CHAT_DB_PASSWORD=${CHAT_DB_PASSWORD:-chat}
+      - CHAT_DB_NAME=${CHAT_DB_NAME:-kosta_chat}
+      - CHAT_DB_HOST=${CHAT_DB_HOST:-chat_db}
+      - CHAT_DB_PORT=${CHAT_DB_PORT:-5432}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
