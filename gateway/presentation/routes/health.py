@@ -408,12 +408,27 @@ async def health_kosta_daily():
             body = raw
     except Exception:
         body = {}
+    db_state = body.get("database", "unknown")
+    if db_state not in ("ready", "disabled"):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Kosta Daily reachable but database not ready",
+                "kosta_daily_service_url": base,
+                "database": db_state,
+                "hint": (
+                    "Проверьте логи kosta_daily (greenlet/DB). "
+                    "KOSTA_DAILY_DISABLE_DB должен быть 0; "
+                    "DATABASE_URL=postgresql://…@chat_db:5432/kosta_chat"
+                ),
+            },
+        )
     return JSONResponse(
         content={
             "status": "ok",
             "kosta_daily": "reachable",
             "kosta_daily_service_url": base,
             "api_prefix": "/api/v1/kosta-daily",
-            "database": body.get("database", "unknown"),
+            "database": db_state,
         }
     )

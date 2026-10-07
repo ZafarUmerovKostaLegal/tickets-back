@@ -10,7 +10,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from infrastructure.config import get_settings
 
-_log = logging.getLogger("chat.database")
+_log = logging.getLogger("kosta_daily.database")
 
 _TRANSIENT_MARKERS = (
     "the database system is starting up",
@@ -21,6 +21,13 @@ _TRANSIENT_MARKERS = (
     "could not translate host name",
     "timeout expired",
     "connection timed out",
+    "could not connect",
+    "connection reset",
+    "server closed the connection",
+    "network is unreachable",
+    "no route to host",
+    "too many clients",
+    "remaining connection slots",
 )
 
 _engine: AsyncEngine | None = None
@@ -35,7 +42,7 @@ class Base(DeclarativeBase):
 def make_async_url(url: str) -> str:
     if not url or not url.strip():
         raise RuntimeError(
-            "DATABASE_URL is not set. Set CHAT_DATABASE_URL in .env "
+            "DATABASE_URL is not set. Set CHAT_DATABASE_URL / DATABASE_URL "
             "(e.g. postgresql://chat:chat@chat_db:5432/kosta_chat)."
         )
     if url.startswith("postgresql://"):
@@ -56,10 +63,17 @@ def is_db_ready() -> bool:
 def get_engine() -> AsyncEngine:
     global _engine, _session_factory
     if is_db_disabled():
-        raise RuntimeError("Chat database is disabled (CHAT_DISABLE_DB=1)")
+        raise RuntimeError("Kosta Daily database is disabled (KOSTA_DAILY_DISABLE_DB=1)")
     if _engine is None:
         url = make_async_url(get_settings().database_url)
-        _engine = create_async_engine(url, echo=False)
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+            connect_args={"timeout": 15},
+        )
         _session_factory = async_sessionmaker(
             _engine,
             class_=AsyncSession,
@@ -76,7 +90,6 @@ def _factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-# Back-compat for code that still imports `engine` — resolve lazily via property-like helper.
 class _EngineProxy:
     def begin(self):
         return get_engine().begin()
@@ -95,9 +108,9 @@ engine = _EngineProxy()
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     if is_db_disabled():
-        raise HTTPException(status_code=503, detail="Chat database temporarily disabled")
+        raise HTTPException(status_code=503, detail="Kosta Daily database temporarily disabled")
     if not is_db_ready():
-        raise HTTPException(status_code=503, detail="Chat database is not ready yet")
+        raise HTTPException(status_code=503, detail="Kosta Daily database is not ready yet")
     async with _factory()() as session:
         yield session
 
@@ -120,7 +133,7 @@ async def connect_with_retry(prepare: Callable[[], Awaitable[None]], *, attempts
             if not is_transient_database_error(exc) or attempt == attempts:
                 raise
             _log.warning(
-                "chat database is not ready (attempt %s/%s): %s",
+                "kosta_daily database is not ready (attempt %s/%s): %s",
                 attempt,
                 attempts,
                 exc,

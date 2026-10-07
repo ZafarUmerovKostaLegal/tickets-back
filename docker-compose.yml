@@ -149,6 +149,7 @@ services:
         condition: service_healthy
 
   # Same chat_db + media as chat_api; API under /api/v1/kosta-daily/*.
+  # Rebuild required after greenlet — without it create_all never finishes → API 503.
   kosta_daily:
     build:
       context: .
@@ -156,7 +157,7 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
-      - KOSTA_DAILY_DISABLE_DB=${KOSTA_DAILY_DISABLE_DB:-0}
+      - KOSTA_DAILY_DISABLE_DB=0
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
@@ -172,10 +173,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 8
-      start_period: 30s
+      start_period: 40s
     depends_on:
       chat_db:
-        condition: service_started
+        condition: service_healthy
 
   correspondence:
     build:

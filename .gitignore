@@ -1,6 +1,8 @@
 docs/
 
 .env
+.env.server
+.env.portainer
 __pycache__
 *.pyc
 .venv

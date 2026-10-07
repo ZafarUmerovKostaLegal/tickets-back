@@ -61,10 +61,10 @@ class Settings(BaseSettings):
         default=15 * 1024 * 1024,
         validation_alias=AliasChoices("CHAT_MAX_FILE_BYTES", "MAX_FILE_BYTES"),
     )
-    # When true, skip DB init entirely (HTTP-only).
+    # Only KOSTA_DAILY_DISABLE_DB — do NOT share CHAT_DISABLE_DB (stack env often =1).
     chat_disable_db: bool = Field(
         default=False,
-        validation_alias=AliasChoices("KOSTA_DAILY_DISABLE_DB", "CHAT_DISABLE_DB"),
+        validation_alias=AliasChoices("KOSTA_DAILY_DISABLE_DB"),
     )
 
     model_config = SettingsConfigDict(
