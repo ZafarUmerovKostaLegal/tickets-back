@@ -366,3 +366,46 @@ async def health_hr():
             },
         )
     return JSONResponse(content={"status": "ok", "hr": "reachable", "hr_service_url": base})
+
+
+@router.get("/kosta-daily", summary="Проверка Kosta Daily с gateway")
+async def health_kosta_daily():
+    base = (get_settings().kosta_daily_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "KOSTA_DAILY_SERVICE_URL not configured",
+                "hint": "Задайте KOSTA_DAILY_SERVICE_URL, например http://kosta_daily:1251",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Kosta Daily unreachable from gateway",
+                "kosta_daily_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Kosta Daily /health not OK",
+                "kosta_daily_service_url": base,
+                "upstream_status": r.status_code,
+            },
+        )
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "kosta_daily": "reachable",
+            "kosta_daily_service_url": base,
+            "api_prefix": "/api/v1/kosta-daily",
+        }
+    )
