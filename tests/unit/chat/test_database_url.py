@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from infrastructure.config import Settings, resolve_database_url
+from infrastructure.database import is_transient_database_error
 
 
 @pytest.mark.unit
@@ -50,3 +51,15 @@ def test_password_with_special_characters_is_encoded():
         chat_db_name="kosta_chat",
     )
     assert resolve_database_url(settings) == "postgresql://chat:p%40ss%3Aword@chat_db:5432/kosta_chat"
+
+
+@pytest.mark.unit
+def test_postgres_still_starting_is_transient():
+    exc = Exception("CannotConnectNowError: the database system is starting up")
+    assert is_transient_database_error(exc) is True
+
+
+@pytest.mark.unit
+def test_wrong_password_is_not_retried():
+    exc = Exception("InvalidPasswordError: password authentication failed")
+    assert is_transient_database_error(exc) is False
