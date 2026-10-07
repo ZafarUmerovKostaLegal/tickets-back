@@ -17,6 +17,8 @@ def _env_files() -> tuple[str, ...]:
 
 
 class Settings(BaseSettings):
+    """DB URL is optional at process start so the container can stay up without Postgres."""
+
     database_url: str = Field(
         default="",
         validation_alias=AliasChoices("DATABASE_URL", "CHAT_DATABASE_URL"),
@@ -55,6 +57,11 @@ class Settings(BaseSettings):
         default=15 * 1024 * 1024,
         validation_alias=AliasChoices("CHAT_MAX_FILE_BYTES", "MAX_FILE_BYTES"),
     )
+    # When true, skip DB init entirely (HTTP-only). Set CHAT_DISABLE_DB=1 to test networking.
+    chat_disable_db: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("CHAT_DISABLE_DB"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=_env_files(),
@@ -62,20 +69,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("database_url", mode="after")
-    @classmethod
-    def _database_url_non_empty(cls, v: str) -> str:
-        if not (v or "").strip():
-            raise ValueError(
-                "Укажите DATABASE_URL или CHAT_DATABASE_URL (см. .env в корне репозитория)."
-            )
-        return v
-
     @field_validator("auth_service_url", mode="before")
     @classmethod
     def _default_auth_url_if_empty(cls, v: object) -> object:
         if v is None or (isinstance(v, str) and not v.strip()):
             return "http://auth:1236"
+        return v
+
+    @field_validator("chat_disable_db", mode="before")
+    @classmethod
+    def _parse_disable_db(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
         return v
 
 

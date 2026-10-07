@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.schema_patch_runner import apply_registered_schema_patches
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
-from infrastructure.database import Base, connect_with_retry, engine
+from infrastructure.database import Base, connect_with_retry, engine, is_db_disabled
 from infrastructure.schema_patches import REGISTERED_CHAT_SCHEMA_PATCHES
 from presentation.routes import (
     attachments_routes,
@@ -38,7 +38,9 @@ async def _prepare_database() -> None:
 
 
 async def _prepare_database_forever() -> None:
-    """Never exit the process if DB/DNS is down — restart loops drop Docker DNS for chat_api."""
+    if is_db_disabled():
+        _log.warning("CHAT_DISABLE_DB=1 — database init skipped; HTTP only")
+        return
     delay = 2.0
     while True:
         try:
@@ -63,6 +65,7 @@ async def _prepare_database_forever() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Bind HTTP immediately; DB is optional / background.
     task = asyncio.create_task(_prepare_database_forever(), name="chat-db-init")
     try:
         yield

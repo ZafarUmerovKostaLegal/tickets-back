@@ -66,6 +66,8 @@ services:
     extends:
       file: docker-compose.yml
       service: chat_api
+    environment:
+      CHAT_DISABLE_DB: "0"
     depends_on: !override
       chat_db:
         condition: service_healthy

@@ -322,7 +322,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Fresh app service (replaces broken chat/chat2). Same Postgres volume chat_db_data — messages kept.
+  # App only — starts without waiting for DB. Set CHAT_DISABLE_DB=1 to skip Postgres entirely.
   chat_api:
     build:
       context: .
@@ -330,6 +330,7 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=${CHAT_DATABASE_URL:-postgresql://chat:chat@chat_db:5432/kosta_chat}
+      - CHAT_DISABLE_DB=${CHAT_DISABLE_DB:-1}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - CHAT_PUSH_URL=${CHAT_PUSH_URL:-http://gateway:1234/api/v1/chat/internal/push}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
@@ -345,14 +346,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 8
-      start_period: 60s
-    depends_on:
-      chat_db:
-        condition: service_healthy
-      auth:
-        condition: service_healthy
+      start_period: 20s
 
-  # Unchanged DB — do not recreate volume chat_db_data (preserves chat history).
+  # Keep running independently — chat history volume untouched.
   chat_db:
     image: postgres:16-alpine
     restart: unless-stopped
