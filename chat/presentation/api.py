@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend_common.schema_patch_runner import apply_registered_schema_patches
 from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
-from infrastructure.database import Base, connect_with_retry, engine
+from infrastructure.database import Base, engine
 from infrastructure.schema_patches import REGISTERED_CHAT_SCHEMA_PATCHES
 from presentation.routes import (
     attachments_routes,
@@ -23,7 +23,8 @@ from presentation.routes import (
 CHAT_API_PREFIX = "/api/v1/chat"
 
 
-async def _prepare_database() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await apply_registered_schema_patches(
@@ -32,11 +33,6 @@ async def _prepare_database() -> None:
             table_name="chat_schema_patch_log",
             log_prefix="chat",
         )
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await connect_with_retry(_prepare_database)
     yield
 
 

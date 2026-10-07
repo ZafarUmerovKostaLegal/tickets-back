@@ -20,4 +20,4 @@ EXPOSE 1240
 RUN chown -R appuser:root /app
 USER appuser
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1240", "--no-access-log", "--log-level", "info"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1240", "--no-access-log", "--log-level", "info"]
