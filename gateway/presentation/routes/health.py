@@ -29,7 +29,7 @@ async def health_chat():
             status_code=503,
             content={
                 "detail": "CHAT_SERVICE_URL not configured",
-                "hint": "Задайте CHAT_SERVICE_URL, например http://chat:1246",
+                "hint": "Задайте CHAT_SERVICE_URL, например http://chat2:1251",
             },
         )
     try:
