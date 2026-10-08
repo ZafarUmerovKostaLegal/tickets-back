@@ -123,6 +123,10 @@ async def _tt_json(
 ):
     response = await _tt_request(method, path, timeout=timeout, **kwargs)
     raise_for_upstream_status(response, "Time tracking service error")
+    # DELETE handlers return 204 with an empty body. Parsing that as JSON
+    # raises and the browser reports it as "Failed to fetch".
+    if response.status_code in (204, 205) or not response.content:
+        return None
     return response.json()
 
 
