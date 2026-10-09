@@ -28,7 +28,6 @@ def test_fx_direct_pair_uzs_to_eur():
     from application.invoice_fx import FxRateBook
 
     book = FxRateBook()
-    # 1 UZS = 0.00008 EUR
     book.add("UZS", "EUR", date(2026, 7, 1), Decimal("0.00008"))
     conv = book.convert(Decimal("12500000"), "UZS", "EUR", date(2026, 7, 15))
     assert conv.fx_rate == Decimal("0.00008")
@@ -40,7 +39,6 @@ def test_fx_cross_via_usd():
     from application.invoice_fx import FxRateBook
 
     book = FxRateBook()
-    # 1 UZS = 0.00008 USD; 1 USD = 0.92 EUR → 1 UZS = 0.0000736 EUR
     book.add("UZS", "USD", date(2026, 1, 1), Decimal("0.00008"))
     book.add("USD", "EUR", date(2026, 1, 1), Decimal("0.92"))
     conv = book.convert(Decimal("12500000"), "UZS", "EUR", date(2026, 6, 1))
@@ -52,7 +50,6 @@ def test_fx_inverse_pair():
     from application.invoice_fx import FxRateBook
 
     book = FxRateBook()
-    # stored as EUR→USD: 1 EUR = 1.1 USD → USD→EUR = 1/1.1
     book.add("EUR", "USD", date(2026, 1, 1), Decimal("1.1"))
     conv = book.convert(Decimal("110"), "USD", "EUR", date(2026, 3, 1))
     assert conv.converted_amount == Decimal("100.0000")
@@ -88,7 +85,6 @@ def test_convert_expense_amount_uzs_invoice_uses_amount_uzs_as_is():
     from application.invoice_fx import FxRateBook, convert_expense_amount
 
     book = FxRateBook()
-    # Different rate than the one used when the expense was booked (~11909.79).
     book.add("USD", "UZS", date(2026, 8, 1), Decimal("12006.39"))
     row = {
         "amount_uzs": 12360000,
@@ -117,7 +113,6 @@ def test_convert_expense_amount_usd_invoice_from_uzs():
     assert conv.source_currency == "UZS"
     assert conv.source_amount == Decimal("12360000.0000")
     assert conv.target_currency == "USD"
-    # Inverse of stored USD→UZS (not the locked equivalent_amount).
     assert conv.converted_amount == Decimal("1037.7456")
 
 

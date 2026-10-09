@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Диагностика 502 Bad Gateway после переноса Docker на новый IP.
 set -euo pipefail
 
 GATEWAY_HOST="${GATEWAY_HOST:-192.168.230.81}"

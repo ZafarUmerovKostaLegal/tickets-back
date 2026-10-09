@@ -66,7 +66,6 @@ def verify_email_action_token(secret: str, token: str) -> dict[str, Any]:
         raise ValueError("Token expired")
     if payload.get("act") not in ("approve", "decline"):
         raise ValueError("Bad action in token")
-    # Ссылки, выпущенные до появления второй ступени, относятся к решению партнёра.
     stage = payload.get("stg") or STAGE_PARTNER
     if stage not in _STAGES:
         raise ValueError("Bad stage in token")

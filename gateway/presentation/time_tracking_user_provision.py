@@ -36,7 +36,6 @@ def _tt_role_from_record(record: dict, *, default_tt_role: str = "user") -> str:
     fallback = (default_tt_role or "").strip()
     if fallback in _TT_ROLES:
         return fallback
-    # Empty / unknown — no TT role (caller may soft-archive; never invent "user").
     return ""
 
 
@@ -205,7 +204,6 @@ async def upsert_time_tracking_user_from_auth_record(
                 )
             return
 
-        # Soft-disable in TT instead of DELETE — preserves time entries, rates, access.
         uid_int = int(uid)
         exists = await _tt_user_exists(uid_int, authorization)
         if not exists:

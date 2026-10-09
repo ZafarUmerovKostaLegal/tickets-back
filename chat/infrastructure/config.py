@@ -57,7 +57,6 @@ class Settings(BaseSettings):
         default=15 * 1024 * 1024,
         validation_alias=AliasChoices("CHAT_MAX_FILE_BYTES", "MAX_FILE_BYTES"),
     )
-    # When true, skip DB init entirely (HTTP-only). Set CHAT_DISABLE_DB=1 to test networking.
     chat_disable_db: bool = Field(
         default=False,
         validation_alias=AliasChoices("CHAT_DISABLE_DB"),

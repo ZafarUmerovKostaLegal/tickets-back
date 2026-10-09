@@ -212,7 +212,6 @@ class CorrespondenceRepository:
             CorrespondenceDocumentModel.direction == "outgoing",
             CorrespondenceDocumentModel.status == "pending_review",
         )
-        # Open incoming not yet acknowledged by the partner.
         incoming = await _count(
             CorrespondenceDocumentModel.direction == "incoming",
             CorrespondenceDocumentModel.status.in_(("new", "progress", "approval")),

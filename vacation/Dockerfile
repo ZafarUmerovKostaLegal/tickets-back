@@ -24,7 +24,6 @@ RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh \
 
 EXPOSE 1244
 
-# Entrypoint starts as root to fix MEDIA_PATH ownership, then drops to appuser.
 USER root
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1244", "--no-access-log", "--log-level", "info"]

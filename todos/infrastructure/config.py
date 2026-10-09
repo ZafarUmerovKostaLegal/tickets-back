@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     microsoft_redirect_uri: str = ""
 
     calendar_connected_redirect_url: str = ""
-    # Optional Fernet key (url-safe base64 32-byte). Unset = plaintext tokens.
     outlook_token_fernet_key: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}

@@ -29,7 +29,6 @@ def test_document_scoped_token_roundtrip():
     )
     assert token.startswith("2.")
     assert "." in token
-    # Compact tokens stay short enough for phone QR scanners.
     assert len(token) < 120
     assert verify_download_token(SECRET, token=token, document_id=DOC) is None
 

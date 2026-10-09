@@ -42,7 +42,6 @@ class _TTLStore:
 
 AUTH_USERS_HINTS_CACHE = _TTLStore(ttl=120.0, max_entries=32)
 PARTNERS_BY_PROJECT_CACHE = _TTLStore(ttl=45.0, max_entries=128)
-# Pending/confirmed list JSON — short TTL so mutates + invalidate stay fresh enough.
 PENDING_LIST_CACHE = _TTLStore(ttl=25.0, max_entries=256)
 CONFIRMED_LIST_CACHE = _TTLStore(ttl=25.0, max_entries=128)
 BADGE_COUNT_CACHE = _TTLStore(ttl=25.0, max_entries=256)

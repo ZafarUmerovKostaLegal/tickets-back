@@ -14,7 +14,7 @@ from infrastructure import models
 from infrastructure import models_reports
 from infrastructure import models_invoices
 from infrastructure import models_invoice_registry
-from infrastructure import models_firm_bank  # noqa: F401 — register ORM metadata
+from infrastructure import models_firm_bank  # noqa: F401
 from infrastructure.schema_patches import REGISTERED_SCHEMA_PATCHES
 from infrastructure.schema_patch_runner import apply_registered_schema_patches
 from application.settings_sync import renormalize_time_entries_to_minute

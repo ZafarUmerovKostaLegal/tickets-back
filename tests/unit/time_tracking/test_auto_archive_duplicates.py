@@ -25,8 +25,6 @@ def _task(name: str):
 
 
 def test_fingerprint_same_content_different_task_card_matches():
-    # Две записи с ОДИНАКОВЫМ названием задачи, но разными карточками (task_id) —
-    # именно их отчёт схлопывает на экране. Отпечаток должен совпасть.
     fp1 = _report_dup_fingerprint(
         _entry(), _task("Document Review"), amount=Decimal("395.00"), currency="EUR"
     )

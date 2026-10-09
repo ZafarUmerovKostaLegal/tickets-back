@@ -10,7 +10,7 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.config import get_settings
 from infrastructure.database import engine, Base
-from infrastructure import models  # noqa: F401 — register ORM tables
+from infrastructure import models  # noqa: F401
 from infrastructure.ingest_poller import start_backfill_background, start_ingest_poller, stop_ingest_poller
 from presentation.routes import health, hikvision, ingest, settings
 
@@ -34,7 +34,6 @@ async def lifespan(app: FastAPI):
                 "ALTER COLUMN explanation_text DROP NOT NULL"
             )
         )
-        # Safety net if create_all raced an older schema without the unique index.
         await conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_camera_event "

@@ -25,7 +25,6 @@ def test_safe_media_path_rejects_prefix_sibling(tmp_path: Path):
     evil = tmp_path / "media_evil"
     evil.mkdir()
     (evil / "leak.txt").write_text("x", encoding="utf-8")
-    # Relative key that resolves outside via crafted join is blocked by resolve+is_relative_to
     assert safe_media_path(media, "../media_evil/leak.txt") is None
     assert not is_path_under_media(media, evil / "leak.txt")
 

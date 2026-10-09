@@ -17,7 +17,7 @@ from datetime import date
 from application.ingest_camera_events import ingest_date_range
 from infrastructure.camera_events_repo import camera_events_time_bounds, count_camera_events
 from infrastructure.database import async_session_factory, engine, Base
-from infrastructure import models  # noqa: F401 — register metadata
+from infrastructure import models  # noqa: F401
 
 
 logging.basicConfig(

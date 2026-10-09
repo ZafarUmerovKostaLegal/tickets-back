@@ -15,8 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend_common ./backend_common
 COPY tickets/ ./
 
-# Очистка всех IT-тикетов (консоль контейнера / Portainer):
-#   python scripts/purge_all_tickets.py --execute --confirm WIPE_ALL_TICKETS
 
 EXPOSE 1235
 

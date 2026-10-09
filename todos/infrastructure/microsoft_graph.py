@@ -45,7 +45,6 @@ def get_authorize_url(state: str, *, force_consent: bool = False) -> str:
         "state": state,
     }
     if force_consent:
-        # Re-consent so Mail.ReadWrite is granted after scope expansion.
         params["prompt"] = "consent"
     base = AUTHORIZE_URL_TEMPLATE.format(tenant=(s.microsoft_tenant_id or "common").strip())
     return f"{base}?{urlencode(params)}"
@@ -321,13 +320,11 @@ async def create_mail_draft(
 
     pdf_b64 = (pdf_base64 or "").strip()
     if pdf_b64:
-        # Strip data-URL prefix if the client sent one.
         if "," in pdf_b64 and pdf_b64.lower().startswith("data:"):
             pdf_b64 = pdf_b64.split(",", 1)[1]
         fname = (pdf_file_name or "invoice.pdf").strip() or "invoice.pdf"
         if not fname.lower().endswith(".pdf"):
             fname = f"{fname}.pdf"
-        # Simple attachments are limited (~3MB). Reject oversized payloads early.
         approx_bytes = int(len(pdf_b64) * 3 / 4)
         if approx_bytes > 3_000_000:
             raise ValueError(
@@ -418,7 +415,6 @@ async def get_mail_draft_delivery_state(
                 )
             r.raise_for_status()
 
-        # Draft id gone: either sent (new id in Sent Items) or discarded.
         subj = (subject or "").strip()
         if not subj:
             return {"state": "missing", "isDraft": None, "sentDateTime": None}
@@ -449,7 +445,6 @@ async def get_mail_draft_delivery_state(
                 or "Outlook mail permission missing. Reconnect Outlook calendar to grant Mail.ReadWrite."
             )
         if sr.status_code >= 400:
-            # Draft gone but Sent Items query failed — keep waiting, do not discard yet.
             return {"state": "missing", "isDraft": None, "sentDateTime": None}
 
         items = (sr.json() or {}).get("value") or []
@@ -460,5 +455,4 @@ async def get_mail_draft_delivery_state(
                 "isDraft": False,
                 "sentDateTime": first.get("sentDateTime"),
             }
-        # Draft deleted/moved; Sent Items not visible yet (or user discarded).
         return {"state": "missing", "isDraft": None, "sentDateTime": None}

@@ -738,7 +738,6 @@ async def get_daily_attendance_report(
     if allowed:
         stored_params["camera_ip"] = ",".join(allowed)
 
-    # Fast path: workday + DB events + mappings + explanations (no live camera / user pulls).
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             workday_r, stored_r, mappings_r, explanations_r = await asyncio.gather(
@@ -780,7 +779,6 @@ async def get_daily_attendance_report(
         events_devices = stored_r.json() or []
     stored_count = sum(len(dev.get("records") or []) for dev in events_devices)
 
-    # Fallback to live cameras only when DB has nothing for this day (e.g. brand-new day before poller).
     if stored_count == 0:
         attendance_params = {
             "date_from": report_day.isoformat(),
@@ -809,8 +807,6 @@ async def get_daily_attendance_report(
     }
     explanations = explanations_r.json() or []
 
-    # Roster: mapped employees (for absences) + everyone who punched this day.
-    # Do NOT include full camera history — that resurfaces people who no longer come.
     roster_by_employee_no = build_range_roster_from_mappings(mappings)
     enrich_roster_from_events(roster_by_employee_no, events_devices)
 
@@ -917,7 +913,6 @@ async def get_period_attendance_report(
         for m in mappings
         if (m.get("camera_employee_no") or "").strip()
     }
-    # Mapped staff (absences) + whoever punched in the period — not full camera history.
     roster_by_employee_no = build_range_roster_from_mappings(mappings)
 
     if app_user_id is not None:
@@ -930,7 +925,6 @@ async def get_period_attendance_report(
             emp: row for emp, row in roster_by_employee_no.items() if emp in keep_emp
         }
         if not roster_by_employee_no and not keep_emp:
-            # No mapping for this user — still allow camera-only period via events below.
             pass
         elif not roster_by_employee_no:
             return {
@@ -988,8 +982,6 @@ async def get_period_attendance_report(
         for it in day_items:
             if app_user_id is not None and it.get("app_user_id") != app_user_id:
                 continue
-            # Without a mapping, don't invent "absent" rows for people who only
-            # punched on other days of the period (or earlier in history).
             if app_user_id is None and not it.get("is_mapped") and it.get("status") == "absent":
                 continue
             items.append({"date": day_str, **it})

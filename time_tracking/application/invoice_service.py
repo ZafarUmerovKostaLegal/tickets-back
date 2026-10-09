@@ -245,7 +245,6 @@ def format_invoice_total_display(amount: Decimal, currency: str) -> str:
     n = _money4(Decimal(str(amount)))
     neg = n < 0
     abs_n = abs(n)
-    # en-US thousands separators, always 2 dp
     whole, frac = f"{abs_n:.2f}".split(".")
     parts: list[str] = []
     while whole:
@@ -283,14 +282,12 @@ def resolve_billed_amount_fx_display(
     rate_date = last_day_of_previous_month(issue_date)
     try:
         if inv_ccy == "USD":
-            # Show UZS equivalent in parentheses; rate 1 USD = … UZS
             conv = convert_or_same(book, billed, "USD", "UZS", rate_date)
             quote_ccy = "UZS"
             rate = conv.fx_rate
             alt_fmt = format_invoice_total_display(conv.converted_amount, quote_ccy)
             source_ccy, source_amt = "USD", billed
         else:
-            # Invoice in foreign/UZS → show USD equivalent; rate 1 USD = … inv_ccy
             to_usd = convert_or_same(book, billed, inv_ccy, "USD", rate_date)
             rate = book.rate("USD", inv_ccy, rate_date)
             quote_ccy = inv_ccy
@@ -365,7 +362,6 @@ async def _apply_billed_amount_override(
     await session.refresh(inv, ["line_items"])
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     for ln in list(inv.line_items or []):
-        # Preserve worked amount in invoice currency (KPI «наработано») before zeroing totals.
         worked = _money4(Decimal(str(ln.line_total or 0)))
         if worked > 0:
             ln.source_amount = worked
@@ -493,9 +489,6 @@ async def create_invoice(
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
         skip_partner_gate = bool(getattr(proj, "skip_partner_invoice_confirmation", False))
 
-    # Prefer project currency → explicit request → client currency → USD.
-    # Project billing currency is the source of truth for project invoices.
-    # Custom billedAmount may override with an explicit request currency.
     project_ccy = (
         (getattr(proj, "currency", None) or "").strip().upper()[:10] if proj is not None else ""
     )
@@ -508,7 +501,6 @@ async def create_invoice(
     if not cur:
         cur = "USD"
 
-    # Pure custom-billed invoice: amount only, no report lines to close.
     pure_billed = (
         billed_amount is not None
         and not time_entry_ids
@@ -600,7 +592,6 @@ async def create_invoice(
             exclude_invoiced=True,
             partner_confirmation_request_id=partner_confirmation_request_id,
         )
-        # Source of truth for partner-confirmed invoices: the confirmed report snapshot lines.
         time_entry_ids = list(partner_preview.time_entry_ids)
         expense_ids = list(partner_preview.expense_ids)
         if not partner_preview.lines and partner_preview.package_fee_subtotal <= 0:
@@ -612,8 +603,6 @@ async def create_invoice(
     tp = tax_percent if tax_percent is not None else client.tax_percent
     t2p = tax2_percent if tax2_percent is not None else client.tax2_percent
     dp = discount_percent if discount_percent is not None else client.discount_percent
-    # Confirmed-report invoices: total = report (pre-tax). Front may send taxPercent: 0
-    # while omitting discountPercent — that used to keep the client's discount and zero the bill.
     if partner_preview is not None:
         if tax_percent is None:
             tp = Decimal(0)
@@ -627,8 +616,6 @@ async def create_invoice(
         billed_override = _money4(Decimal(str(billed_amount)))
         if billed_override <= 0:
             raise HTTPException(status_code=400, detail="billedAmount must be greater than 0")
-        # Billed override is the client-facing total — keep tax/discount off so total == billed.
-        # Time/expense ids are optional: without them this is a pure manual billed invoice.
         tp = Decimal(0)
         t2p = Decimal(0)
         dp = Decimal(0)
@@ -681,7 +668,6 @@ async def create_invoice(
     sort_order = 0
     package_months: set[tuple[str, int, int]] = set()
     if partner_preview is not None:
-        # Materialize exact preview lines (already minute+2dp hours, Excel-aligned money).
         for ln in partner_preview.lines:
             if ln.time_entry_id:
                 other = await repo.time_entry_on_active_invoice(ln.time_entry_id, exclude_invoice_id=inv.id)
@@ -902,7 +888,6 @@ async def _ensure_package_fee_lines(
 ) -> int:
     if not package_months:
         return sort_order
-    # Must eager-load under AsyncSession — lazy inv.line_items → greenlet_spawn (xd2s).
     await session.refresh(inv, ["line_items"])
     line_items = list(inv.line_items or [])
     existing = {
@@ -1038,7 +1023,6 @@ async def _append_time_line(
         y, m = month_key(entry.work_date)
         month_hit = (str(entry.project_id), y, m)
         all_entries = await _load_project_billable_entries(session, str(entry.project_id))
-        # Need all tasks for package exclusion of flat-fee entries on this project
         task_ids = {str(e.task_id) for e in all_entries if e.task_id}
         full_tasks: dict[str, Any] = {}
         if task_ids:
@@ -1051,7 +1035,6 @@ async def _append_time_line(
         _, splits = compute_entry_splits_for_project_entries(proj, all_entries, tasks_map=full_tasks)
         split = splits.get(str(entry.id))
         if not split or split.overage_hours <= 0:
-            # Covered by package — no time line; package fee still owed for the month.
             return False, month_hit
         qty = invoice_hours_for_billing(split.overage_hours)
         if qty <= 0:
@@ -1142,7 +1125,6 @@ async def _append_expense_line(
         raise HTTPException(status_code=400, detail="Расход привязан к другому проекту")
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     book = fx_book or await load_fx_rate_book(session)
-    # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
     conv = convert_expense_amount(book, row, inv_ccy, inv.issue_date)
     desc = str(row.get("description") or "Расход")[:2000]
     repo.add_line(
@@ -1882,8 +1864,6 @@ async def list_unbilled_time_entries(
         qty = invoice_hours_for_billing(h)
         task = tasks_map.get(str(e.task_id)) if e.task_id else None
         split = package_splits.get(str(e.id)) if package_splits else None
-        # Сумма — ровно как в подтверждённом отчёте (amount_to_pay): точные часы
-        # с учётом пакета, без предварительного округления часов до 2 знаков.
         amt, cur = billable_amount_respecting_package(
             h,
             bool(e.is_billable),

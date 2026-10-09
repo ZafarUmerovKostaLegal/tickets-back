@@ -13,7 +13,6 @@ from infrastructure.config import get_settings
 
 RANGE_REPORT_HTTP_TIMEOUT_SEC = 300.0
 
-# Matches attendance camera_events_repo day bounds (Asia/Tashkent / UTC+5).
 _OFFICE_TZ = timezone(timedelta(hours=5))
 
 
@@ -63,7 +62,6 @@ def _parse_event_dt(raw: Optional[str]) -> Optional[datetime]:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        # Hikvision local wall time without offset → treat as office TZ.
         return dt.replace(tzinfo=_OFFICE_TZ)
     return dt.astimezone(_OFFICE_TZ)
 
@@ -362,7 +360,6 @@ def index_first_events_by_day(
             day_key = local.date().isoformat()
             if day_key < start_s or day_key > end_s:
                 continue
-            # Dedupe key: same employee + same local minute counts as one unique punch.
             unique_key = local.strftime("%Y-%m-%d %H:%M")
             day_bucket = result.setdefault(day_key, {})
             prev = day_bucket.get(employee_no)

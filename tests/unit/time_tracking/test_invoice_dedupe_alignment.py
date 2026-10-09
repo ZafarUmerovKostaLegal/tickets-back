@@ -13,9 +13,7 @@ def test_round_decimal_hours_to_minute_matches_fe():
     ensure_service_in_path("time_tracking")
     from application.time_rounding import round_decimal_hours_to_minute
 
-    # 1.008 * 60 = 60.48 → round 60 → 1.0 hour
     assert float(round_decimal_hours_to_minute(Decimal("1.008"))) == 1.0
-    # 1.009 * 60 = 60.54 → round 61 → 61/60
     assert abs(float(round_decimal_hours_to_minute(Decimal("1.009"))) - (61 / 60)) < 1e-6
     assert float(round_decimal_hours_to_minute(Decimal("21.183333"))) == 21.183333
 
@@ -82,7 +80,6 @@ def test_ignore_amount_collapses_near_duplicate_entries():
 
     a = entry("a", "2.5")
     b = entry("b", "2.5")
-    # Different billable amounts would normally keep both if rates differ; ignore_amount collapses.
     projects = {"proj-1": SimpleNamespace(currency="EUR")}
     rates: dict = {}
     kept, dropped = deduplicate_entries_for_report(

@@ -154,7 +154,6 @@ async def _send_smtp(
     host = settings.smtp_host.strip()
     port = int(settings.smtp_port)
     use_tls = bool(settings.smtp_use_tls)
-    # Port 465 = implicit TLS; 587 = STARTTLS (same as expenses).
     if port == 465:
         await aiosmtplib.send(
             msg,

@@ -192,7 +192,6 @@ async def get_uninvoiced_report(
         uninv_h = uninv_hours_by_project.get(pid, _ZERO)
         uninv_exp = uninv_expenses_by_project.get(pid, _ZERO)
         uninv_amt = uninv_amount_by_project.get(pid, _ZERO)
-        # Accrue unpaid package fees for months with uninvoiced time on hour_package projects.
         pkg_fee = _ZERO
         for s in package_months_by_project.get(pid or "", []):
             pkg_fee += _d(s.package_fee)

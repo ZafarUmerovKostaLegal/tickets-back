@@ -381,7 +381,6 @@ async def replace_invoice_registry_archive_sheet(
             detail=f"Отказ: пустая замена сотрёт архив {year_id}. Передайте force=true для подтверждения.",
         )
     rows_payload = [r.model_dump(exclude_none=True) for r in body.rows]
-    # Keep stable ids for archive rows.
     for idx, row in enumerate(rows_payload, start=1):
         rid = str(row.get("id") or "").strip()
         if not rid:

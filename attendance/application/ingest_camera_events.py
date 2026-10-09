@@ -22,7 +22,6 @@ def parse_event_time(raw: str | None) -> datetime | None:
     if not s:
         return None
     s = s.replace("Z", "+00:00")
-    # Hikvision sometimes returns "2026-01-15T08:30:00" without offset
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:

@@ -110,8 +110,6 @@ def _row_duplicate_fingerprint(
     wd = (work_date or "").strip()[:10]
     if len(wd) != 10:
         return None
-    # Сравниваем задачу по ИМЕНИ (а не по task_id): ловим дубли с разными карточками
-    # задачи, но одинаковым названием — их отчёт схлопывает.
     task_key = _norm_text(_pick_str(d, "taskName", "task_name"))
     note = normalize_note_for_duplicate_key(
         _pick_str(d, "note", "notes", "description"),
@@ -253,7 +251,7 @@ def _is_included_billable_time_row(row: ReportSnapshotRowModel, d: dict[str, Any
 def _within_period(wd: str, date_from: date, date_to: date) -> bool:
     s = (wd or "").strip()[:10]
     if not s:
-        return True  # без даты не можем отфильтровать — включаем
+        return True
     try:
         d = date.fromisoformat(s)
     except ValueError:
@@ -301,7 +299,6 @@ async def build_invoice_preview_from_snapshot_rows(
     proj = await cpr.get_by_id_global(pid)
     project_ccy = _norm_ccy(getattr(proj, "currency", None) or "USD")
 
-    # 1. Собираем строки времени строго из снимка (frozen + overrides).
     raw_time: list[dict[str, Any]] = []
     saw_entry_rows = False
     linked_candidate_ids: list[str] = []
@@ -328,10 +325,6 @@ async def build_invoice_preview_from_snapshot_rows(
         if hours <= 0:
             continue
         rate2 = _round2(rate)
-        # Сумма строки — ровно как в подтверждённом отчёте: сначала берём
-        # замороженный `amountToPay` (он посчитан от точных часов, напр. 2:38 × 150 = 395.00),
-        # и только при его отсутствии считаем от точных часов. НЕ округляем часы до 2 знаков —
-        # иначе суммы расходятся с отчётом (394.50 против 395.00).
         amount = _pick_num(d, "amountToPay", "amount_to_pay", "amount", "lineTotal", "line_total")
         if amount is None or amount <= 0:
             amount = hours * rate
@@ -364,12 +357,10 @@ async def build_invoice_preview_from_snapshot_rows(
         )
 
     if not saw_entry_rows:
-        # Минимальный снимок без детализации — источника истины нет.
         return None
 
     repo = InvoiceRepository(session)
 
-    # Drop snapshot lines whose live time entry was deleted or voided after confirmation.
     if linked_candidate_ids:
         uniq_ids = list(dict.fromkeys(linked_candidate_ids))
         live_status: dict[str, Any] = {}
@@ -396,7 +387,6 @@ async def build_invoice_preview_from_snapshot_rows(
                 if not r["time_entry_id"] or r["time_entry_id"] not in missing_or_voided
             ]
 
-    # Дедуп по time_entry_id + исключение уже выставленных записей.
     linked_ids = [r["time_entry_id"] for r in raw_time if r["time_entry_id"]]
     invoiced: set[str] = set()
     if exclude_invoiced and linked_ids:
@@ -406,8 +396,7 @@ async def build_invoice_preview_from_snapshot_rows(
     time_ids: list[str] = []
     seen_ids: set[str] = set()
     seen_fp: set[str] = set()
-    # Near-dup fingerprints: keep canonical fp set and also check near-note match via stored list
-    seen_fp_meta: list[tuple[str, str]] = []  # (meta_without_note, note)
+    seen_fp_meta: list[tuple[str, str]] = []
     dropped_dupes = 0
     time_sub = _ZERO
     for r in raw_time:
@@ -416,14 +405,11 @@ async def build_invoice_preview_from_snapshot_rows(
             if te in seen_ids or te in invoiced:
                 continue
             seen_ids.add(te)
-        # Схлопываем дубли по «отпечатку» (дата+сотрудник+задача+заметка+часы+сумма),
-        # как это делает просмотр отчёта. Иначе замороженные в снимке дубли попадают в счёт.
         fp = r.get("fingerprint")
         if fp:
             if fp in seen_fp:
                 dropped_dupes += 1
                 continue
-            # Near-duplicate notes with same meta
             parts = str(fp).split("\x1f")
             if len(parts) >= 8:
                 note = parts[4]
@@ -462,7 +448,6 @@ async def build_invoice_preview_from_snapshot_rows(
             time_ids.append(te)
         time_sub += conv.converted_amount
 
-    # 2. Расходы (reimbursable) — не входят в снимок отчёта, берём за период как раньше.
     expense_ids: list[str] = []
     expense_sub = _ZERO
     exp_rows = await _fetch_expense_report_data(date_from, date_to, None, [pid])
@@ -481,7 +466,6 @@ async def build_invoice_preview_from_snapshot_rows(
         eid = str(r["id"])
         if eid in exp_invoiced:
             continue
-        # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
         conv = convert_expense_amount(book, r, inv_ccy, on_date)
         _record_fx(fx_used, conv)
         desc = str(r.get("description") or "Расход")[:2000]

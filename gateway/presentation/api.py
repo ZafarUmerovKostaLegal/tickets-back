@@ -98,7 +98,6 @@ _CORS_PRIVATE_ORIGIN_REGEX = (
     r")(:\d+)?$"
 )
 
-# Always allow any https://*.kostalegal.com — required for SPA credentials: include.
 _CORS_KOSTALEGAL_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*kostalegal\.com$"
 
 

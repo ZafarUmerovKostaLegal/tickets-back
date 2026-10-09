@@ -145,7 +145,6 @@ async def list_time_entries(
     await _ensure_user(session, auth_user_id)
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="Параметр to не может быть раньше from")
-    # Защита от неограниченных окон: иначе один запрос тянет слишком много строк.
     if (date_to - date_from).days > 366:
         raise HTTPException(
             status_code=400,
@@ -237,7 +236,6 @@ async def patch_time_entry(
             status_code=400,
             detail="Запись снята с учёта менеджером и не может быть изменена",
         )
-    # Scope color is a report annotation — allow updating it even in a closed week.
     scope_color_only = set(patch.keys()) <= {"scope_color"}
     if not scope_color_only:
         await _raise_if_work_date_is_closed(
@@ -279,9 +277,6 @@ async def patch_time_entry(
             )
             if new_norm != row_norm_project_id and "task_id" not in patch:
                 project_changed_clears_task = True
-        # Do not re-check the existing project as "open": archiving/closing a project
-        # must not block edits to historical entries that already belong to it.
-        # Closed-project checks apply only when assigning/changing project_id (above).
 
         eff_proj = patch["project_id"] if "project_id" in patch else row.project_id
         if project_changed_clears_task:

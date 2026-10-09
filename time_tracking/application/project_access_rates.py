@@ -30,7 +30,6 @@ async def validate_hourly_rates_for_project_access(
         if project_uses_shared_billable(row):
             continue
         rates = await hr.list_by_user_and_kind(auth_user_id, "billable")
-        # Same resolution as report/invoice amounts (incl. other-project legacy fallback).
         if pick_billable_rate_for_entry(
             on_date,
             rates,

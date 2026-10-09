@@ -244,7 +244,6 @@ class PartnerReportConfirmationRepository:
             )
         )
         await self._s.flush()
-        # Сбрасываем кэш relationship у заявки, если она уже была загружена с подписями.
         req = await self.get_request_by_id(rid, load_signatures=False)
         if req is not None:
             self._s.expire(req, ["signatures", "status", "updated_at"])
@@ -433,8 +432,6 @@ class PartnerReportConfirmationRepository:
             q = q.where(
                 ReportPartnerConfirmationRequestModel.review_priority == review_priority
             )
-        # Сортировка red → yellow → green, внутри — старше выше; точный порядок
-        # после visibility-фильтра всё равно пересчитывается в сервисе.
         priority_rank = case(
             (ReportPartnerConfirmationRequestModel.review_priority == "red", 0),
             (ReportPartnerConfirmationRequestModel.review_priority == "yellow", 1),
@@ -617,7 +614,6 @@ class PartnerReportConfirmationRepository:
             str(rid): int(cnt or 0)
             for rid, cnt in (await self._s.execute(count_q)).all()
         }
-        # Последний комментарий: max(created_at) per request
         last_subq = (
             select(
                 ReportPartnerConfirmationCommentModel.request_id.label("rid"),

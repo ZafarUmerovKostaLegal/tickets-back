@@ -42,12 +42,10 @@ def _outlook_compose_web_link(message_id: str | None, graph_web_link: str | None
     link = (graph_web_link or "").strip()
     if not link:
         return None
-    # Convert read deeplink → compose when Graph only gave webLink.
     if "/deeplink/read/" in link:
         return link.replace("/deeplink/read/", "/deeplink/compose/", 1)
     if "/deeplink/compose/" in link:
         return link
-    # Try to extract ItemID from query and rebuild.
     try:
         parsed = urlparse(link)
         qs = parse_qs(parsed.query)

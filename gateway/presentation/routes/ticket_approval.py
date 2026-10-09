@@ -35,7 +35,7 @@ async def fetch_auth_user_public(
     user_id: int,
 ) -> dict | None:
     """Load public user profile via auth service (Bearer header or session cookie)."""
-    del settings  # reserved for callers; auth base comes from auth_service_request
+    del settings
     token = access_token_from_request(request, authorization)
     if not token:
         _log.warning("ticket partner lookup skipped: no access token user_id=%s", user_id)

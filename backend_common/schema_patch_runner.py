@@ -32,7 +32,6 @@ async def ensure_patch_log_table(
     table_name: str = DEFAULT_PATCH_LOG_TABLE,
 ) -> None:
     tbl = _safe_table(table_name)
-    # Identifier validated; bind params cannot substitute table names in DDL.
     ddl = (
         "CREATE TABLE IF NOT EXISTS "
         + tbl

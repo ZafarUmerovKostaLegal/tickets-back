@@ -51,9 +51,6 @@ from application.services.reports._base import (
 
 TIME_GROUP_OPTIONS = frozenset({"clients", "projects", "tasks", "team"})
 
-# Do not use sqlalchemy.orm.load_only on TimeEntryModel in this module.
-# Deferred columns + AsyncSession cause greenlet_spawn / await_only (xd2s)
-# when helpers touch fields outside the allowlist (e.g. rounded_hours in dedupe).
 
 
 MAX_ENTRY_LOG_ROWS = 100_000
@@ -535,7 +532,6 @@ async def get_time_report(
         date_to=date_to,
         tasks_map=tasks_map,
     )
-    # Second pass: same fingerprint as report-preview FE (package-aware amount + minute hours).
     if package_splits:
         entries, dropped2 = deduplicate_entries_for_report(
             entries,
@@ -688,7 +684,6 @@ async def get_time_report(
     for pid, summaries in package_months_by_project.items():
         p = projects_map.get(pid)
         for s in summaries:
-            # Attach overage amounts from entry splits in range
             oa = _ZERO
             for e in entries:
                 if str(e.project_id) != pid:

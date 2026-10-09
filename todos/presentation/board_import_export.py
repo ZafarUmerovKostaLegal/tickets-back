@@ -31,7 +31,6 @@ COLUMN_COLORS = (
     "#6b7280",
 )
 
-# Trello named colors → approx hex used in our UI
 _TRELLO_LABEL_COLORS: dict[str, str] = {
     "green": "#059669",
     "yellow": "#ca8a04",
@@ -330,7 +329,6 @@ def detect_and_normalize_import(payload: Any) -> dict[str, Any]:
         raise BoardImportError("JSON root must be an object")
     fmt = str(payload.get("format") or "").strip().lower()
     if fmt == EXPORT_FORMAT or "columns" in payload or isinstance(payload.get("board"), dict):
-        # native / BoardOut-like
         if "lists" in payload and "cards" in payload and "columns" not in payload and not isinstance(
             payload.get("board"), dict
         ):
@@ -410,7 +408,6 @@ async def import_normalized_board(
                     continue
                 lid = label_id_by_key.get(key)
                 if lid is None:
-                    # ensure board label exists
                     row = TodoBoardLabelModel(
                         board_id=board.id,
                         title=str(lab["title"])[:200],

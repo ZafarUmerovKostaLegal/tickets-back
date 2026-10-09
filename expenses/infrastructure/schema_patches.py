@@ -32,7 +32,6 @@ async def apply_expense_approved_by_user_id(conn: AsyncConnection) -> None:
             "ON expense_requests (approved_by_user_id)"
         )
     )
-    # Backfill from the latest transition into «approved» (skip sentinel user id 0 from email links).
     await conn.execute(
         text(
             """

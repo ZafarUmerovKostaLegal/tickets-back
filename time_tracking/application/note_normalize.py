@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Keep in sync with FE INVOICE_DESCRIPTION_TASK_PREFIXES.
 KNOWN_TASK_PREFIXES: tuple[str, ...] = tuple(
     sorted(
         (
@@ -47,7 +46,6 @@ def _is_safe_prefix_boundary(after: str) -> bool:
     ch = after[0]
     if ch.isspace() or ch in ":\n.—–-":
         return True
-    # Glued Harvest-style: "Document ReviewЗаконодательство"
     if ord(ch) > 127:
         return True
     if ch.isupper():

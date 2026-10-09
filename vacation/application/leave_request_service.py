@@ -31,7 +31,6 @@ from infrastructure.pdf_generation import render_leave_request_pdf
 
 _log = logging.getLogger("vacation.leave_request")
 _ANNUAL_KIND = KIND_BY_KEY["annual_vacation"]
-# Версия шаблона заявления. 1 — в шапке всегда управляющий партнёр фирмы.
 LEAVE_PDF_DOC_VERSION = 1
 
 
@@ -172,7 +171,6 @@ async def render_and_attach_pdf(
         session.add(req)
         await session.flush()
     except OSError as e:
-        # Keep the leave request; email can still attach in-memory PDF.
         _log.exception("PDF leave request not stored on disk: %s", e)
     return pdf_bytes
 

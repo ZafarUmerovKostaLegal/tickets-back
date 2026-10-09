@@ -62,7 +62,7 @@ class FxConversion:
     source_amount: Decimal
     source_currency: str
     target_currency: str
-    fx_rate: Decimal  # 1 source = fx_rate target
+    fx_rate: Decimal
     converted_amount: Decimal
 
     def as_dict(self) -> dict[str, Any]:
@@ -119,7 +119,6 @@ class FxRateBook:
         inv = self._lookup_direct(b, a, on_date)
         if inv is not None and inv > 0:
             return (Decimal(1) / inv).quantize(_Q8, rounding=ROUND_HALF_UP)
-        # Cross via USD
         if a != "USD" and b != "USD":
             a_usd = self._lookup_direct(a, "USD", on_date)
             if a_usd is None:
@@ -237,7 +236,6 @@ def fx_pairs_for_conversion(from_ccy: str, to_ccy: str) -> list[tuple[str, str]]
         pairs.extend([("USD", a), (a, "USD"), ("USD", b), (b, "USD")])
     if a == "UZS" or b == "UZS" or a != "USD" or b != "USD":
         pairs.extend([("USD", "UZS"), ("UZS", "USD")])
-    # de-dupe preserving order
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str]] = []
     for p in pairs:
@@ -376,7 +374,6 @@ async def seed_cbu_fx_rates_for_date(session: AsyncSession, on_date: date) -> in
     for ccy, uzs_per_unit in uzs_per.items():
         if ccy == "UZS" or uzs_per_unit <= 0:
             continue
-        # 1 CCY = uzs_per_unit UZS
         await _upsert_fx_pair(session, ccy, "UZS", on_date, uzs_per_unit)
         await _upsert_fx_pair(
             session,
@@ -386,10 +383,8 @@ async def seed_cbu_fx_rates_for_date(session: AsyncSession, on_date: date) -> in
             (Decimal(1) / uzs_per_unit).quantize(_Q8, rounding=ROUND_HALF_UP),
         )
         written += 2
-        # Also store CCY↔USD via cross when not USD
         if ccy != "USD":
             uzs_usd = uzs_per["USD"]
-            # 1 CCY = uzs_per_unit/uzs_usd USD
             ccy_usd = (uzs_per_unit / uzs_usd).quantize(_Q8, rounding=ROUND_HALF_UP)
             if ccy_usd > 0:
                 await _upsert_fx_pair(session, ccy, "USD", on_date, ccy_usd)

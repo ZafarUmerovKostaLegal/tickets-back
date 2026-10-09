@@ -44,7 +44,6 @@ async def test_invalidate_for_project_covering_date_query_and_reset():
     session = AsyncMock()
     repo = PartnerReportConfirmationRepository(session)
 
-    # First execute → select ids; second → delete signatures
     id_result = MagicMock()
     id_result.scalars.return_value.all.return_value = ["req-1"]
     del_result = MagicMock()

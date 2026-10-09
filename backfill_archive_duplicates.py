@@ -81,7 +81,6 @@ async def run(*, apply: bool, project_filter: str | None, archived_by: int) -> N
             if apply and (arch or skip):
                 await session.commit()
             else:
-                # dry-run или нечего писать — откатываем накопленные в сессии изменения.
                 await session.rollback()
 
         if apply and total_archived:

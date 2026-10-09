@@ -150,7 +150,6 @@ async def upsert_user_project_scoped_billable_rate(
         if getattr(r, "applies_to_project_id", None) == pid
     ]
 
-    # Collapse only true open-interval duplicates (both ends null), not dated history.
     open_dups = [r for r in existing if r.valid_from is None and r.valid_to is None]
     if len(open_dups) > 1:
         keeper = min(open_dups, key=lambda r: r.id)
@@ -166,7 +165,6 @@ async def upsert_user_project_scoped_billable_rate(
     today = date.today()
     target = pick_rate_for_date(existing, today)
     if target is None:
-        # Prefer an open-ended future/current row over inventing a second open interval.
         open_ended = [r for r in existing if r.valid_to is None]
         if open_ended:
             target = max(
@@ -179,8 +177,6 @@ async def upsert_user_project_scoped_billable_rate(
 
     if target is not None:
         patch: dict[str, Any] = {"amount": amount, "currency": cur}
-        # Only rewrite interval bounds when the caller supplies at least one bound.
-        # Project-access saves pass None/None and must not clear "change from date" history.
         if valid_from is not None or valid_to is not None:
             patch["valid_from"] = valid_from
             patch["valid_to"] = valid_to
@@ -192,7 +188,6 @@ async def upsert_user_project_scoped_billable_rate(
             )
             return
         except ValueError:
-            # Fall through to create only if update failed due to overlap constraints.
             pass
 
     try:
@@ -206,7 +201,6 @@ async def upsert_user_project_scoped_billable_rate(
             applies_to_project_id=pid,
         )
     except ValueError:
-        # Last resort: remove open-interval dups only, then recreate one open row.
         for r in list(existing):
             if r.valid_from is None and r.valid_to is None:
                 await hr.delete(auth_user_id, r.id)

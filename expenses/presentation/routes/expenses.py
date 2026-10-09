@@ -216,7 +216,6 @@ def _ensure_can_edit(row: ExpenseRequestModel, user: dict) -> None:
     uid = int(user["id"])
     if is_admin_editor(user):
         return
-    # Moderators (incl. partners) may correct draft / revision amounts after «на доработку».
     if is_moderator(user) and row.status in ("draft", "revision_required"):
         return
     if not _can_author_edit(row, uid):

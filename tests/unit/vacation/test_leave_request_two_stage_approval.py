@@ -88,7 +88,6 @@ async def test_partner_approval_waits_for_managing_partner(session: AsyncSession
     assert out.decided_by_user_id == PARTNER_ID
     assert out.decision_reason == "Согласовано"
     assert out.final_decision_at is None
-    # Дни появляются в графике только после финального решения.
     assert await _absence_days(session, req.id) == []
 
 
@@ -241,7 +240,6 @@ async def test_stale_pdf_is_regenerated_with_managing_partner(session: AsyncSess
         assert req.pdf_doc_version == LEAVE_PDF_DOC_VERSION
         assert req.pdf_storage_key is not None
         assert "old.pdf" not in req.pdf_storage_key
-        # Повторный вызов ничего не пересобирает.
         assert await ensure_current_pdf(session, req) is False
     finally:
         get_settings.cache_clear()

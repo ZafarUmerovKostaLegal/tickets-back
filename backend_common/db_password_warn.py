@@ -7,7 +7,6 @@ from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
-# Default passwords from docker-compose / historical local setups.
 _DEFAULT_PG_PASSWORDS = frozenset(
     {
         "gateway",

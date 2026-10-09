@@ -253,7 +253,6 @@ def test_year_split_counts_each_year_against_own_balance():
     d0, d1 = date(2025, 12, 30), date(2026, 1, 5)
     assert days_of_period_in_year(d0, d1, 2025) == 2
     assert days_of_period_in_year(d0, d1, 2026) == 5
-    # 5 short days in 2026 ok within flexible 7; 2 in 2025 within remaining
     validate_annual_vacation_request(
         date_from=d0,
         date_to=d1,

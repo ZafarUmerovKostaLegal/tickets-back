@@ -61,7 +61,6 @@ class Settings(BaseSettings):
         default=15 * 1024 * 1024,
         validation_alias=AliasChoices("CHAT_MAX_FILE_BYTES", "MAX_FILE_BYTES"),
     )
-    # Only KOSTA_DAILY_DISABLE_DB — do NOT share CHAT_DISABLE_DB (stack env often =1).
     chat_disable_db: bool = Field(
         default=False,
         validation_alias=AliasChoices("KOSTA_DAILY_DISABLE_DB"),

@@ -101,7 +101,6 @@ def _report_period(
             status_code=400,
             detail="Конец периода (to / dateTo) не может быть раньше начала (from / dateFrom).",
         )
-    # Отчёты грузят matching entries в память — ограничиваем окно, чтобы не положить сервис.
     if (d1 - d0).days > 3650:
         raise HTTPException(
             status_code=400,

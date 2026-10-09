@@ -110,7 +110,6 @@ async def replace_firm_bank_profiles(
             make_default=bool(payload.get("isDefault") or payload.get("is_default")),
         )
         created.append(row)
-    # Ensure exactly one default when any rows exist.
     if created and not any(r.is_default for r in created):
         created[0].is_default = True
     await session.commit()

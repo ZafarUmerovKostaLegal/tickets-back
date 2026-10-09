@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Fail CI if application/infrastructure use f-string SQL (injection risk).
 
 Defense-in-depth: SqlInjectionGuardMiddleware is NOT a substitute for

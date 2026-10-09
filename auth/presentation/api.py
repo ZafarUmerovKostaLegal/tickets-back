@@ -73,8 +73,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SqlInjectionGuardMiddleware)
-# Rate limiting stays on gateway only — auth is called by every service via /users/me
-# from a few Docker IPs; per-IP limits there lock out the whole cluster.
 app.include_router(auth_routes.router)
 app.include_router(user_routes.router)
 app.include_router(role_routes.router)

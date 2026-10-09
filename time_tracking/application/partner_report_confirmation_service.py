@@ -373,10 +373,6 @@ async def confirm_partner_report_confirmation(
     if partners_confirmation_is_complete(partners, signed_ids):
         await conf_repo.mark_fully_confirmed(request_id)
         just_fully_confirmed = True
-    # Отчёт полностью подтверждён → синхронизируем БД с тем, что показывает отчёт:
-    # гасим дубли (void + архив), которые отчёт схлопывает лишь на экране. Иначе они
-    # оставались живыми и завышали бюджет/итоги/«не выставлено» и всплывали в счёте.
-    # Обратимо через вкладку «Дубликаты» → «Восстановить».
     if just_fully_confirmed:
         from application.entry_archive_service import (
             auto_archive_duplicates_for_project_period,
@@ -465,7 +461,6 @@ async def revoke_partner_report_confirmation_signature(
 
     vid = _viewer_id(viewer)
     conf_repo = PartnerReportConfirmationRepository(session)
-    # Без selectinload(signatures): иначе ORM-delete подписи конфликтует с relationship.
     req = await conf_repo.get_request_by_id(rid, load_signatures=False)
     if not req:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
@@ -575,7 +570,6 @@ async def list_pending_partner_confirmations(
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
 
-    # Один полный список кандидатов; reconcile — не чаще раза в минуту (только UPDATE status).
     candidates = await conf_repo.list_all_pending(review_priority=None)
     partners_by_project = await list_partner_auth_user_ids_by_projects(
         session,
@@ -587,7 +581,6 @@ async def list_pending_partner_confirmations(
         conf_repo, candidates, partners_by_project
     ):
         await session.commit()
-        # После reconcile отбрасываем уже fully_confirmed (строки не удаляются).
         candidates = [
             m for m in candidates
             if (getattr(m, "status", None) or "").strip() != "fully_confirmed"
@@ -600,7 +593,6 @@ async def list_pending_partner_confirmations(
     for m in candidates:
         partners = partners_by_project.get(m.project_id, [])
         if mode == "mine":
-            # Партнёр / подписант: без фильтра по часам команды (см. partner_scope).
             if not pending_confirmation_visible_for_user_mine(
                 m,
                 required_partners=partners,
@@ -703,7 +695,6 @@ async def list_confirmed_partner_confirmations(
 
     conf_repo = PartnerReportConfirmationRepository(session)
     access_repo = UserProjectAccessRepository(session)
-    # Без отдельного полного скана всех pending: reconcile только строк из выборки ниже.
     if _viewer_can_see_all_confirmations(viewer):
         rows = await conf_repo.list_all_fully_confirmed(
             date_from=date_from,

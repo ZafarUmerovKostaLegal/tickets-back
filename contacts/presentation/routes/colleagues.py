@@ -52,7 +52,6 @@ async def list_colleagues(
         tt_rows_raw = await tt_json("GET", "/users", authorization=auth_header)
         tt_rows = _unwrap_user_list(tt_rows_raw)
     except HTTPException:
-        # Auth directory is the source of truth for the org roster; TT is enrichment.
         tt_rows = []
 
     auth_rows: list[dict[str, Any]] = []
@@ -68,7 +67,6 @@ async def list_colleagues(
 
     by_id: dict[int, ColleagueOut] = {}
 
-    # Auth first: complete active staff directory for any signed-in employee.
     for raw in auth_rows:
         if is_hidden_system_user(raw):
             continue
@@ -77,7 +75,6 @@ async def list_colleagues(
             continue
         by_id[row.id] = row
 
-    # TT overlays capacity/manual users and fills any empty fields.
     for raw in tt_rows:
         row = normalize_colleague(raw)
         if not row or row.is_archived or row.is_blocked or is_hidden_system_user(raw):

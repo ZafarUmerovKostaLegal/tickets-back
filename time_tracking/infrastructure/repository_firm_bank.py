@@ -129,7 +129,6 @@ class FirmBankProfileRepository:
             await self.clear_defaults()
             row.is_default = True
         elif want_default is False and row.is_default:
-            # Keep at least one default unless deleting.
             pass
 
         row.updated_at = _now()

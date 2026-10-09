@@ -71,7 +71,6 @@ class TimeTrackingUserRepository:
                 row.picture = picture
                 if update_position:
                     row.position = pos_norm
-            # Non-manual: membership hub only — do not dual-write auth PII.
             row.role = role
             row.is_blocked = is_blocked
             row.is_archived = is_archived
@@ -157,7 +156,6 @@ class TimeTrackingUserRepository:
         row = await self.get_by_auth_user_id(auth_user_id)
         if not row:
             return None
-        # Real auth users: role + lifecycle only. Manual TT users keep local PII writes.
         if is_manual_tt_auth_user_id(int(auth_user_id)):
             row.email = email
             row.display_name = display_name

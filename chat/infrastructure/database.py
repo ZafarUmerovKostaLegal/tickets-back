@@ -76,7 +76,6 @@ def _factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-# Back-compat for code that still imports `engine` — resolve lazily via property-like helper.
 class _EngineProxy:
     def begin(self):
         return get_engine().begin()

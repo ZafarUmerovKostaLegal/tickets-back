@@ -28,7 +28,7 @@ def resolve_cors_origins(
     include_local_defaults: bool = True,
 ) -> list[str]:
     """Build an explicit allowlist. Empty / '*' entries are ignored."""
-    _ = environment  # kept for call-site compatibility
+    _ = environment
     raw_frontend = (
         frontend_url
         if frontend_url is not None
@@ -42,7 +42,6 @@ def resolve_cors_origins(
             if u and u != "*":
                 origins.append(u)
 
-    # Always allow known production frontends (needed with credentials: include).
     for o in _KNOWN_PRODUCTION_ORIGINS:
         if o not in origins:
             origins.append(o)

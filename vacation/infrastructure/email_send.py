@@ -448,7 +448,6 @@ async def send_decision_to_employee(req: LeaveRequest) -> bool:
         return False
     approved = req.status == LEAVE_STATUS_APPROVED
     decision_ru = "утверждена" if approved else "отклонена"
-    # Отклонить могли на любой ступени: финальные поля заполнены только у второй.
     final_stage = req.final_decision_at is not None
     managing = (settings.managing_partner_name or "").strip() or "управляющий партнёр"
     partner = (req.partner_full_name or "").strip() or "курирующий партнёр"

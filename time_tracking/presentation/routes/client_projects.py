@@ -842,7 +842,6 @@ async def create_client_project(
                     "неиспользованные часы переносятся только на следующий месяц."
                 ),
             )
-        # Mirror into budget fields for progress widgets.
         budget_amount = package_fee
         body_budget_hours = package_hours
     else:
@@ -1054,12 +1053,10 @@ async def patch_client_project(
         patch["is_archived"] = bool(patch["is_archived"])
         if patch["is_archived"] is False and row.end_date is not None and row.end_date < date.today():
             patch["end_date"] = None
-        # Archive supersedes pause.
         if patch["is_archived"] is True:
             patch["is_paused"] = False
     if "is_paused" in patch:
         patch["is_paused"] = bool(patch["is_paused"])
-        # Cannot pause an archived project — resume archive first.
         if patch["is_paused"] is True and (
             ("is_archived" in patch and patch["is_archived"])
             or (("is_archived" not in patch) and bool(row.is_archived))

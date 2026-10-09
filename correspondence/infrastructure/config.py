@@ -49,7 +49,6 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("WS_INTERNAL_SECRET"),
     )
-    # Prefer CORRESPONDENCE_*; also accept EXPENSE_* / SMTP_* (same mailbox as expenses).
     smtp_host: str = Field(
         default="",
         validation_alias=AliasChoices("CORRESPONDENCE_SMTP_HOST", "EXPENSE_SMTP_HOST", "SMTP_HOST"),
@@ -104,7 +103,7 @@ class Settings(BaseSettings):
         ),
     )
     correspondence_download_token_ttl_seconds: int = Field(
-        default=604800,  # 7 days
+        default=604800,
         ge=60,
         le=2592000,
         validation_alias=AliasChoices("CORRESPONDENCE_DOWNLOAD_TOKEN_TTL_SECONDS"),
@@ -192,7 +191,6 @@ class Settings(BaseSettings):
                 "public_app_url",
                 _env_first("PUBLIC_APP_URL", "FRONTEND_URL", "GATEWAY_PUBLIC_URL"),
             )
-        # If correspondence port was left empty (defaulted to 587), prefer EXPENSE_SMTP_PORT.
         corr_port_raw = (os.environ.get("CORRESPONDENCE_SMTP_PORT") or "").strip()
         expense_port_raw = (os.environ.get("EXPENSE_SMTP_PORT") or os.environ.get("SMTP_PORT") or "").strip()
         if not corr_port_raw and expense_port_raw.isdigit():

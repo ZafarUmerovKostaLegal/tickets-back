@@ -183,8 +183,6 @@ async def expense_email_action(
         row.status = "approved"
         row.rejection_reason = None
         row.approved_at = _utc_now()
-        # Email links are shared; prefer current_approver_id when set, else keep null
-        # (history still records the sentinel uid for audit).
         if row.current_approver_id is not None and int(row.current_approver_id) > 0:
             row.approved_by_user_id = int(row.current_approver_id)
         row.updated_by_user_id = uid

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models import AttendanceCameraEventModel
 
-# Office timezone for day bounds (matches Hikvision event offsets we ingest).
 _OFFICE_TZ = timezone(timedelta(hours=5))
 
 
@@ -29,8 +28,6 @@ async def upsert_camera_events(
     rows: Iterable[dict[str, Any]],
 ) -> int:
     """Insert or update camera events. Returns number of unique rows attempted."""
-    # Deduplicate within the batch — Postgres rejects ON CONFLICT when the same
-    # conflict target appears twice in one INSERT.
     by_key: dict[tuple[str, str, Any, str], dict[str, Any]] = {}
     for r in rows:
         camera_ip = (r.get("camera_ip") or "").strip()

@@ -30,9 +30,7 @@ def test_encrypt_decrypt_with_key(monkeypatch):
     assert is_encrypted_token(enc)
     assert enc != "secret-token"
     assert decrypt_token(enc) == "secret-token"
-    # Legacy plaintext still readable
     assert decrypt_token("legacy-plain") == "legacy-plain"
-    # Idempotent encrypt
     assert encrypt_token(enc) == enc
     get_settings.cache_clear()
 

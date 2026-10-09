@@ -31,7 +31,6 @@ def ingest_status() -> dict:
 async def _poll_once() -> None:
     settings = get_settings()
     lookback = max(5, int(settings.attendance_ingest_lookback_minutes))
-    # Overlap window so we don't miss events around poll boundaries.
     end = date.today()
     start = (datetime.now(timezone.utc) - timedelta(minutes=lookback)).date()
     if start > end:
@@ -59,7 +58,6 @@ async def _scheduler_loop() -> None:
     if not settings.attendance_ingest_enabled:
         return
     _state["poller_running"] = True
-    # First poll shortly after boot (give DB/schema a moment).
     await asyncio.sleep(5)
     while True:
         try:

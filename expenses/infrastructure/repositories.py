@@ -141,8 +141,6 @@ class ExpenseRepository:
             if payment_method and payment_method.strip():
                 stmt = stmt.where(ExpenseRequestModel.payment_method == payment_method.strip().lower())
             if awaiting_payment:
-                # Vendor/bank queue: approved reimbursable spend that is not
-                # an employee personal-card payout (cash, except partner_expense).
                 stmt = stmt.where(
                     or_(
                         ExpenseRequestModel.expense_type == "partner_expense",

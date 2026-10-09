@@ -1,5 +1,3 @@
-# No top-level `name:` — Portainer stack name must own the project/network
-# (e.g. tickets-back_default). A fixed name caused split networks / missing DNS.
 
 services:
   gateway:
@@ -52,7 +50,6 @@ services:
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-6-astra}
-      # Prod: unique *_DB_PASSWORD / REDIS_PASSWORD+REDIS_URL / WS_INTERNAL_SECRET — see .env.example (rotation ≠ wipe).
       - OPS_DATABASES_ENABLED=${OPS_DATABASES_ENABLED:-true}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-1440}
@@ -148,8 +145,6 @@ services:
       auth:
         condition: service_healthy
 
-  # Same chat_db + media as chat_api; API under /api/v1/kosta-daily/*.
-  # Rebuild required after greenlet — without it create_all never finishes → API 503.
   kosta_daily:
     build:
       context: .
@@ -191,7 +186,6 @@ services:
       - NOTIFICATION_PUSH_URL=${NOTIFICATION_PUSH_URL:-http://gateway:1234/api/v1/notifications/system}
       - NOTIFICATIONS_SERVICE_URL=${NOTIFICATIONS_SERVICE_URL:-http://notifications:1237}
       - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
-      # Same SMTP mailbox as expenses (pass EXPENSE_* directly — nested ${A:-${B}} breaks in Portainer).
       - EXPENSE_SMTP_HOST=${EXPENSE_SMTP_HOST:-}
       - EXPENSE_SMTP_PORT=${EXPENSE_SMTP_PORT:-587}
       - EXPENSE_SMTP_USER=${EXPENSE_SMTP_USER:-}
@@ -207,7 +201,6 @@ services:
       - CORRESPONDENCE_PUBLIC_APP_URL=${CORRESPONDENCE_PUBLIC_APP_URL:-}
       - PUBLIC_APP_URL=${PUBLIC_APP_URL:-}
       - FRONTEND_URL=${FRONTEND_URL:-}
-      # Public QR download links (same secret model as expense email-file).
       - GATEWAY_BASE_URL=${GATEWAY_BASE_URL:-http://localhost:1234}
       - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-}
       - CORRESPONDENCE_DOWNLOAD_TOKEN_SECRET=${CORRESPONDENCE_DOWNLOAD_TOKEN_SECRET:-}
@@ -322,7 +315,6 @@ services:
       - CALL_SCHEDULE_MICROSOFT_TENANT_ID=${CALL_SCHEDULE_MICROSOFT_TENANT_ID:-}
       - CALL_SCHEDULE_MICROSOFT_CLIENT_ID=${CALL_SCHEDULE_MICROSOFT_CLIENT_ID:-}
       - CALL_SCHEDULE_MICROSOFT_CLIENT_SECRET=${CALL_SCHEDULE_MICROSOFT_CLIENT_SECRET:-}
-      # Fallback to the same Azure AD app used by auth (login)
       - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
       - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
       - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
@@ -356,7 +348,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Normal bridge networking (own IP). HTTP starts even if DB is down/disabled.
   chat_api:
     build:
       context: .
@@ -385,7 +376,6 @@ services:
       chat_db:
         condition: service_started
 
-  # Keep running independently — chat history volume untouched.
   chat_db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -626,7 +616,6 @@ services:
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      # Portainer breaks nested ${A:-${B}} — set absolute URLs in stack env (.env.server).
       - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-}
       - CALENDAR_CONNECTED_REDIRECT_URL=${CALENDAR_CONNECTED_REDIRECT_URL:-}
     healthcheck:
@@ -695,7 +684,6 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # Optional: REDIS_PASSWORD + REDIS_URL=redis://:PASSWORD@redis:6379/0
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
     command:

@@ -17,7 +17,6 @@ from infrastructure.models import TimeManagerClientProjectModel, TimeManagerClie
 from infrastructure.repositories import ClientTaskRepository
 
 
-# (name, billable_by_default, billing_mode, flat_fee_amount, flat_fee_currency)
 DEFAULT_PROJECT_TASK_SEED: tuple[tuple[str, bool, str, Decimal | None, str | None], ...] = (
     ("Court Hearing", True, BILLING_MODE_HOURLY, None, None),
     ("Court Hearing Preparation", True, BILLING_MODE_HOURLY, None, None),

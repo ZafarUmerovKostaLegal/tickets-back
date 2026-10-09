@@ -37,7 +37,6 @@ def package_hours_n(project: Any) -> Decimal:
     v = getattr(project, "package_hours_per_month", None)
     if v is not None and _d(v) > 0:
         return _d(v)
-    # Mirror budget_hours when package fields unset (legacy / display sync).
     bh = getattr(project, "budget_hours", None)
     if bh is not None and _d(bh) > 0:
         return _d(bh)
@@ -391,7 +390,6 @@ def compute_entry_splits_for_project_entries(
     if date_to:
         max_d = max(max_d, date_to)
 
-    # Start one month earlier so carry-in into first visible month is correct.
     start_y, start_m = add_month(min_d.year, min_d.month, -1)
     chain_start = date(start_y, start_m, 1)
     months = months_inclusive(chain_start, max_d)
@@ -402,7 +400,6 @@ def compute_entry_splits_for_project_entries(
         months=months,
         initial_carry_in=_ZERO,
     )
-    # Attach fees
     summaries = [
         MonthPackageSummary(
             year=s.year,
@@ -427,7 +424,6 @@ def compute_entry_splits_for_project_entries(
         dt = date_to or max_d
         visible = {(y, m) for y, m in months_inclusive(df, dt)}
         summaries = [s for s in summaries if (s.year, s.month) in visible]
-        # Keep splits for all attributed entries (including prior month used only for carry).
     return summaries, splits
 
 
@@ -457,8 +453,6 @@ def build_package_splits_index(
     splits: dict[str, EntryPackageSplit] = {}
     months_by_project: dict[str, list[MonthPackageSummary]] = {}
     for pid, ents in by_project.items():
-        # Load attribution needs all billable entries for carry — caller should pass full set
-        # for these projects when possible; here we use what we have.
         summaries, sp = compute_entry_splits_for_project_entries(
             projects_map[pid],
             ents,

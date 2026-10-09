@@ -18,7 +18,7 @@ ALLOWED_DOC_TYPES = frozenset(
         "financial",
         "proposal",
         "other",
-        "note",  # legacy
+        "note",
     }
 )
 ALLOWED_STATUSES = frozenset(
@@ -48,7 +48,6 @@ ALLOWED_MIME_TYPES = frozenset(
     }
 )
 
-# Registered workflow + partner review queue (`new` is a legacy alias of progress)
 WORK_STATUS_GROUP = frozenset(
     {"progress", "approval", "pending_review", "awaiting_signature", "new", "received"}
 )

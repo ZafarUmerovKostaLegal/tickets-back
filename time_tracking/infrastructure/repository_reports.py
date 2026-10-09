@@ -219,12 +219,10 @@ class ReportSnapshotRepository:
         tid = (time_entry_id or "").strip()
         if not tid:
             return 0
-        # Fast path: source_id matches entry id (typical for entry-level snapshots).
         res = await self._s.execute(
             delete(ReportSnapshotRowModel).where(ReportSnapshotRowModel.source_id == tid)
         )
         n = int(res.rowcount or 0)
-        # Also drop rows that store the id only inside frozen/overrides JSON.
         like = f'%"{tid}"%'
         q = select(ReportSnapshotRowModel).where(
             ReportSnapshotRowModel.source_id != tid,

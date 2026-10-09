@@ -64,7 +64,6 @@ class OutlookCalendarTokenRepository:
         row = r.scalars().one_or_none()
         if row is None:
             return None
-        # Decrypt in-memory without marking the row dirty (avoids plaintext flush).
         set_committed_value(row, "access_token", decrypt_token(row.access_token))
         set_committed_value(row, "refresh_token", decrypt_token(row.refresh_token))
         return row

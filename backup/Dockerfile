@@ -18,10 +18,6 @@ COPY backup/ ./
 
 EXPOSE 1247
 
-# По умолчанию — планировщик + API.
-# Разовый бэкап: python -m application.cli run-once
-# Список:       python -m application.cli list
-# Восстановление: python -m application.cli restore 20260531T030000Z --confirm RESTORE_BACKUP
 
 RUN chown -R appuser:root /app
 USER appuser

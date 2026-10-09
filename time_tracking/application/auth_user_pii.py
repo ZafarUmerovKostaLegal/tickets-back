@@ -66,7 +66,6 @@ class HydratedTtUser:
 
     @property
     def position(self) -> str | None:
-        # TT position stays local (auth sync must not overwrite / overlay it).
         return getattr(self._row, "position", None)
 
     def __getattr__(self, name: str) -> Any:

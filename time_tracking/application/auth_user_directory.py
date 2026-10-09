@@ -180,7 +180,6 @@ async def ensure_time_tracking_user_from_auth(
     tt_role = (
         (detail.get("time_tracking_role") or detail.get("timeTrackingRole") or "") or ""
     ).strip()
-    # Membership stub only — auth remains PII source of truth (hydrate on read).
     await tur.upsert_user(
         auth_user_id=auth_user_id,
         email=stub_email_for_auth_user(auth_user_id),

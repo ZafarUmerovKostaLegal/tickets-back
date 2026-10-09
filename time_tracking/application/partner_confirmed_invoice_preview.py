@@ -219,7 +219,6 @@ async def build_partner_confirmed_invoice_preview(
     entries = list((await session.execute(q)).scalars().all())
     rates = await _load_user_rates(session, None)
     task_ids = {str(e.task_id) for e in entries if e.task_id}
-    # Package splits need all project billable entries for carry-in correctness
     all_project_entries = list(
         (
             await session.execute(
@@ -263,7 +262,6 @@ async def build_partner_confirmed_invoice_preview(
             else:
                 m += 1
 
-    # Match report preview: minute-rounded hours + package-aware amount, then identity collapse.
     entries, dropped = deduplicate_entries_for_report(
         entries,
         projects_map=projects_map,
@@ -298,11 +296,6 @@ async def build_partner_confirmed_invoice_preview(
         if is_hour_package_project(proj) and e.work_date:
             package_months.add(month_key(e.work_date))
 
-        # ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ — подтверждённый отчёт.
-        # Сумма строки считается ровно как `amount_to_pay` в отчёте: точные часы
-        # (e.hours) с учётом пакета, БЕЗ предварительного округления часов до 2 знаков.
-        # Раньше счёт округлял часы (invoice_hours_for_billing) → 2.63 ч вместо 2:38,
-        # из-за чего суммы расходились с отчётом (394.50 против 395.00).
         src_amt, _cur = billable_amount_respecting_package(
             dec(e.hours),
             bool(e.is_billable),
@@ -316,13 +309,8 @@ async def build_partner_confirmed_invoice_preview(
         )
         src_total = _money4(src_amt)
         if src_total <= 0:
-            # Полностью покрыто пакетом или неоплачиваемо → в отчёте вклад 0,
-            # отдельной строки в счёте не создаём.
             continue
 
-        # Схлопываем дубли так же, как просмотр отчёта: по отпечатку строки
-        # (сотрудник+дата+имя задачи+заметка+часы+сумма). Это убирает лишние строки,
-        # которых нет в подтверждённом отчёте (в т.ч. дубли с разными карточками задачи).
         fp = _entry_duplicate_fingerprint(
             e, task, amount=src_total, currency=project_ccy, project_id=pid
         )
@@ -346,8 +334,6 @@ async def build_partner_confirmed_invoice_preview(
             qty = Decimal(1)
             unit_src = src_total
         else:
-            # Количество = точные часы, ставка = договорная ставка отчёта.
-            # qty * unit == src_total на полной точности (как в отчёте: 2:38 × 150 = 395.00).
             if is_hour_package_project(proj) and split is not None:
                 qty = dec(getattr(split, "overage_hours", 0))
             else:
@@ -425,7 +411,6 @@ async def build_partner_confirmed_invoice_preview(
         eid = str(r["id"])
         if eid in exp_invoiced:
             continue
-        # Prefer amount_uzs (identity when invoice is UZS). Do not rebuild UZS from rounded USD.
         conv = convert_expense_amount(book, r, inv_ccy, on_date)
         _record_fx(fx_used, conv)
         desc = str(r.get("description") or "Расход")[:2000]

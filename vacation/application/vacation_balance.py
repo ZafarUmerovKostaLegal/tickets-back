@@ -32,8 +32,7 @@ from infrastructure.models import (
     ScheduleEmployee,
 )
 
-ANNUAL_VACATION_KIND = KIND_BY_KEY["annual_vacation"]  # 1
-# Обе ступени согласования держат дни в резерве до финального решения.
+ANNUAL_VACATION_KIND = KIND_BY_KEY["annual_vacation"]
 IN_PROGRESS_STATUSES = (LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_FINAL)
 
 
@@ -162,7 +161,6 @@ async def _has_continuous_14_satisfied(
     year: int,
     min_continuous: int,
 ) -> bool:
-    # Approved leave request of sufficient length overlapping the year.
     r = await session.execute(
         select(LeaveRequest).where(
             LeaveRequest.employee_user_id == employee_user_id,
@@ -176,7 +174,6 @@ async def _has_continuous_14_satisfied(
     if r.scalars().first() is not None:
         return True
 
-    # Continuous stretch of schedule annual days (incl. manual) in the year.
     days_r = await session.execute(
         select(AbsenceDay.absence_on)
         .join(ScheduleEmployee, AbsenceDay.employee_id == ScheduleEmployee.id)
@@ -249,7 +246,6 @@ async def get_vacation_balance(
         min_continuous=min_cont,
         statuses=(LEAVE_STATUS_APPROVED, *IN_PROGRESS_STATUSES),
     )
-    # Manual days (no leave request) count toward flexible pool until 14 is satisfied.
     if not continuous_ok:
         flex_used += used_manual
     flex_used = min(flex_used, flex_max) if flex_max else flex_used
@@ -310,11 +306,9 @@ def validate_annual_vacation_request(
     if bal0.continuous_14_satisfied:
         return
 
-    # Continuous block not yet used.
     if days_count >= bal0.min_continuous_days:
         return
 
-    # Short part: only within flexible pool.
     flex_rem = bal0.flexible_days_remaining
     if days_count <= flex_rem:
         return

@@ -65,7 +65,6 @@ async def _prepare_database_forever() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Bind HTTP immediately; DB is optional / background.
     task = asyncio.create_task(_prepare_database_forever(), name="chat-db-init")
     try:
         yield

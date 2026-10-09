@@ -49,7 +49,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EXPENSE_AMOUNT_LIMIT_UZS"),
     )
 
-    # Порог «малых» расходов (UZS): до него включительно уведомляем EXPENSE_NOTIFY_TO_LOW
     expense_approval_low_limit_uzs: Decimal | None = Field(
         default=Decimal("3000000"),
         validation_alias=AliasChoices("EXPENSE_APPROVAL_LOW_LIMIT_UZS"),

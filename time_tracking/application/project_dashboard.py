@@ -138,7 +138,6 @@ async def build_client_project_dashboard(
 
     package_splits: dict[str, Any] = {}
     if is_hour_package_project(proj_row):
-        # Package overage needs full project billable history for carry-in correctness.
         all_billable = [
             e
             for e in await entry_repo.list_entries_for_project(project_id, None, None)
@@ -152,7 +151,6 @@ async def build_client_project_dashboard(
             tasks_map=tasks_map,
         )
 
-    # Align with time report: collapse near-duplicate entries before totals.
     entries = _dedupe_dashboard_entries(
         entries,
         proj_row=proj_row,

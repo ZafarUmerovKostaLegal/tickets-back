@@ -106,7 +106,6 @@ def _acquire_token_pkce_public(
     token_url = (
         f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/token"
     )
-    # Scope is often optional on redeem; include app scopes + OIDC for id_token.
     scope = " ".join([*AZURE_LOGIN_SCOPES, "openid", "profile", "offline_access"])
     data = {
         "client_id": settings.azure_client_id,

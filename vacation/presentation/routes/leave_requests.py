@@ -323,7 +323,6 @@ async def list_leave_requests(
         if not _is_partner(employee) and not managing:
             raise HTTPException(status_code=403, detail="Только партнёры могут видеть заявки на согласование")
         if managing:
-            # Управляющий партнёр решает вторую ступень по всем заявкам фирмы.
             q = q.where(
                 or_(
                     LeaveRequest.partner_user_id == employee.id,
@@ -453,7 +452,6 @@ async def email_action(
         req = await apply_final_decision(
             session,
             req,
-            # Ссылка из письма не даёт токена управляющего партнёра — автора решения не пишем.
             decided_by_user_id=None,
             approve=approve,
             decision_reason="Финальное решение через e-mail",
@@ -520,8 +518,6 @@ async def get_leave_request_pdf(
         raise HTTPException(status_code=403, detail="Нет доступа к заявке")
     if not req.pdf_storage_key:
         raise HTTPException(status_code=404, detail="PDF не сформирован")
-    # Заявления, сохранённые старым шаблоном, пересобираем — в шапке должен
-    # стоять управляющий партнёр.
     if await ensure_current_pdf(session, req):
         await session.commit()
     settings = get_settings()
@@ -559,8 +555,6 @@ async def _decide(
         )
         pdf_bytes: bytes | None = None
         if req.status == LEAVE_STATUS_PENDING_FINAL:
-            # Документ пересобираем, чтобы у управляющего партнёра был
-            # актуальный PDF с его ФИО в шапке заявления.
             pdf_bytes = await render_and_attach_pdf(session, req)
         await session.commit()
         if req.status == LEAVE_STATUS_PENDING_FINAL:

@@ -292,7 +292,7 @@ async def get_users_public_batch(
     return UserPublicListResponse(items=items, missing_ids=missing)
 
 
-_PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")  # legacy exact roles; see _is_partner_user
+_PARTNER_ROLE_VALUES = (Role.PARTNER.value, "Партнёр")
 
 
 def _normalize_partner_key(value: str | None) -> str:

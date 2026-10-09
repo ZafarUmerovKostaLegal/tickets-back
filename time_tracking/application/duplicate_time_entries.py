@@ -88,7 +88,6 @@ def build_duplicate_key_for_entry(
     ignore_amount: bool = False,
 ) -> DuplicateKey:
     raw_hrs = _d(e.rounded_hours if e.rounded_hours is not None else e.hours)
-    # Align with report preview FE (`roundDecimalHoursToMinute`).
     hrs = round_decimal_hours_to_minute(raw_hrs)
     if package_split is not None and not is_flat_fee_task(task):
         bill_hrs = round_decimal_hours_to_minute(_d(getattr(package_split, "overage_hours", 0)))
@@ -156,7 +155,6 @@ def _merge_near_duplicate_note_groups(
             placed = False
             for i, (cdk, cgroup) in enumerate(clusters):
                 if notes_are_near_duplicate(dk.note_norm, cdk.note_norm):
-                    # Prefer longer note as cluster key label.
                     key_dk = cdk if len(cdk.note_norm) >= len(dk.note_norm) else dk
                     clusters[i] = (key_dk, cgroup + group)
                     placed = True
@@ -361,7 +359,6 @@ async def find_duplicate_time_entries_for_project(
         )
         groups[key].append(row)
 
-    # Merge near-duplicate notes (glued task prefix vs clean note, truncated note, etc.)
     meta_buckets: dict[tuple, list[tuple[DuplicateKey, list[dict[str, Any]]]]] = defaultdict(list)
     for dk, rows in groups.items():
         meta_buckets[_duplicate_meta_key(dk)].append((dk, rows))

@@ -17,7 +17,6 @@ def _parse_csv_emails(raw: str) -> list[str]:
     return [x.strip() for x in (raw or "").split(",") if x.strip()]
 
 
-# Эти ящики получают только письма о клиентских расходах.
 CLIENT_EXPENSE_ONLY_NOTIFY = (
     "gtemirova@kostalegal.com",
     "kyusupova@kostalegal.com",

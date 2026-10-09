@@ -50,8 +50,6 @@ class Settings(BaseSettings):
     mail_from: str = Field(default="", validation_alias="VACATION_MAIL_FROM")
     mail_bcc: str = Field(default="", validation_alias="VACATION_MAIL_BCC")
 
-    # Управляющий партнёр: обязательная вторая ступень согласования заявок и
-    # адресат заявления в PDF.
     managing_partner_email: str = Field(
         default="aakhmadjonov@kostalegal.com",
         validation_alias="VACATION_MANAGING_PARTNER_EMAIL",
@@ -65,13 +63,11 @@ class Settings(BaseSettings):
     email_action_ttl_seconds: int = Field(default=14 * 24 * 3600, validation_alias="VACATION_EMAIL_ACTION_TTL_SECONDS")
     email_action_confirm_step: bool = Field(default=True, validation_alias="VACATION_EMAIL_ACTION_CONFIRM_STEP")
 
-    # Annual paid leave entitlement (calendar days) and mandatory continuous portion.
     annual_entitled_days: int = Field(default=28, validation_alias="VACATION_ANNUAL_ENTITLED_DAYS")
     min_continuous_vacation_days: int = Field(
         default=14,
         validation_alias="VACATION_MIN_CONTINUOUS_DAYS",
     )
-    # Short annual parts allowed before the continuous block (1+2+3… up to this total).
     flexible_annual_days: int = Field(
         default=7,
         validation_alias="VACATION_FLEXIBLE_ANNUAL_DAYS",

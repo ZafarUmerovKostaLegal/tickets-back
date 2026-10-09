@@ -38,9 +38,8 @@ async def test_upsert_updates_effective_rate_without_clearing_dates():
         rid="old",
         amount="100",
         valid_from=None,
-        valid_to=date(2099, 1, 1),  # closed in the past relative to far-future open rate
+        valid_to=date(2099, 1, 1),
     )
-    # Force "old" closed and "new" current regardless of wall clock:
     old.valid_to = date(2020, 1, 1)
     new = _rate(
         rid="new",

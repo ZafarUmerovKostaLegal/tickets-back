@@ -103,7 +103,6 @@ class _MemoryCounter:
                 count, reset_at = 0, now + window_sec
             count += 1
             self._data[key] = (count, reset_at)
-            # Opportunistic cleanup
             if len(self._data) > 10_000:
                 expired = [k for k, (_, exp) in self._data.items() if now >= exp]
                 for k in expired[:2000]:

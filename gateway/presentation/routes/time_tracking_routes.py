@@ -123,8 +123,6 @@ async def _tt_json(
 ):
     response = await _tt_request(method, path, timeout=timeout, **kwargs)
     raise_for_upstream_status(response, "Time tracking service error")
-    # DELETE handlers return 204 with an empty body. Parsing that as JSON
-    # raises and the browser reports it as "Failed to fetch".
     if response.status_code in (204, 205) or not response.content:
         return None
     return response.json()
@@ -1952,7 +1950,7 @@ async def invoices_outlook_draft(
     user: dict = Depends(require_view_role),
 ):
     """Proxy to todos Outlook mail-draft (Graph) using the caller's Outlook OAuth token."""
-    _ = invoice_id  # reserved for future audit / invoice checks
+    _ = invoice_id
     _ = user
     settings = get_settings()
     todos_base = (settings.todos_service_url or "").rstrip("/")

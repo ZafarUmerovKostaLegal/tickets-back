@@ -51,7 +51,7 @@ def pending_confirmation_visible_for_user_mine(
     применяется: партнёр должен видеть все заявки, где он обязательный
     подписант, даже если его команда не писала время в этом периоде.
     """
-    del team_member_ids, report_user_ids  # retained for call-site compatibility
+    del team_member_ids, report_user_ids
     if (getattr(request_row, "status", None) or "").strip() == "fully_confirmed":
         return False
     signatures = getattr(request_row, "signatures", None) or []

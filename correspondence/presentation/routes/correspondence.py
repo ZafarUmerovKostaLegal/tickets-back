@@ -359,7 +359,6 @@ async def correspondence_stats(
 ):
     check_view_role(user)
     repo = CorrespondenceRepository(session)
-    # Always count pending_review assigned to the current user (badge is assignment-based).
     partner_uid: int | None = None
     try:
         partner_uid = int(user["id"])
@@ -1086,7 +1085,6 @@ def _pick_download_attachment(
         if hit:
             return hit
     kind_rank = {"signed": 0, "attachment": 1, "scan": 2}
-    # Prefer signed, then newest file (so QR stays valid after letter re-upload).
     atts.sort(
         key=lambda a: (
             kind_rank.get(a.attachment_kind, 9),
@@ -1292,7 +1290,6 @@ async def create_download_qr(
     if row.direction != "outgoing":
         raise HTTPException(status_code=422, detail="QR-скачивание только для исходящих писем")
     preferred = body.attachment_id if body else None
-    # Optional attachment pin (legacy v1). Default: document-scoped v2 so QR survives file replace.
     bind_attachment_id: str | None = None
     if preferred:
         att = _pick_download_attachment(row.attachments or [], preferred)

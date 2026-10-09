@@ -68,8 +68,6 @@ def test_pick_num_clock_hours():
 
 def test_round2_primitive():
     m = _mod()
-    # Проверка примитива округления денег до 2 знаков (не правило суммы отчёта:
-    # сумма строки берётся из amountToPay / точных часов, напр. 2:38 × 150 = 395.00).
     hours = m._round2(Decimal("2.63"))
     rate = m._round2(Decimal("150"))
     assert m._round2(hours * rate) == Decimal("394.50")
@@ -102,7 +100,6 @@ def test_zero_hours_row_excluded():
 
 def test_project_marker_row_excluded():
     m = _mod()
-    # Минимальный снимок: строка-маркер проекта, не детализация.
     row = _Row(source_type="project", source_id="proj-1", data={"projectId": "proj-1"})
     d = m._effective_row_data(row)
     assert m._is_included_billable_time_row(row, d) is False
@@ -134,13 +131,11 @@ def test_within_period_filters_out_of_range():
     df, dt = date(2026, 6, 1), date(2026, 6, 30)
     assert m._within_period("2026-06-15", df, dt) is True
     assert m._within_period("2026-07-01", df, dt) is False
-    # без даты — включаем (нечем фильтровать)
     assert m._within_period("", df, dt) is True
 
 
 def test_duplicate_fingerprint_same_content_different_id_matches():
     m = _mod()
-    # Две записи с разными timeEntryId, но одинаковым содержанием (как замороженный дубль).
     d1 = {
         "authUserId": 42,
         "workDate": "2026-06-08",
@@ -158,7 +153,7 @@ def test_duplicate_fingerprint_same_content_different_id_matches():
         hours=Decimal("2.633333"), amount=Decimal("395.00"), currency="EUR",
     )
     assert fp1 is not None
-    assert fp1 == fp2  # дубли схлопнутся
+    assert fp1 == fp2
 
 
 def test_duplicate_fingerprint_differs_by_note():
@@ -172,7 +167,7 @@ def test_duplicate_fingerprint_differs_by_note():
         {**base, "note": "Другая заметка"}, project_id="p1", work_date="2026-06-08",
         hours=Decimal("2.63"), amount=Decimal("395.00"), currency="EUR",
     )
-    assert fp1 != fp2  # разные заметки — не дубли
+    assert fp1 != fp2
 
 
 def test_duplicate_fingerprint_none_without_user():
@@ -181,4 +176,4 @@ def test_duplicate_fingerprint_none_without_user():
         {"workDate": "2026-06-08", "note": "x"}, project_id="p1", work_date="2026-06-08",
         hours=Decimal("1"), amount=Decimal("100"), currency="EUR",
     )
-    assert fp is None  # нет сотрудника — не рискуем схлопывать
+    assert fp is None

@@ -27,7 +27,6 @@ def test_hydrated_tt_user_overlays_auth_pii():
     assert view.email == "auth@x"
     assert view.display_name == "Auth Name"
     assert view.picture == "auth.png"
-    # TT position stays local
     assert view.position == "TT Pos"
     assert view.role == "user"
 

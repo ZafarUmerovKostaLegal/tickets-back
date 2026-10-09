@@ -163,8 +163,6 @@ async def get_cbu_rates(
     check_view_role(user)
     origin = (os.getenv("CBU_ORIGIN") or "https://cbu.uz").rstrip("/")
     path = "/ru/arkhiv-kursov-valyut/json"
-    # Сайт ЦБ иногда открывается дольше нескольких секунд. Один запрос на дату,
-    # затем соседние дни только если сервер ответил (выходные). Резерв — если связи нет.
     timeout = httpx.Timeout(12.0, connect=8.0)
     headers = {
         "Accept": "application/json",

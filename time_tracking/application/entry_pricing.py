@@ -80,7 +80,6 @@ def billable_scoped_user_rates(
     global_rates = [r for r in base if not getattr(r, "applies_to_project_id", None)]
     if global_rates:
         return global_rates
-    # Same legacy fallback as pick_billable_rate_for_entry: only other-project rates exist.
     other = [r for r in base if getattr(r, "applies_to_project_id", None)]
     return other or None
 
@@ -200,7 +199,6 @@ def _billable_amount_for_entry(
     )
     if not rate:
         return Decimal(0), out_cur
-    # Same as invoice / partner Excel: minute-round hours → 2dp, rate 2dp, then money product.
     qty = invoice_hours_for_billing(hours)
     if qty <= 0:
         return Decimal(0), out_cur

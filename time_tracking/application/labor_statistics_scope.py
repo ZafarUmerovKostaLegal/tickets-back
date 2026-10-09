@@ -13,7 +13,6 @@ from application.report_viewer_scope import _REPORTS_UNSCOPED_ROLES, viewer_sees
 
 LaborScopeMode = Literal["all", "partner", "lawyer"]
 
-# Org roles that see every team in labor statistics (Partner is excluded — own teams only).
 _FULL_LABOR_STATS_ROLES = frozenset(_REPORTS_UNSCOPED_ROLES) | frozenset(
     {"Главный администратор", "Администратор"}
 )
@@ -57,12 +56,9 @@ def viewer_is_team_leader_scope(viewer: dict) -> bool:
 def resolve_labor_statistics_scope(viewer: dict) -> LaborStatisticsScope:
     if viewer_has_full_labor_statistics_access(viewer):
         return LaborStatisticsScope(mode="all")
-    # Org-role Partner previously fell into "all" via manage roles; for statistics
-    # they are team leaders and only see members of teams they partner.
     if viewer_is_team_leader_scope(viewer):
         return LaborStatisticsScope(mode="partner", auth_user_id=_viewer_id(viewer))
     if viewer_sees_all_report_projects(viewer):
-        # Remaining manage roles that are not full-stats admins (should be rare).
         return LaborStatisticsScope(mode="all")
     return LaborStatisticsScope(mode="lawyer", auth_user_id=_viewer_id(viewer))
 
@@ -73,7 +69,6 @@ def clamp_labor_filter_param(
     partner_id: str | None,
     lawyer_id: str | None,
 ) -> tuple[str | None, str | None]:
-    # Partner/team-leader scope is enforced via team membership, not project-partner id.
     if scope.mode == "partner":
         return partner_id, lawyer_id
     if scope.mode == "lawyer" and scope.auth_user_id is not None:

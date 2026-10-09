@@ -24,7 +24,6 @@ ARCHIVE_VOID_KIND = "duplicate_archive"
 
 _Q2 = Decimal("0.01")
 _Q6 = Decimal("0.000001")
-# Системный пользователь для авто-архива при подтверждении отчёта (нет конкретного viewer).
 AUTO_ARCHIVE_SYSTEM_USER_ID = 0
 
 
@@ -286,7 +285,6 @@ async def auto_archive_duplicates_for_project_period(
         if len(group) < 2:
             continue
         dup_group_count += 1
-        # keeper — самая ранняя запись (как в ручной архивации / дедупе отчёта)
         ordered = sorted(group, key=_entry_sort_key_for_keeper)
         for e in ordered[1:]:
             if await inv_repo.time_entry_on_active_invoice(e.id):

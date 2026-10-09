@@ -26,7 +26,6 @@ def test_jan_carry_feb_current_first_burns_rollover():
     from application.package_billing import attribute_entries_for_months, walk_months
 
     n = Decimal("10")
-    # Jan 8 → carry 2; Feb used 10 → current-first uses 10 of Feb, Jan 2 expires
     used = {(2026, 1): Decimal("8"), (2026, 2): Decimal("10")}
     months = [(2026, 1), (2026, 2)]
     summaries = walk_months(
@@ -81,7 +80,6 @@ def test_entry_straddles_package_boundary():
     ensure_service_in_path("time_tracking")
     from application.package_billing import attribute_entries_for_months
 
-    # One 12h entry in a month with N=10 → 10 covered, 2 overage
     entries = [_entry("x", date(2026, 3, 1), 12)]
     summaries, splits = attribute_entries_for_months(
         package_hours=Decimal("10"),

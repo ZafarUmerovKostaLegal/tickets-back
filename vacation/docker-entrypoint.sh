@@ -3,7 +3,6 @@ set -e
 MEDIA_DIR="${MEDIA_PATH:-/app/media}"
 mkdir -p "$MEDIA_DIR/vacation_leave_requests"
 
-# Named volumes are often root-owned; app runs as uid 10001 and must write PDFs here.
 if [ "$(id -u)" = "0" ]; then
   chown -R 10001:0 "$MEDIA_DIR" 2>/dev/null || true
   chmod -R u+rwX,g+rwX "$MEDIA_DIR" 2>/dev/null || true

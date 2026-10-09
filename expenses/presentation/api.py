@@ -63,7 +63,6 @@ async def lifespan(app: FastAPI):
     for attempt in range(1, _STARTUP_RETRIES + 1):
         try:
             async with engine.begin() as conn:
-                # Destructive one-shot for ancient int-PK installs only — NOT in patch ledger.
                 await _drop_legacy_integer_expense_tables(conn)
                 await conn.run_sync(Base.metadata.create_all)
                 await apply_registered_schema_patches(
