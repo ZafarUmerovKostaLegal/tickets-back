@@ -29,7 +29,7 @@ def _parse_partner_hints_list(data: list) -> dict[int, dict[str, str | None]]:
         role_s = (str(role).strip() if role is not None and str(role).strip() else None)
         out[i] = {"position": pos_s, "role": role_s}
     return out
-
+  
 
 async def fetch_auth_user_positions_by_id(authorization: str) -> dict[int, str | None]:
     hints = await fetch_auth_user_partner_hints_by_id(authorization)
