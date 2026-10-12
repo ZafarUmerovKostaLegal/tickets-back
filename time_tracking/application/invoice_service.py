@@ -1528,7 +1528,7 @@ async def delete_draft_invoice(
 async def load_time_entry_hints_for_invoice_lines(
     session: AsyncSession,
     line_items: Iterable[InvoiceLineItemModel],
-) -> dict[str, tuple[date, int]]:
+) -> dict[str, tuple[date, int, str | None]]:
     """Дата работы и автор записи времени для строк счёта (§3 BACKEND_SPEC_INVOICE_DOCUMENTS)."""
     ids = [
         str(li.time_entry_id)
@@ -1538,11 +1538,38 @@ async def load_time_entry_hints_for_invoice_lines(
     uniq = list(dict.fromkeys(ids))
     if not uniq:
         return {}
-    q = select(TimeEntryModel.id, TimeEntryModel.work_date, TimeEntryModel.auth_user_id).where(
-        TimeEntryModel.id.in_(uniq)
-    )
+    q = select(
+        TimeEntryModel.id,
+        TimeEntryModel.work_date,
+        TimeEntryModel.auth_user_id,
+        TimeEntryModel.task_id,
+    ).where(TimeEntryModel.id.in_(uniq))
     rows = (await session.execute(q)).all()
-    return {str(tid): (wd, int(uid)) for tid, wd, uid in rows}
+    task_ids = list(dict.fromkeys(
+        str(task_id) for _entry_id, _work_date, _auth_user_id, task_id in rows if task_id
+    ))
+    task_names: dict[str, str] = {}
+    if task_ids:
+        task_rows = (
+            await session.execute(
+                select(TimeManagerClientTaskModel.id, TimeManagerClientTaskModel.name).where(
+                    TimeManagerClientTaskModel.id.in_(task_ids)
+                )
+            )
+        ).all()
+        task_names = {
+            str(task_id): name.strip()
+            for task_id, name in task_rows
+            if (name or "").strip()
+        }
+    return {
+        str(entry_id): (
+            work_date,
+            int(auth_user_id),
+            task_names.get(str(task_id)) if task_id else None,
+        )
+        for entry_id, work_date, auth_user_id, task_id in rows
+    }
 
 
 async def invoice_to_dict_async(
@@ -1552,7 +1579,7 @@ async def invoice_to_dict_async(
     include_lines: bool = True,
     include_payments: bool = False,
 ) -> dict[str, Any]:
-    hints: dict[str, tuple[date, int]] = {}
+    hints: dict[str, tuple[date, int, str | None]] = {}
     to_load: list[str] = []
     insp = orm_inspect(inv)
     if include_lines and "line_items" in insp.unloaded:
@@ -1576,7 +1603,7 @@ def invoice_to_dict(
     *,
     include_lines: bool = True,
     include_payments: bool = False,
-    time_entry_hints: dict[str, tuple[date, int]] | None = None,
+    time_entry_hints: dict[str, tuple[date, int, str | None]] | None = None,
 ) -> dict[str, Any]:
     amount_paid_override: Decimal | None = None
     if include_payments:
@@ -1690,11 +1717,14 @@ def invoice_to_dict(
             if li.line_kind == "time" and li.time_entry_id:
                 hint = hints.get(str(li.time_entry_id))
                 if hint:
-                    wd, auth_uid = hint
+                    wd, auth_uid, task_name = hint
                     row["timeEntryWorkDate"] = wd.isoformat()
                     row["timeAuthorAuthUserId"] = auth_uid
                     row["time_entry_work_date"] = row["timeEntryWorkDate"]
                     row["time_author_auth_user_id"] = auth_uid
+                    if task_name:
+                        row["timeEntryTaskName"] = task_name
+                        row["time_entry_task_name"] = task_name
             built.append(row)
         out["lines"] = built
         out["line_items"] = built
