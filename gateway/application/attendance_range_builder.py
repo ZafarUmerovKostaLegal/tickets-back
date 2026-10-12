@@ -174,15 +174,55 @@ def build_hikvision_roster(hikvision_users_devices: list) -> dict[str, dict]:
     return roster_by_employee_no
 
 
+def _person_index_keys(rec: dict) -> list[str]:
+    """Keys a punch can be found by: camera id, id without leading zeros, and name."""
+    keys: list[str] = []
+    pid = (rec.get("person_id") or "").strip()
+    if pid and pid != "-":
+        keys.append(pid)
+        if pid.isdigit():
+            stripped = pid.lstrip("0") or "0"
+            if stripped not in keys:
+                keys.append(stripped)
+    name = (rec.get("name") or "").strip().lower()
+    if name and name != "-":
+        name_key = f"name:{name}"
+        if name_key not in keys:
+            keys.append(name_key)
+    return keys
+
+
+def lookup_first_event(
+    first_events_for_day: dict[str, dict],
+    employee_no: str,
+    camera_name: Optional[str] = None,
+) -> Optional[dict]:
+    emp = (employee_no or "").strip()
+    if emp:
+        hit = first_events_for_day.get(emp)
+        if hit:
+            return hit
+        if emp.isdigit():
+            stripped = emp.lstrip("0") or "0"
+            hit = first_events_for_day.get(stripped)
+            if hit:
+                return hit
+    name = (camera_name or "").strip().lower()
+    if name and name != "-":
+        return first_events_for_day.get(f"name:{name}")
+    return None
+
+
 def compute_employee_day_status(
     report_day: date,
     employee_no: str,
     *,
     workday: dict,
     first_events_for_day: dict[str, dict],
+    camera_name: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
     late_border = _late_border_dt(report_day, workday)
-    first = first_events_for_day.get(employee_no)
+    first = lookup_first_event(first_events_for_day, employee_no, camera_name)
     if not first:
         return "absent", None
     first_dt = first["dt"]
@@ -241,8 +281,9 @@ def build_daily_report_items(
             employee_no,
             workday=workday,
             first_events_for_day=first_events_for_day,
+            camera_name=camera_name,
         )
-        first = first_events_for_day.get(employee_no)
+        first = lookup_first_event(first_events_for_day, employee_no, camera_name)
         last_dt = (first or {}).get("last_dt")
         first_dt = (first or {}).get("dt")
         last_time = None
@@ -350,9 +391,10 @@ def index_first_events_by_day(
     result: dict[str, dict[str, dict]] = {}
     for dev in events_devices:
         for rec in (dev.get("records") or []):
-            employee_no = (rec.get("person_id") or "").strip()
-            if not employee_no:
+            index_keys = _person_index_keys(rec)
+            if not index_keys:
                 continue
+            employee_no = index_keys[0]
             dt = _parse_event_dt(rec.get("time"))
             if not dt:
                 continue
@@ -364,13 +406,15 @@ def index_first_events_by_day(
             day_bucket = result.setdefault(day_key, {})
             prev = day_bucket.get(employee_no)
             if not prev:
-                day_bucket[employee_no] = {
+                prev = {
                     "dt": dt,
                     "last_dt": dt,
                     "record": rec,
                     "event_count": 1,
                     "unique_keys": {unique_key},
                 }
+                for key in index_keys:
+                    day_bucket.setdefault(key, prev)
                 continue
             prev["event_count"] = int(prev.get("event_count") or 0) + 1
             keys = prev.get("unique_keys")
@@ -434,6 +478,7 @@ def build_range_report_items(
                 employee_no,
                 workday=workday,
                 first_events_for_day=first_by_emp,
+                camera_name=user.get("camera_name"),
             )
             if status not in {"late", "absent"}:
                 continue

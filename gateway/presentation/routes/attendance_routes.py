@@ -22,9 +22,11 @@ from application.attendance_range_builder import (
     build_hikvision_roster,
     build_range_roster_from_mappings,
     enrich_roster_from_events,
+    fetch_attendance_events_for_range,
     fetch_attendance_range_items,
     index_first_events_by_day,
     iter_dates_inclusive,
+    lookup_first_event,
     merge_people_into_roster,
 )
 
@@ -779,7 +781,17 @@ async def get_daily_attendance_report(
         events_devices = stored_r.json() or []
     stored_count = sum(len(dev.get("records") or []) for dev in events_devices)
 
-    if stored_count == 0:
+    mappings = mappings_r.json() or []
+    roster_probe = build_range_roster_from_mappings(mappings)
+    indexed_probe = index_first_events_by_day(events_devices, start=report_day, end=report_day)
+    probe_day = indexed_probe.get(report_day.isoformat(), {})
+    stored_matches_roster = any(
+        lookup_first_event(probe_day, emp, (row or {}).get("camera_name"))
+        for emp, row in roster_probe.items()
+    )
+    need_live = stored_count == 0 or (bool(roster_probe) and not stored_matches_roster)
+
+    if need_live:
         attendance_params = {
             "date_from": report_day.isoformat(),
             "date_to": report_day.isoformat(),
@@ -791,14 +803,20 @@ async def get_daily_attendance_report(
             async with httpx.AsyncClient(timeout=120.0) as client:
                 events_r = await client.get(f"{base}/hikvision/attendance", params=attendance_params)
         except httpx.RequestError:
-            raise HTTPException(status_code=503, detail="Attendance service unavailable")
-        if events_r.status_code >= 400:
-            raise HTTPException(status_code=events_r.status_code, detail=events_r.text or "Attendance service error")
-        events_devices = events_r.json() or []
-        events_source = "live"
+            if stored_count == 0:
+                raise HTTPException(status_code=503, detail="Attendance service unavailable")
+            events_r = None
+        if events_r is not None and events_r.status_code >= 400:
+            if stored_count == 0:
+                raise HTTPException(status_code=events_r.status_code, detail=events_r.text or "Attendance service error")
+        elif events_r is not None:
+            live_devices = events_r.json() or []
+            live_count = sum(len(dev.get("records") or []) for dev in live_devices)
+            if live_count or stored_count == 0:
+                events_devices = live_devices
+                events_source = "live"
 
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
-    mappings = mappings_r.json() or []
     workday = workday_r.json() or {}
     mapping_by_employee_no = {
         (m.get("camera_employee_no") or "").strip(): m
@@ -958,6 +976,23 @@ async def get_period_attendance_report(
 
     events_devices = stored_r.json() or []
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
+    period_index = index_first_events_by_day(events_devices, start=start, end=end)
+    period_has_punch = any(
+        lookup_first_event(period_index.get(day.isoformat(), {}), emp, (row or {}).get("camera_name"))
+        for day in days
+        for emp, row in roster_by_employee_no.items()
+    )
+    if roster_by_employee_no and not period_has_punch:
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                live_devices = await fetch_attendance_events_for_range(
+                    client, base, allowed, start, end,
+                )
+            live_count = sum(len(dev.get("records") or []) for dev in live_devices)
+            if live_count:
+                events_devices = live_devices
+        except (httpx.RequestError, HTTPException):
+            pass
     enrich_roster_from_events(roster_by_employee_no, events_devices)
 
     first_events_by_day = index_first_events_by_day(events_devices, start=start, end=end)
