@@ -1894,6 +1894,8 @@ async def list_unbilled_time_entries(
                 "roundedHours": float(qty),
                 "durationSeconds": int(e.duration_seconds),
                 "description": e.description,
+                "taskId": str(e.task_id) if e.task_id else None,
+                "taskName": ((task.name or "").strip() or None) if task else None,
                 "billableAmount": float(_money4(amt)),
                 "currency": cur,
                 "sourceCurrency": (cur or pc),

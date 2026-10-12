@@ -274,6 +274,7 @@ class TimeEntryOut(BaseModel):
     client_id: Optional[str] = Field(None, alias="clientId")
     client_name: Optional[str] = Field(None, alias="clientName")
     task_id: Optional[str] = None
+    task_name: Optional[str] = Field(None, alias="taskName")
     description: Optional[str] = None
     external_reference_url: Optional[str] = Field(None, alias="externalReferenceUrl")
     scope_color: Optional[str] = Field(
