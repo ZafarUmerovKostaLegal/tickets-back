@@ -99,6 +99,14 @@ async def list_items(
     )
 
 
+@router.get("/by-number/{inventory_number}", response_model=InventoryItemResponse)
+async def get_item_by_number(inventory_number: str, repo: InventoryRepositoryPort = Depends(get_repo)):
+    item = await repo.get_by_inventory_number(inventory_number.strip())
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _to_response(item)
+
+
 @router.get("/{item_uuid}", response_model=InventoryItemResponse)
 async def get_item(item_uuid: str, repo: InventoryRepositoryPort = Depends(get_repo)):
     uc = GetItemUseCase(repo)
@@ -146,20 +154,25 @@ async def create_item(
             photo_path = save_photo(photo.filename, content)
         except ValueError as e:
             raise HTTPException(status_code=413, detail=str(e))
+    from sqlalchemy.exc import IntegrityError
     uc = CreateItemUseCase(repo)
-    item = await uc.execute(
-        name=name,
-        category_id=category_id,
-        inventory_number=inventory_number,
-        description=description or None,
-        serial_number=serial_number or None,
-        equipment_class=normalize_equipment_class(equipment_class),
-        status=status,
-        photo_path=photo_path,
-        purchase_date=purchase_dt,
-        warranty_until=warranty_dt,
-    )
-    await session.commit()
+    try:
+        item = await uc.execute(
+            name=name,
+            category_id=category_id,
+            inventory_number=inventory_number.strip(),
+            description=description or None,
+            serial_number=serial_number or None,
+            equipment_class=normalize_equipment_class(equipment_class),
+            status=status,
+            photo_path=photo_path,
+            purchase_date=purchase_dt,
+            warranty_until=warranty_dt,
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Этот инвентарный номер уже занят")
     return _to_response(item)
 
 

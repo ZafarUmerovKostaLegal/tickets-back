@@ -6,7 +6,7 @@ from infrastructure.config import get_settings
 
 router = APIRouter(prefix="/api/v1/inventory", tags=["inventory"])
 
-ROLES_CAN_WRITE = {"IT отдел", "Администратор", "Офис менеджер", "Партнер"}
+ROLES_CAN_WRITE = {"IT отдел", "Администратор", "Офис менеджер", "Офис-менеджер", "Партнер"}
 
 
 async def get_current_user(
@@ -149,6 +149,12 @@ async def list_items(
     if assigned_to_user_id is not None:
         params["assigned_to_user_id"] = assigned_to_user_id
     return await _proxy_get("/items", params=params)
+
+
+@router.get("/items/by-number/{inventory_number}")
+async def get_item_by_number(inventory_number: str, user: dict = Depends(get_current_user)):
+    from urllib.parse import quote
+    return await _proxy_get(f"/items/by-number/{quote(inventory_number.strip(), safe='')}")
 
 
 @router.get("/items/{item_uuid}")

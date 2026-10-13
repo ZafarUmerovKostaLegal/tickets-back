@@ -180,7 +180,9 @@ class InventoryRepository(InventoryRepositoryPort):
 
     async def get_by_inventory_number(self, inventory_number: str) -> Optional[InventoryItem]:
         result = await self._session.execute(
-            select(InventoryItemModel).where(InventoryItemModel.inventory_number == inventory_number)
+            select(InventoryItemModel).where(
+                func.lower(InventoryItemModel.inventory_number) == inventory_number.strip().lower()
+            )
         )
         row = result.scalars().one_or_none()
         return _item_to_entity(row) if row else None
