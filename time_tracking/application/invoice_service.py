@@ -102,7 +102,7 @@ def effective_invoice_status(
     paid = _money4(amount_paid_override) if amount_paid_override is not None else _money4(inv.amount_paid)
     if inv.status == "canceled":
         return "canceled"
-    if inv.status in ("client_paid", "send_to_olga"):
+    if inv.status in _REGISTRY_NOTE_STATUSES:
         return inv.status
     bal = _money4(inv.total_amount - paid)
     if inv.total_amount > 0 and bal <= 0:
@@ -1502,8 +1502,17 @@ async def record_payment_confirmation_document(
     return inv
 
 
+_REGISTRY_NOTE_STATUSES = frozenset({
+    "client_paid",
+    "send_to_olga",
+    "client_review",
+    "awaiting_client",
+})
+
 _REGISTRY_STATUS_KEYS = {
     "Черновик": "draft",
+    "На согласовании с Клиентом": "client_review",
+    "Жду подтверждения от клиента": "awaiting_client",
     "Отправлен": "sent",
     "Выставлен": "sent",
     "Просмотрен": "viewed",
@@ -1511,10 +1520,26 @@ _REGISTRY_STATUS_KEYS = {
     "Оплачен": "paid",
     "Оплачен клиентом": "client_paid",
     "Ольге направить": "send_to_olga",
+    "Ольге направила": "send_to_olga",
     "Просрочен": "overdue",
     "Отменён": "canceled",
+    "Отменен": "canceled",
     "Аннулирован": "canceled",
 }
+
+
+def _registry_status_code(label: str) -> str | None:
+    text = " ".join((label or "").split()).strip().rstrip(".")
+    if not text:
+        return None
+    direct = _REGISTRY_STATUS_KEYS.get(text)
+    if direct:
+        return direct
+    folded = text.casefold().replace("ё", "е")
+    for known, code in _REGISTRY_STATUS_KEYS.items():
+        if known.casefold().replace("ё", "е") == folded:
+            return code
+    return None
 
 
 async def apply_registry_status(
@@ -1525,12 +1550,16 @@ async def apply_registry_status(
     label: str,
 ) -> InvoiceModel:
     """Persist a status chosen on the system invoice registry."""
-    key = _REGISTRY_STATUS_KEYS.get((label or "").strip())
+    key = _registry_status_code(label)
     if not key:
         raise HTTPException(status_code=400, detail="Неизвестный статус")
     if effective_invoice_status(inv) == key:
         return inv
-    if key in ("client_paid", "send_to_olga"):
+    if inv.status == "canceled" and key != "canceled":
+        inv = await restore_invoice(session, inv, actor_auth_user_id=actor_auth_user_id)
+        if effective_invoice_status(inv) == key:
+            return inv
+    if key in _REGISTRY_NOTE_STATUSES:
         if inv.status == "canceled":
             raise HTTPException(status_code=400, detail="Счёт отменён")
         inv.status = key
@@ -1545,7 +1574,7 @@ async def apply_registry_status(
             {"toStatus": key},
         )
         return inv
-    if key == "draft" and inv.status in ("client_paid", "send_to_olga"):
+    if key == "draft" and inv.status in _REGISTRY_NOTE_STATUSES:
         inv.status = "draft"
         inv.updated_at = _now_utc()
         flag_modified(inv, "status")
@@ -1631,6 +1660,41 @@ async def apply_registry_status(
 
     inv.updated_at = _now_utc()
     return await mark_viewed(session, inv, actor_auth_user_id=actor_auth_user_id)
+
+
+def _status_before_cancel(inv: InvoiceModel) -> str:
+    """Best status to return to: payments first, then send/view marks, otherwise draft."""
+    paid = _money4(inv.amount_paid or 0)
+    remaining = _money4(inv.total_amount - paid)
+    if inv.total_amount > 0 and remaining <= 0:
+        return "paid"
+    if paid > 0:
+        return "partial_paid"
+    if inv.viewed_at is not None:
+        return "viewed"
+    if inv.sent_at is not None:
+        return "sent"
+    return "draft"
+
+
+async def restore_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int) -> InvoiceModel:
+    if inv.status != "canceled":
+        raise HTTPException(status_code=400, detail="Восстановить можно только отменённый счёт")
+    restored = _status_before_cancel(inv)
+    inv.status = restored
+    inv.canceled_at = None
+    inv.updated_at = _now_utc()
+    flag_modified(inv, "status")
+    repo = InvoiceRepository(session)
+    await _audit(
+        session,
+        repo,
+        inv.id,
+        "restored",
+        actor_auth_user_id,
+        {"toStatus": restored},
+    )
+    return inv
 
 
 async def cancel_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int) -> InvoiceModel:

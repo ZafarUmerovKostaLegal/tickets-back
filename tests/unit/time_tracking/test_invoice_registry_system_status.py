@@ -15,9 +15,22 @@ def _invoice(**kwargs):
         "total_amount": Decimal("1000"),
         "amount_paid": Decimal("0"),
         "due_date": date.today() + timedelta(days=10),
+        "sent_at": None,
+        "viewed_at": None,
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
+
+
+def test_restore_picks_status_from_payments_and_send_marks():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_service import _status_before_cancel
+
+    assert _status_before_cancel(_invoice()) == "draft"
+    assert _status_before_cancel(_invoice(sent_at=date.today())) == "sent"
+    assert _status_before_cancel(_invoice(sent_at=date.today(), viewed_at=date.today())) == "viewed"
+    assert _status_before_cancel(_invoice(amount_paid=Decimal("100"))) == "partial_paid"
+    assert _status_before_cancel(_invoice(amount_paid=Decimal("1000"))) == "paid"
 
 
 def test_system_status_labels():
@@ -36,6 +49,8 @@ def test_system_status_registry_notes_stay_as_set():
 
     assert _system_status(_invoice(status="client_paid", amount_paid=Decimal("1000"))) == "Оплачен клиентом"
     assert _system_status(_invoice(status="send_to_olga", due_date=date.today() - timedelta(days=3))) == "Ольге направить"
+    assert _system_status(_invoice(status="client_review")) == "На согласовании с Клиентом"
+    assert _system_status(_invoice(status="awaiting_client", due_date=date.today() - timedelta(days=2))) == "Жду подтверждения от клиента"
 
 
 def test_system_status_paid_when_balance_is_gone():

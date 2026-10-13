@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from application.invoice_service import (
     cancel_invoice,
+    restore_invoice,
     create_invoice,
     delete_draft_invoice,
     get_invoices_aggregated_stats,
@@ -584,6 +585,22 @@ async def record_payment_confirmation_route(
     assert inv2
     payload = await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
     return _invoice_json_response(payload)
+
+
+@router.post("/{invoice_id}/restore")
+async def restore_invoice_route(
+    invoice_id: str,
+    session: AsyncSession = Depends(get_session),
+    actor: int = Depends(invoice_actor_auth_user_id),
+):
+    inv = await InvoiceRepository(session).get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    inv = await restore_invoice(session, inv, actor_auth_user_id=actor)
+    await session.commit()
+    inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
+    assert inv2
+    return await invoice_to_dict_async(session, inv2, include_lines=True, include_payments=True)
 
 
 @router.post("/{invoice_id}/cancel")
