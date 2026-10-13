@@ -30,6 +30,14 @@ def test_system_status_labels():
     assert _system_status(_invoice(status="canceled", amount_paid=Decimal("1000"))) == "Отменён"
 
 
+def test_system_status_registry_notes_stay_as_set():
+    ensure_service_in_path("time_tracking")
+    from infrastructure.repository_invoice_registry import _system_status
+
+    assert _system_status(_invoice(status="client_paid", amount_paid=Decimal("1000"))) == "Оплачен клиентом"
+    assert _system_status(_invoice(status="send_to_olga", due_date=date.today() - timedelta(days=3))) == "Ольге направить"
+
+
 def test_system_status_paid_when_balance_is_gone():
     ensure_service_in_path("time_tracking")
     from infrastructure.repository_invoice_registry import _system_status

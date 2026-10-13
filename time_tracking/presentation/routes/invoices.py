@@ -20,6 +20,7 @@ from application.invoice_service import (
     invoice_to_dict_async,
     list_unbilled_expenses,
     list_unbilled_time_entries,
+    apply_registry_status,
     mark_viewed,
     patch_invoice_draft,
     register_payment,
@@ -479,6 +480,30 @@ async def notify_accounting_last_page_route(
         ) from e
 
     return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.post("/{invoice_id}/registry-status")
+async def registry_status_route(
+    invoice_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    actor: int = Depends(invoice_actor_auth_user_id),
+):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Некорректный JSON тела запроса") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Тело запроса должно быть JSON-объектом")
+    label = str(payload.get("status") or "").strip()
+    inv = await InvoiceRepository(session).get_with_children(invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    inv = await apply_registry_status(session, inv, actor_auth_user_id=actor, label=label)
+    await session.commit()
+    inv2 = await InvoiceRepository(session).get_with_children(invoice_id)
+    assert inv2
+    return await invoice_to_dict_async(session, inv2, include_lines=False, include_payments=True)
 
 
 @router.post("/{invoice_id}/mark-viewed")

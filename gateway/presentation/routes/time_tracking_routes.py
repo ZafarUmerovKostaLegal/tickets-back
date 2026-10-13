@@ -2033,6 +2033,22 @@ async def invoices_outlook_draft_status(
         raise HTTPException(status_code=502, detail="Invalid JSON from todos outlook draft status") from e
 
 
+@router.post("/invoices/{invoice_id}/registry-status")
+async def invoices_registry_status(
+    invoice_id: str,
+    request: Request,
+    user: dict = Depends(require_view_role),
+):
+    body = await request.json()
+    return await _tt_json(
+        "POST",
+        f"/invoices/{invoice_id}/registry-status",
+        json=body if isinstance(body, dict) else {},
+        params=_invoice_actor_qs(user),
+        timeout=30.0,
+    )
+
+
 @router.post("/invoices/{invoice_id}/mark-viewed")
 async def invoices_mark_viewed(
     invoice_id: str,

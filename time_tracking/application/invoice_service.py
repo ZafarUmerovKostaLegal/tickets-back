@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from calendar import monthrange
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterable
 
@@ -102,6 +102,8 @@ def effective_invoice_status(
     paid = _money4(amount_paid_override) if amount_paid_override is not None else _money4(inv.amount_paid)
     if inv.status == "canceled":
         return "canceled"
+    if inv.status in ("client_paid", "send_to_olga"):
+        return inv.status
     bal = _money4(inv.total_amount - paid)
     if inv.total_amount > 0 and bal <= 0:
         return "paid"
@@ -1498,6 +1500,137 @@ async def record_payment_confirmation_document(
         {"documentUrl": url[:500]},
     )
     return inv
+
+
+_REGISTRY_STATUS_KEYS = {
+    "Черновик": "draft",
+    "Отправлен": "sent",
+    "Выставлен": "sent",
+    "Просмотрен": "viewed",
+    "Частично оплачен": "partial_paid",
+    "Оплачен": "paid",
+    "Оплачен клиентом": "client_paid",
+    "Ольге направить": "send_to_olga",
+    "Просрочен": "overdue",
+    "Отменён": "canceled",
+    "Аннулирован": "canceled",
+}
+
+
+async def apply_registry_status(
+    session: AsyncSession,
+    inv: InvoiceModel,
+    *,
+    actor_auth_user_id: int,
+    label: str,
+) -> InvoiceModel:
+    """Persist a status chosen on the system invoice registry."""
+    key = _REGISTRY_STATUS_KEYS.get((label or "").strip())
+    if not key:
+        raise HTTPException(status_code=400, detail="Неизвестный статус")
+    if effective_invoice_status(inv) == key:
+        return inv
+    if key in ("client_paid", "send_to_olga"):
+        if inv.status == "canceled":
+            raise HTTPException(status_code=400, detail="Счёт отменён")
+        inv.status = key
+        inv.updated_at = _now_utc()
+        flag_modified(inv, "status")
+        await _audit(
+            session,
+            InvoiceRepository(session),
+            inv.id,
+            "registry_status",
+            actor_auth_user_id,
+            {"toStatus": key},
+        )
+        return inv
+    if key == "draft" and inv.status in ("client_paid", "send_to_olga"):
+        inv.status = "draft"
+        inv.updated_at = _now_utc()
+        flag_modified(inv, "status")
+        await _audit(
+            session,
+            InvoiceRepository(session),
+            inv.id,
+            "registry_status",
+            actor_auth_user_id,
+            {"toStatus": "draft"},
+        )
+        return inv
+    if key == "draft":
+        return await unsend_invoice(session, inv, actor_auth_user_id=actor_auth_user_id)
+    if key == "canceled":
+        return await cancel_invoice(session, inv, actor_auth_user_id=actor_auth_user_id)
+    if inv.status == "canceled":
+        raise HTTPException(status_code=400, detail="Счёт отменён")
+    if inv.status == "draft":
+        inv = await send_invoice(session, inv, actor_auth_user_id=actor_auth_user_id)
+
+    paid = _money4(inv.amount_paid or 0)
+    remaining = _money4(inv.total_amount - paid)
+    today = date.today()
+    repo = InvoiceRepository(session)
+
+    if key == "paid":
+        if remaining <= 0:
+            return inv
+        return await register_payment(
+            session,
+            inv,
+            actor_auth_user_id=actor_auth_user_id,
+            amount=None,
+            paid_at=None,
+            payment_method=None,
+            note="Оплата из реестра счетов",
+        )
+
+    if key == "partial_paid":
+        if remaining <= 0:
+            raise HTTPException(status_code=400, detail="Счёт уже оплачен полностью")
+        if paid <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Чтобы поставить «Частично оплачен», сначала запишите сумму оплаты в карточке счёта",
+            )
+        inv.status = "partial_paid"
+        if inv.due_date and inv.due_date < today:
+            inv.due_date = today
+        inv.updated_at = _now_utc()
+        flag_modified(inv, "status")
+        await _audit(session, repo, inv.id, "registry_status", actor_auth_user_id, {"toStatus": key})
+        return inv
+
+    if key == "overdue":
+        if remaining <= 0:
+            raise HTTPException(status_code=400, detail="Оплаченный счёт нельзя отметить просроченным")
+        if inv.due_date is None or inv.due_date >= today:
+            inv.due_date = today - timedelta(days=1)
+        if inv.status not in ("sent", "viewed", "partial_paid"):
+            inv.status = "sent"
+        inv.updated_at = _now_utc()
+        flag_modified(inv, "status")
+        await _audit(session, repo, inv.id, "registry_status", actor_auth_user_id, {"toStatus": key})
+        return inv
+
+    if key in ("sent", "viewed") and remaining > 0 and inv.due_date and inv.due_date < today:
+        inv.due_date = today
+    if key == "sent":
+        if paid > 0:
+            raise HTTPException(status_code=400, detail="Нельзя вернуть статус «Отправлен»: по счёту уже есть оплаты")
+        inv.status = "sent"
+        inv.viewed_at = None
+        now = _now_utc()
+        if inv.sent_at is None:
+            inv.sent_at = now
+        inv.last_sent_at = now
+        inv.updated_at = now
+        flag_modified(inv, "status")
+        await _audit(session, repo, inv.id, "registry_status", actor_auth_user_id, {"toStatus": key})
+        return inv
+
+    inv.updated_at = _now_utc()
+    return await mark_viewed(session, inv, actor_auth_user_id=actor_auth_user_id)
 
 
 async def cancel_invoice(session: AsyncSession, inv: InvoiceModel, *, actor_auth_user_id: int) -> InvoiceModel:

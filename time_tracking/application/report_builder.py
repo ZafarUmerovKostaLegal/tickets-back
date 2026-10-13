@@ -62,6 +62,8 @@ def _effective_invoice_row_status(
     paid = _money4_report(paid_amount)
     if stored == "canceled":
         return "canceled"
+    if stored in ("client_paid", "send_to_olga"):
+        return stored
     bal = _money4_report(tot - paid)
     if tot > 0 and bal <= 0:
         return "paid"
