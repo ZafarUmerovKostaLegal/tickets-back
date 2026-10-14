@@ -63,6 +63,7 @@ def _money_cell(value: Any) -> str:
 _SYSTEM_STATUS_LABELS = {
     "draft": "Черновик",
     "sent": "Отправлен",
+    "issued": "Выставлен",
     "viewed": "Просмотрен",
     "partial_paid": "Частично оплачен",
     "paid": "Оплачен",
@@ -88,7 +89,7 @@ def _system_status(inv: InvoiceModel) -> str:
     from decimal import Decimal
 
     raw = (inv.status or "").strip()
-    if raw in ("client_paid", "send_to_olga", "client_review", "awaiting_client", "canceled"):
+    if raw in ("issued", "client_paid", "send_to_olga", "client_review", "awaiting_client", "canceled"):
         return _SYSTEM_STATUS_LABELS[raw]
     try:
         total = Decimal(str(inv.total_amount or 0))

@@ -1503,6 +1503,7 @@ async def record_payment_confirmation_document(
 
 
 _REGISTRY_NOTE_STATUSES = frozenset({
+    "issued",
     "client_paid",
     "send_to_olga",
     "client_review",
@@ -1514,7 +1515,7 @@ _REGISTRY_STATUS_KEYS = {
     "На согласовании с Клиентом": "client_review",
     "Жду подтверждения от клиента": "awaiting_client",
     "Отправлен": "sent",
-    "Выставлен": "sent",
+    "Выставлен": "issued",
     "Просмотрен": "viewed",
     "Частично оплачен": "partial_paid",
     "Оплачен": "paid",
