@@ -112,6 +112,7 @@ async def apply_time_manager_clients_schema_patch(conn: AsyncConnection) -> None
     )
     await apply_time_tracking_clients_contact_columns_patch(conn)
     await apply_time_tracking_clients_is_archived_patch(conn)
+    await apply_time_tracking_clients_integration_patch(conn)
 
 
 async def apply_time_tracking_clients_is_archived_patch(conn: AsyncConnection) -> None:
@@ -120,6 +121,17 @@ async def apply_time_tracking_clients_is_archived_patch(conn: AsyncConnection) -
             """
             ALTER TABLE time_tracking_clients
                 ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
+    )
+
+
+async def apply_time_tracking_clients_integration_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            ALTER TABLE time_tracking_clients
+                ADD COLUMN IF NOT EXISTS integration VARCHAR(32)
             """
         )
     )
@@ -1418,6 +1430,7 @@ async def apply_time_entries_active_partial_indexes_patch(conn: AsyncConnection)
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
+    ("time_tracking_clients_integration", apply_time_tracking_clients_integration_patch),
     ("client_extra_contacts", apply_client_extra_contacts_schema_patch),
     ("client_expense_categories", apply_client_expense_categories_schema_patch),
     ("client_projects", apply_client_projects_schema_patch),

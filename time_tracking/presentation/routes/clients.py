@@ -16,6 +16,17 @@ from presentation.schemas import (
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
+_CLIENT_INTEGRATIONS = frozenset({"macroview"})
+
+
+def _client_integration(value: str | None) -> str | None:
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if text not in _CLIENT_INTEGRATIONS:
+        raise HTTPException(status_code=400, detail="Неизвестная интеграция")
+    return text
+
 
 def _to_out(row, extra_contacts: list | None = None) -> TimeManagerClientOut:
     ec = (
@@ -40,6 +51,7 @@ def _to_out(row, extra_contacts: list | None = None) -> TimeManagerClientOut:
         contact_email=row.contact_email,
         extra_contacts=ec,
         is_archived=row.is_archived,
+        integration=row.integration,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -97,6 +109,7 @@ async def create_client(
         contact_phone=body.contact_phone,
         contact_email=body.contact_email,
         is_archived=body.is_archived,
+        integration=_client_integration(body.integration),
     )
     await seed_default_expense_categories_for_client(session, row.id)
     await session.commit()
@@ -117,6 +130,8 @@ async def patch_client(
         raise HTTPException(status_code=400, detail="No fields to update")
     if "is_archived" in patch:
         patch["is_archived"] = bool(patch["is_archived"])
+    if "integration" in patch:
+        patch["integration"] = _client_integration(patch["integration"])
     row = await repo.update(client_id, patch)
     if not row:
         raise HTTPException(status_code=404, detail="Client not found")

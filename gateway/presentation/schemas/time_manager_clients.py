@@ -28,6 +28,7 @@ class TimeManagerClientCreateBody(BaseModel):
     contact_phone: Optional[str] = Field(None, alias="contactPhone", max_length=64)
     contact_email: Optional[str] = Field(None, alias="contactEmail", max_length=320)
     is_archived: bool = Field(False, alias="isArchived")
+    integration: Optional[str] = Field(None, max_length=32)
 
 
 class TimeManagerClientPatchBody(BaseModel):
@@ -52,3 +53,4 @@ class TimeManagerClientPatchBody(BaseModel):
     contact_phone: Optional[str] = Field(None, alias="contactPhone", max_length=64)
     contact_email: Optional[str] = Field(None, alias="contactEmail", max_length=320)
     is_archived: Optional[bool] = Field(None, alias="isArchived")
+    integration: Optional[str] = Field(None, max_length=32)

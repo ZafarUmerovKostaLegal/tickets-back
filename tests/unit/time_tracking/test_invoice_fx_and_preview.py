@@ -166,3 +166,53 @@ def test_partner_preview_dataclass_as_dict():
     assert d["timeEntryIds"] == ["te-1"]
     assert d["lines"][0]["sourceCurrency"] == "UZS"
     assert d["lines"][0]["fxRate"] == 0.00008
+
+
+def _preview_line(*, time_id=None, expense_id=None, amount="100"):
+    from application.partner_confirmed_invoice_preview import PartnerInvoicePreviewLine
+
+    return PartnerInvoicePreviewLine(
+        line_kind="time" if time_id else "expense",
+        description="line",
+        quantity=Decimal(1),
+        unit_amount=Decimal(amount),
+        line_total=Decimal(amount),
+        source_currency="USD",
+        source_amount=Decimal(amount),
+        fx_rate=Decimal(1),
+        time_entry_id=time_id,
+        expense_request_id=expense_id,
+    )
+
+
+def test_restrict_partner_preview_keeps_only_selected_time_entries():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_service import restrict_partner_preview_to_selected_ids
+    from application.partner_confirmed_invoice_preview import PartnerInvoicePreview
+
+    preview = PartnerInvoicePreview(
+        currency="USD",
+        expected_subtotal=Decimal("300"),
+        time_subtotal=Decimal("300"),
+        expense_subtotal=Decimal("0"),
+        package_fee_subtotal=Decimal("0"),
+        time_entry_ids=["a", "b", "c"],
+        expense_ids=["e1"],
+        lines=[
+            _preview_line(time_id="a", amount="100"),
+            _preview_line(time_id="b", amount="100"),
+            _preview_line(time_id="c", amount="100"),
+            _preview_line(expense_id="e1", amount="50"),
+        ],
+        project_currency="USD",
+    )
+    restrict_partner_preview_to_selected_ids(
+        preview,
+        time_entry_ids=["b"],
+        expense_ids=[],
+    )
+    assert preview.time_entry_ids == ["b"]
+    assert preview.expense_ids == []
+    assert [ln.time_entry_id or ln.expense_request_id for ln in preview.lines] == ["b"]
+    assert preview.time_subtotal == Decimal("100.0000")
+    assert preview.expense_subtotal == Decimal("0.0000")

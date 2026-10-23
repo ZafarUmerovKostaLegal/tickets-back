@@ -104,6 +104,7 @@ class ClientRepository:
         contact_phone: str | None = None,
         contact_email: str | None = None,
         is_archived: bool = False,
+        integration: str | None = None,
     ) -> TimeManagerClientModel:
         row = TimeManagerClientModel(
             id=str(uuid.uuid4()),
@@ -121,6 +122,7 @@ class ClientRepository:
             contact_phone=(contact_phone or None) and str(contact_phone).strip()[:64] or None,
             contact_email=(contact_email or None) and str(contact_email).strip()[:320] or None,
             is_archived=bool(is_archived),
+            integration=(integration or None) and str(integration).strip()[:32] or None,
             created_at=_now_utc(),
             updated_at=None,
         )
@@ -166,6 +168,9 @@ class ClientRepository:
             row.contact_email = str(v).strip()[:320] if v is not None and str(v).strip() else None
         if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
+        if "integration" in patch:
+            raw = patch["integration"]
+            row.integration = str(raw).strip()[:32] if raw is not None and str(raw).strip() else None
         row.updated_at = _now_utc()
         self._session.add(row)
         return row

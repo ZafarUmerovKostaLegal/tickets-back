@@ -34,6 +34,7 @@ from application.package_billing import (
     package_fee_x,
     package_hours_n,
 )
+from application.partner_confirmed_invoice_preview import PartnerInvoicePreview
 from application.partner_snapshot_invoice_preview import (
     resolve_partner_invoice_preview,
 )
@@ -451,6 +452,46 @@ async def _deferred_partner_request_id(
     return covering.id
 
 
+def restrict_partner_preview_to_selected_ids(
+    preview: PartnerInvoicePreview,
+    *,
+    time_entry_ids: list[str] | None,
+    expense_ids: list[str] | None,
+) -> None:
+    """Keep only the time/expense lines the user ticked on the create form."""
+    if time_entry_ids is None and expense_ids is None:
+        return
+    time_set = {str(i).strip() for i in time_entry_ids if str(i).strip()} if time_entry_ids is not None else None
+    exp_set = {str(i).strip() for i in expense_ids if str(i).strip()} if expense_ids is not None else None
+    kept: list[Any] = []
+    time_total = Decimal(0)
+    expense_total = Decimal(0)
+    for ln in preview.lines:
+        tid = (ln.time_entry_id or "").strip() or None
+        eid = (ln.expense_request_id or "").strip() or None
+        if tid:
+            if time_set is not None and tid not in time_set:
+                continue
+            kept.append(ln)
+            time_total += _money4(ln.line_total)
+            continue
+        if eid:
+            if exp_set is not None and eid not in exp_set:
+                continue
+            kept.append(ln)
+            expense_total += _money4(ln.line_total)
+            continue
+        kept.append(ln)
+    preview.lines = kept
+    if time_set is not None:
+        preview.time_entry_ids = [i for i in preview.time_entry_ids if i in time_set]
+    if exp_set is not None:
+        preview.expense_ids = [i for i in preview.expense_ids if i in exp_set]
+    preview.time_subtotal = _money4(time_total)
+    preview.expense_subtotal = _money4(expense_total)
+    preview.expected_subtotal = _money4(time_total + expense_total)
+
+
 async def create_invoice(
     session: AsyncSession,
     *,
@@ -569,6 +610,8 @@ async def create_invoice(
                 )
 
     partner_preview = None
+    requested_time = time_entry_ids
+    requested_exp = expense_ids
     if (
         (not pure_billed)
         and partner_billing_period_from is not None
@@ -594,9 +637,26 @@ async def create_invoice(
             exclude_invoiced=True,
             partner_confirmation_request_id=partner_confirmation_request_id,
         )
-        time_entry_ids = list(partner_preview.time_entry_ids)
-        expense_ids = list(partner_preview.expense_ids)
-        if not partner_preview.lines and partner_preview.package_fee_subtotal <= 0:
+        requested_time = time_entry_ids
+        requested_exp = expense_ids
+        if requested_time is not None or requested_exp is not None:
+            restrict_partner_preview_to_selected_ids(
+                partner_preview,
+                time_entry_ids=requested_time,
+                expense_ids=requested_exp,
+            )
+            has_selected_line = any(ln.time_entry_id or ln.expense_request_id for ln in partner_preview.lines)
+            if not has_selected_line and (requested_time or requested_exp):
+                partner_preview = None
+                time_entry_ids = requested_time
+                expense_ids = requested_exp
+            else:
+                time_entry_ids = list(partner_preview.time_entry_ids)
+                expense_ids = list(partner_preview.expense_ids)
+        else:
+            time_entry_ids = list(partner_preview.time_entry_ids)
+            expense_ids = list(partner_preview.expense_ids)
+        if partner_preview is not None and not partner_preview.lines and partner_preview.package_fee_subtotal <= 0:
             raise HTTPException(
                 status_code=400,
                 detail="Нет невыставленных строк по подтверждённому периоду для счёта",
@@ -705,6 +765,33 @@ async def create_invoice(
                 )
             )
             sort_order += 1
+        present_time = {ln.time_entry_id for ln in partner_preview.lines if ln.time_entry_id}
+        present_exp = {ln.expense_request_id for ln in partner_preview.lines if ln.expense_request_id}
+        if requested_time:
+            for tid in requested_time:
+                if tid in present_time:
+                    continue
+                added, month_hit = await _append_time_line(
+                    session, repo, inv, tid, sort_order, actor_auth_user_id, fx_book=fx_book,
+                )
+                if added:
+                    sort_order += 1
+                if month_hit:
+                    package_months.add(month_hit)
+        if requested_exp:
+            pid_for_exp = project_id or inv.project_id or eff_pid
+            if pid_for_exp:
+                exp_rows = await _load_expense_rows_for_project(session, pid_for_exp, requested_exp)
+                for eid in requested_exp:
+                    if eid in present_exp:
+                        continue
+                    row = exp_rows.get(eid)
+                    if not row:
+                        continue
+                    await _append_expense_line(
+                        session, repo, inv, row, sort_order, actor_auth_user_id, fx_book=fx_book,
+                    )
+                    sort_order += 1
         if not inv.project_id and eff_pid:
             inv.project_id = eff_pid
         await session.flush()
