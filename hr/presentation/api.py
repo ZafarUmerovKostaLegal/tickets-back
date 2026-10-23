@@ -7,6 +7,7 @@ from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import Base, engine
 from infrastructure import models as _models  # noqa: F401
 from presentation.routes.accounting_settings import router as accounting_settings_router
+from presentation.routes.personnel import router as personnel_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(accounting_settings_router, prefix="/api/v1/hr")
+app.include_router(personnel_router, prefix="/api/v1/hr")
 
 
 @app.get("/health", tags=["health"])

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     auth_service_url: str = "http://auth:1236"
     auth_session_cookie_name: str = "kl_access_token"
     database_url: str = "sqlite+aiosqlite:///./data/hr.db"
+    media_path: str = Field(default="/app/media", validation_alias="MEDIA_PATH")
 
     @field_validator("auth_service_url", mode="before")
     @classmethod
