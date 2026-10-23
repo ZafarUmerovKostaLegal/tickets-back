@@ -7,7 +7,7 @@ from backend_common.media_path import safe_media_path
 MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 
-DOCUMENT_SLOTS = frozenset({"contract", "id", "education", "medical", "other"})
+DOCUMENT_SLOTS = frozenset({"contract", "id", "education", "medical", "orders", "other"})
 PHOTO_SLOT = "photo"
 ALLOWED_SLOTS = DOCUMENT_SLOTS | {PHOTO_SLOT}
 

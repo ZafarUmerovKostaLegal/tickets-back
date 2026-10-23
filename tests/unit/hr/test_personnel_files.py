@@ -9,6 +9,7 @@ def test_personnel_upload_rules():
     from infrastructure.personnel_files import normalize_slot, validate_upload
 
     assert normalize_slot("Contract") == "contract"
+    assert normalize_slot("orders") == "orders"
     with pytest.raises(ValueError):
         normalize_slot("passport")
     validate_upload(filename="dogovor.pdf", content=b"%PDF", slot="contract")
