@@ -718,6 +718,16 @@ class TimeManagerClientProjectOut(BaseModel):
         alias="packageFeeAmount",
         description="Фиксированная плата за месячный пакет часов.",
     )
+    extra_fixed_fee_amount: Optional[Decimal] = Field(
+        None,
+        alias="extraFixedFeeAmount",
+        description="Сумма, которая добавляется к наработанным часам в каждом счёте по проекту.",
+    )
+    extra_fixed_fee_description: Optional[str] = Field(
+        None,
+        alias="extraFixedFeeDescription",
+        description="Текст строки фиксированной суммы в счёте.",
+    )
     is_archived: bool = Field(False, alias="isArchived")
     is_paused: bool = Field(False, alias="isPaused")
     skip_partner_invoice_confirmation: bool = Field(
@@ -833,6 +843,17 @@ class TimeManagerClientProjectCreateBody(BaseModel):
         ge=0,
         alias="packageFeeAmount",
         description="Для hour_package: фиксированная плата $X за месячный пакет.",
+    )
+    extra_fixed_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="extraFixedFeeAmount",
+        description="Дополнительная сумма к часам. Пусто — только наработанные часы.",
+    )
+    extra_fixed_fee_description: Optional[str] = Field(
+        None,
+        max_length=500,
+        alias="extraFixedFeeDescription",
     )
     records_language: ProjectRecordsLanguage = Field(
         ProjectRecordsLanguage.ENG,
@@ -969,6 +990,17 @@ class TimeManagerClientProjectPatchBody(BaseModel):
         ge=0,
         alias="packageFeeAmount",
         description="Для hour_package: плата за месячный пакет.",
+    )
+    extra_fixed_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="extraFixedFeeAmount",
+        description="Дополнительная сумма к часам. null очищает исключение.",
+    )
+    extra_fixed_fee_description: Optional[str] = Field(
+        None,
+        max_length=500,
+        alias="extraFixedFeeDescription",
     )
     records_language: Optional[ProjectRecordsLanguage] = Field(
         None,

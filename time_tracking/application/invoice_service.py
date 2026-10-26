@@ -257,6 +257,160 @@ def format_invoice_total_display(amount: Decimal, currency: str) -> str:
     return f"−{cur} {num}" if neg else f"{cur} {num}"
 
 
+_FIXED_FEE_LINE_KIND = "fixed_fee"
+_DEFAULT_FIXED_FEE_DESCRIPTION = "Fixed amount"
+
+
+def _money_text_is_zero(value: object) -> bool:
+    if value is None:
+        return True
+    parts = str(value).strip().split()
+    if not parts:
+        return True
+    num = parts[-1].replace(",", "")
+    try:
+        return Decimal(num) == 0
+    except Exception:
+        return False
+
+
+def _refresh_cover_after_fixed_fee(
+    inv: InvoiceModel,
+    *,
+    fee_display: str | None,
+    removed_display: str | None,
+) -> None:
+    """Keep the saved cover total and legal extra-expenses row aligned with the invoice."""
+    cur = (inv.currency or "USD").strip().upper()[:10] or "USD"
+    total_fmt = format_invoice_total_display(inv.total_amount, cur)
+    doc = _parse_document_overrides_json(getattr(inv, "document_overrides_json", None)) or {"v": 1}
+    if not isinstance(doc, dict):
+        doc = {"v": 1}
+    cover = dict(doc.get("cover") or {})
+    old_total = cover.get("totalFormatted")
+    if isinstance(old_total, str) and old_total and old_total != total_fmt:
+        for key in ("invoiceParagraphOverride", "introParagraphOverride"):
+            text = cover.get(key)
+            if isinstance(text, str) and old_total in text:
+                cover[key] = text.replace(old_total, total_fmt)
+    cover["totalFormatted"] = total_fmt
+    legal = dict(doc.get("legal") or {})
+    if fee_display:
+        current = legal.get("extraExpensesAmount")
+        if _money_text_is_zero(current) or current == removed_display:
+            legal["extraExpensesAmount"] = fee_display
+    elif removed_display:
+        current = legal.get("extraExpensesAmount")
+        if current == removed_display or _money_text_is_zero(current):
+            legal["extraExpensesAmount"] = format_invoice_total_display(Decimal(0), cur)
+    doc["v"] = 1
+    doc["cover"] = cover
+    if legal:
+        doc["legal"] = legal
+    inv.document_overrides_json = _serialize_document_overrides(doc)
+
+
+async def _sync_fixed_fee_line(
+    session: AsyncSession,
+    repo: InvoiceRepository,
+    inv: InvoiceModel,
+    amount: Decimal | None,
+    description: str | None,
+) -> tuple[bool, str | None]:
+    """Upsert or remove the single hours-plus-fee line. Amount is invoice currency."""
+    await session.refresh(inv, ["line_items"])
+    existing = [li for li in list(inv.line_items or []) if (li.line_kind or "") == _FIXED_FEE_LINE_KIND]
+    cur = (inv.currency or "USD").strip().upper()[:10] or "USD"
+    removed_display = None
+    if existing:
+        removed_display = format_invoice_total_display(existing[0].line_total, cur)
+    fee = _money4(amount) if amount is not None else Decimal(0)
+    if fee <= 0:
+        if not existing:
+            return False, None
+        for li in existing:
+            await session.delete(li)
+        return True, removed_display
+    desc = (description or "").strip()
+    if not desc and existing:
+        desc = (existing[0].description or "").strip()
+    if not desc:
+        desc = _DEFAULT_FIXED_FEE_DESCRIPTION
+    desc = desc[:2000]
+    if (
+        len(existing) == 1
+        and _money4(existing[0].line_total) == fee
+        and (existing[0].description or "") == desc
+    ):
+        return False, None
+    if existing:
+        li = existing[0]
+        li.description = desc
+        li.quantity = Decimal(1)
+        li.unit_amount = fee
+        li.line_total = fee
+        li.source_currency = None
+        li.source_amount = None
+        li.fx_rate = None
+        for extra in existing[1:]:
+            await session.delete(extra)
+        return True, removed_display
+    sort_order = 0
+    for li in inv.line_items or []:
+        sort_order = max(sort_order, int(li.sort_order or 0) + 1)
+    repo.add_line(
+        InvoiceLineItemModel(
+            id=str(uuid.uuid4()),
+            invoice_id=inv.id,
+            sort_order=sort_order,
+            line_kind=_FIXED_FEE_LINE_KIND,
+            description=desc[:2000],
+            quantity=Decimal(1),
+            unit_amount=fee,
+            line_total=fee,
+            time_entry_id=None,
+            expense_request_id=None,
+        )
+    )
+    return True, None
+
+
+async def _apply_extra_fixed_fee(
+    session: AsyncSession,
+    repo: InvoiceRepository,
+    inv: InvoiceModel,
+    proj: TimeManagerClientProjectModel | None,
+    fx_book: FxRateBook | None,
+    *,
+    specified: bool,
+    amount: Decimal | None,
+    description: str | None,
+) -> None:
+    """Add the project exception after hour lines, so the partner total check still matches hours."""
+    if specified:
+        fee: Decimal | None = _money4(amount) if amount is not None else Decimal(0)
+        desc = description
+    else:
+        raw = getattr(proj, "extra_fixed_fee_amount", None) if proj is not None else None
+        if raw is None or _money4(raw) <= 0:
+            return
+        project_ccy = (getattr(proj, "currency", None) or inv.currency or "USD").strip().upper()[:10] or "USD"
+        inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
+        book = fx_book or await load_fx_rate_book(session)
+        conv = convert_or_same(book, _money4(raw), project_ccy, inv_ccy, inv.issue_date)
+        fee = conv.converted_amount
+        desc = description if (description or "").strip() else getattr(proj, "extra_fixed_fee_description", None)
+    changed, removed_display = await _sync_fixed_fee_line(session, repo, inv, fee, desc)
+    if not changed:
+        return
+    await session.flush()
+    await _recalc_invoice_from_lines(session, inv)
+    fee_display = None
+    if fee is not None and fee > 0:
+        fee_display = format_invoice_total_display(fee, inv.currency or "USD")
+    _refresh_cover_after_fixed_fee(inv, fee_display=fee_display, removed_display=removed_display)
+
+
 def last_day_of_previous_month(on: date) -> date:
     """CBU rate date for custom billed invoices: last day of month before issue date."""
     y, m = on.year, on.month
@@ -516,6 +670,9 @@ async def create_invoice(
     billed_amount: Decimal | None = None,
     service_description: str | None = None,
     defer_partner_confirmation: bool = False,
+    extra_fixed_fee_amount: Decimal | None = None,
+    extra_fixed_fee_description: str | None = None,
+    extra_fixed_fee_specified: bool = False,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
     client = await session.get(TimeManagerClientModel, client_id)
@@ -947,6 +1104,18 @@ async def create_invoice(
             doc["cover"] = cover
             inv.document_overrides_json = _serialize_document_overrides(doc)
 
+    if billed_override is None:
+        await _apply_extra_fixed_fee(
+            session,
+            repo,
+            inv,
+            proj,
+            fx_book,
+            specified=extra_fixed_fee_specified,
+            amount=extra_fixed_fee_amount,
+            description=extra_fixed_fee_description,
+        )
+
     await _audit(session, repo, iid, "created", actor_auth_user_id, {"invoiceNumber": number})
     return inv
 
@@ -1325,6 +1494,9 @@ async def patch_invoice_draft(
     replace_lines: list[dict[str, Any]] | None = None,
     document_overrides: dict[str, Any] | None = None,
     document_overrides_provided: bool = False,
+    extra_fixed_fee_amount: Decimal | None = None,
+    extra_fixed_fee_description: str | None = None,
+    extra_fixed_fee_specified: bool = False,
 ) -> InvoiceModel:
     _require_not_canceled(inv)
     repo = InvoiceRepository(session)
@@ -1344,7 +1516,7 @@ async def patch_invoice_draft(
             replace_lines,
         )
     )
-    if draft_only_touch:
+    if draft_only_touch or extra_fixed_fee_specified:
         _require_draft(inv)
 
     if invoice_number is not None:
@@ -1416,7 +1588,19 @@ async def patch_invoice_draft(
         await _ensure_package_fee_lines(session, repo, inv, package_months, sort_idx)
         await session.flush()
 
-    if draft_only_touch or replace_lines is not None:
+    if extra_fixed_fee_specified:
+        await _apply_extra_fixed_fee(
+            session,
+            repo,
+            inv,
+            None,
+            None,
+            specified=True,
+            amount=extra_fixed_fee_amount,
+            description=extra_fixed_fee_description,
+        )
+
+    if draft_only_touch or replace_lines is not None or extra_fixed_fee_specified:
         await _recalc_invoice_from_lines(session, inv)
     inv.updated_at = _now_utc()
     await _audit(session, repo, inv.id, "updated", actor_auth_user_id, {})

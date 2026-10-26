@@ -309,6 +309,9 @@ async def create_invoice_route(
         billed_amount=body.billed_amount,
         service_description=body.service_description,
         defer_partner_confirmation=bool(body.defer_partner_confirmation),
+        extra_fixed_fee_amount=body.extra_fixed_fee_amount,
+        extra_fixed_fee_description=body.extra_fixed_fee_description,
+        extra_fixed_fee_specified="extra_fixed_fee_amount" in body.model_fields_set,
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(inv.id)
@@ -383,6 +386,9 @@ async def patch_invoice_route(
         replace_lines=body.lines,
         document_overrides=body.document_overrides,
         document_overrides_provided="document_overrides" in body.model_fields_set,
+        extra_fixed_fee_amount=body.extra_fixed_fee_amount,
+        extra_fixed_fee_description=body.extra_fixed_fee_description,
+        extra_fixed_fee_specified="extra_fixed_fee_amount" in body.model_fields_set,
     )
     await session.commit()
     inv2 = await InvoiceRepository(session).get_with_children(invoice_id)

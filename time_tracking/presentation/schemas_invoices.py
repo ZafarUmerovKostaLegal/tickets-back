@@ -84,6 +84,22 @@ class InvoiceCreateBody(BaseModel):
         max_length=2000,
         description="Описание услуги на юридической странице счёта (при billedAmount)",
     )
+    extra_fixed_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="extraFixedFeeAmount",
+        description=(
+            "Сумма сверх часов в валюте счёта. "
+            "0 — не добавлять, даже если на проекте задано исключение. "
+            "Если поле не передано — берётся сумма проекта."
+        ),
+    )
+    extra_fixed_fee_description: Optional[str] = Field(
+        None,
+        alias="extraFixedFeeDescription",
+        max_length=500,
+        description="Текст строки фиксированной суммы. Пусто — описание с проекта или «Fixed amount».",
+    )
 
     @field_validator("invoice_number", mode="after")
     @classmethod
@@ -152,6 +168,17 @@ class InvoicePatchBody(BaseModel):
         None,
         alias="documentOverrides",
         description="JSON правок предпросмотра (legal/cover/timeReport); null — очистить",
+    )
+    extra_fixed_fee_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        alias="extraFixedFeeAmount",
+        description="Строка сверх часов в валюте счёта. 0 или null удаляет её из черновика.",
+    )
+    extra_fixed_fee_description: Optional[str] = Field(
+        None,
+        alias="extraFixedFeeDescription",
+        max_length=500,
     )
 
     @field_validator("invoice_number", mode="after")

@@ -734,6 +734,8 @@ class ClientProjectRepository:
             fixed_fee_amount=src.fixed_fee_amount,
             package_hours_per_month=getattr(src, "package_hours_per_month", None),
             package_fee_amount=getattr(src, "package_fee_amount", None),
+            extra_fixed_fee_amount=getattr(src, "extra_fixed_fee_amount", None),
+            extra_fixed_fee_description=getattr(src, "extra_fixed_fee_description", None),
             is_archived=False,
             is_paused=False,
             skip_partner_invoice_confirmation=bool(
@@ -824,6 +826,8 @@ class ClientProjectRepository:
         fixed_fee_amount: Decimal | None = None,
         package_hours_per_month: Decimal | None = None,
         package_fee_amount: Decimal | None = None,
+        extra_fixed_fee_amount: Decimal | None = None,
+        extra_fixed_fee_description: str | None = None,
         is_archived: bool = False,
         is_paused: bool = False,
         skip_partner_invoice_confirmation: bool = False,
@@ -859,6 +863,8 @@ class ClientProjectRepository:
             fixed_fee_amount=fixed_fee_amount,
             package_hours_per_month=package_hours_per_month,
             package_fee_amount=package_fee_amount,
+            extra_fixed_fee_amount=extra_fixed_fee_amount,
+            extra_fixed_fee_description=_strip_opt(extra_fixed_fee_description),
             is_archived=bool(is_archived),
             is_paused=bool(is_paused) and not bool(is_archived),
             skip_partner_invoice_confirmation=bool(skip_partner_invoice_confirmation),
@@ -923,6 +929,10 @@ class ClientProjectRepository:
             row.package_hours_per_month = _decimal_none(patch["package_hours_per_month"])
         if "package_fee_amount" in patch:
             row.package_fee_amount = _decimal_none(patch["package_fee_amount"])
+        if "extra_fixed_fee_amount" in patch:
+            row.extra_fixed_fee_amount = _decimal_none(patch["extra_fixed_fee_amount"])
+        if "extra_fixed_fee_description" in patch:
+            row.extra_fixed_fee_description = _strip_opt(patch["extra_fixed_fee_description"])
         if "is_archived" in patch:
             row.is_archived = bool(patch["is_archived"])
         if "is_paused" in patch:

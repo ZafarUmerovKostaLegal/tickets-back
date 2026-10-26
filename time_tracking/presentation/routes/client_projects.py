@@ -450,6 +450,8 @@ def _project_out(row, usage: int) -> TimeManagerClientProjectOut:
         fixed_fee_amount=_out_fixed_fee_amount_for_api(row),
         package_hours_per_month=getattr(row, "package_hours_per_month", None),
         package_fee_amount=getattr(row, "package_fee_amount", None),
+        extra_fixed_fee_amount=getattr(row, "extra_fixed_fee_amount", None),
+        extra_fixed_fee_description=getattr(row, "extra_fixed_fee_description", None),
         is_archived=row.is_archived,
         is_paused=bool(getattr(row, "is_paused", False)),
         skip_partner_invoice_confirmation=bool(
@@ -894,6 +896,8 @@ async def create_client_project(
             fixed_fee_amount=fixed_fee_stored,
             package_hours_per_month=package_hours if body.project_type == ProjectType.hour_package else None,
             package_fee_amount=package_fee if body.project_type == ProjectType.hour_package else None,
+            extra_fixed_fee_amount=body.extra_fixed_fee_amount,
+            extra_fixed_fee_description=body.extra_fixed_fee_description,
             is_archived=body.is_archived,
             is_paused=bool(getattr(body, "is_paused", False)),
             skip_partner_invoice_confirmation=bool(

@@ -291,6 +291,8 @@ class TimeManagerClientProjectModel(Base):
     send_budget_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     budget_alert_threshold_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     fixed_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    extra_fixed_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    extra_fixed_fee_description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     package_hours_per_month: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     package_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
