@@ -26,6 +26,7 @@ services:
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
       - KOSTA_DAILY_SERVICE_URL=${KOSTA_DAILY_SERVICE_URL:-http://kosta_daily:1251}
+      - FILE_GUARD_SERVICE_URL=${FILE_GUARD_SERVICE_URL:-http://file_guard:1253}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
       - AUTH_DATABASE_URL=${AUTH_DATABASE_URL:-postgresql://gateway:gateway@users_db:5432/kosta_users}
       - TICKETS_DATABASE_URL=${TICKETS_DATABASE_URL:-postgresql://tickets:tickets@tickets_db:5432/kosta_tickets}
@@ -99,6 +100,8 @@ services:
       hr:
         condition: service_started
       kosta_daily:
+        condition: service_started
+      file_guard:
         condition: service_started
 
   contacts:
@@ -882,6 +885,33 @@ services:
       timeout: 5s
       retries: 5
 
+  file_guard:
+    build:
+      context: .
+      dockerfile: file_guard/Dockerfile
+    restart: unless-stopped
+    environment:
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - NOTIFICATIONS_SERVICE_URL=${NOTIFICATIONS_SERVICE_URL:-http://notifications:1237}
+      - WS_INTERNAL_SECRET=${WS_INTERNAL_SECRET:-}
+      - FILE_GUARD_AGENT_TOKEN=${FILE_GUARD_AGENT_TOKEN:-}
+      - FILE_GUARD_NOTIFY_EMAILS=${FILE_GUARD_NOTIFY_EMAILS:-aakhmadjonov@kostalegal.com,zumerov@kostalegal.com}
+      - DATABASE_URL=${FILE_GUARD_DATABASE_URL:-sqlite+aiosqlite:///./data/file_guard.db}
+      - FILE_GUARD_FILES_DIR=/app/data/files
+    volumes:
+      - file_guard_data:/app/data
+    healthcheck:
+      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1253/health\", timeout=3)"' ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      auth:
+        condition: service_healthy
+      notifications:
+        condition: service_started
+
   telegram_bot:
     build:
       context: .
@@ -908,3 +938,4 @@ volumes:
   call_schedule_db_data:
   contacts_data:
   hr_data:
+  file_guard_data:
