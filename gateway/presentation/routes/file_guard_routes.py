@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response as FastAPIResponse
 
 from infrastructure.config import get_settings
+from infrastructure.upstream_auth_context import merge_upstream_headers
 
 router = APIRouter(prefix="/api/v1/file-guard", tags=["file-guard"])
 
@@ -53,11 +54,12 @@ def _unavailable(base: str, exc: httpx.RequestError | None = None) -> JSONRespon
 
 
 def _headers(request: Request) -> dict[str, str]:
-    return {
+    raw = {
         key: value
         for key, value in request.headers.items()
         if key.lower() not in _HOP
     }
+    return merge_upstream_headers(raw) or raw
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

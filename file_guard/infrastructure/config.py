@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     max_stored_bytes: int = Field(default=2 * 1024 * 1024 * 1024, validation_alias="FILE_GUARD_MAX_STORED_BYTES")
     max_events_per_day: int = Field(default=2000, validation_alias="FILE_GUARD_MAX_EVENTS_PER_DAY")
     journal_logins: str = Field(default="aakhmadjonov,zumerov", validation_alias="FILE_GUARD_JOURNAL_LOGINS")
+    auth_session_cookie_name: str = Field(default="kl_access_token", validation_alias="AUTH_SESSION_COOKIE_NAME")
 
     @field_validator("auth_service_url", "notifications_service_url", mode="before")
     @classmethod
