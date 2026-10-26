@@ -867,7 +867,7 @@ async def submit_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     _require_company_expense_actor(user, row.expense_type)
-    if row.created_by_user_id != int(user["id"]):
+    if row.created_by_user_id != int(user["id"]) and not is_moderator(user):
         raise HTTPException(status_code=403, detail="Отправить может только автор")
     if row.status not in ("draft", "revision_required"):
         raise HTTPException(status_code=400, detail="Отправка только из draft или revision_required")
