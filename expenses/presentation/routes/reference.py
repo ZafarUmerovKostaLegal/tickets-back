@@ -196,22 +196,35 @@ async def get_cbu_rates(
                 rows = rows.get("data") or rows.get("rows") or []
             if isinstance(rows, list) and rows:
                 return {"date": date_param.isoformat(), "rows": rows, "source": "cbu"}
-        try:
-            rows = await _market_cbu_rows(client, date_param)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Не удалось загрузить курс на {date_param.isoformat()}: {exc}",
-            ) from exc
-    return {"date": date_param.isoformat(), "rows": rows, "source": "market"}
+        last_exc: Exception | None = None
+        versions = (
+            date_param.isoformat(),
+            (date_param - timedelta(days=1)).isoformat(),
+            "latest",
+        )
+        for version in versions:
+            try:
+                rows = await _market_cbu_rows(client, date_param, version=version)
+            except Exception as exc:
+                last_exc = exc
+                continue
+            return {"date": date_param.isoformat(), "rows": rows, "source": "market"}
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось загрузить курс на {date_param.isoformat()}: {last_exc}",
+        )
 
 
-async def _market_cbu_rows(client, day: date) -> list[dict]:
+async def _market_cbu_rows(client, day: date, *, version: str | None = None) -> list[dict]:
     url = (
         "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@"
-        f"{day.isoformat()}/v1/currencies/usd.min.json"
+        f"{version or day.isoformat()}/v1/currencies/usd.min.json"
     )
-    res = await client.get(url, headers={"Accept": "application/json", "User-Agent": "KostaLegalExpenses/1.0"})
+    res = await client.get(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "KostaLegalExpenses/1.0"},
+        timeout=5.0,
+    )
     res.raise_for_status()
     payload = res.json()
     usd = payload.get("usd") if isinstance(payload, dict) else None

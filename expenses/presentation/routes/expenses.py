@@ -288,10 +288,19 @@ async def _resolve_partner_user_id(
     return partner_user_id
 
 
-def _validate_expense_date(expense_type: str, expense_date: date) -> None:
+def _validate_expense_date(
+    expense_type: str,
+    expense_date: date,
+    *,
+    allow_historical_client: bool = False,
+) -> None:
     today = date.today()
     if expense_date > today:
         raise HTTPException(status_code=400, detail="Дата расхода не может быть в будущем")
+    # A new client expense is always today. An already saved one (revision,
+    # admin edit) keeps its original date — otherwise Send is rejected.
+    if allow_historical_client:
+        return
     if (expense_type or "").strip() == "client_expense" and expense_date != today:
         raise HTTPException(
             status_code=400,
@@ -801,7 +810,7 @@ async def update_expense(
     exp_d = row.expense_date
     if "expense_date" in data:
         exp_d = data["expense_date"]
-    _validate_expense_date(eff_type, exp_d)
+    _validate_expense_date(eff_type, exp_d, allow_historical_client=True)
     partner_user_id_arg: int | None | object = _MISSING
     if "partner_user_id" in data or "expense_type" in data:
         partner_user_id_arg = eff_partner_uid
