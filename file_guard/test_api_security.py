@@ -159,6 +159,41 @@ async def test_upload_stays_inside_storage_and_rejects_oversize(api, tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_same_file_from_another_user_is_kept_once(api):
+    client, settings, factory = api
+    payload = b"same-file-bytes"
+    first = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(windowsUser=r"KOSTA\ivan", fileName="a.pdf")},
+        files={"file": ("a.pdf", payload, "application/octet-stream")},
+        headers=_auth(),
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["duplicate"] is False
+    second = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(windowsUser=r"KOSTA\petr", host="OTHER-PC", fileName="copy.pdf")},
+        files={"file": ("copy.pdf", payload, "application/octet-stream")},
+        headers=_auth(),
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["duplicate"] is True
+    assert second.json()["id"] == first.json()["id"]
+    assert len(list(Path(settings.files_dir).iterdir())) == 1
+    different = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(windowsUser=r"KOSTA\petr", fileName="b.pdf")},
+        files={"file": ("b.pdf", b"other-file-bytes", "application/octet-stream")},
+        headers=_auth(),
+    )
+    assert different.status_code == 201
+    assert different.json()["duplicate"] is False
+    async with factory() as session:
+        rows = list((await session.scalars(select(FileGuardEventModel))).all())
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
 async def test_storage_cap_keeps_the_event_without_another_file(api):
     client, settings, _ = api
     settings.max_stored_bytes = 4

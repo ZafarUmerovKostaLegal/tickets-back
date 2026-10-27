@@ -26,7 +26,7 @@ class FileGuardEventModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="blocked")
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stored_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

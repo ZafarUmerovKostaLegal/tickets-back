@@ -85,6 +85,28 @@ async def _sends_today(session: AsyncSession, host: str, windows_user: str, mome
     return int(count or 0)
 
 
+async def _same_stored_file(session: AsyncSession, digest: str) -> FileGuardEventModel | None:
+    return await session.scalar(
+        select(FileGuardEventModel).where(
+            FileGuardEventModel.file_sha256 == digest,
+            FileGuardEventModel.stored_name.is_not(None),
+        ).order_by(FileGuardEventModel.occurred_at.asc()).limit(1)
+    )
+
+
+async def _ack(session: AsyncSession, row: FileGuardEventModel, *, duplicate: bool) -> dict:
+    limit = await _policy_limit(session, row.host, row.windows_user)
+    used = await _sends_today(session, row.host, row.windows_user, row.occurred_at)
+    return {
+        "id": row.id,
+        "duplicate": duplicate,
+        "storedFile": bool(row.stored_name),
+        "dailySendLimit": limit,
+        "sendsToday": used,
+        "blockAll": limit is None,
+    }
+
+
 @router.get("/policy")
 async def agent_policy(
     host: str = Query(min_length=1, max_length=120),
@@ -121,24 +143,13 @@ async def ingest_event(
         select(FileGuardEventModel).where(FileGuardEventModel.client_event_id == payload.clientEventId)
     )
     if existing is not None:
-        limit = await _policy_limit(session, existing.host, existing.windows_user)
-        used = await _sends_today(session, existing.host, existing.windows_user, existing.occurred_at)
-        return {
-            "id": existing.id,
-            "duplicate": True,
-            "storedFile": bool(existing.stored_name),
-            "dailySendLimit": limit,
-            "sendsToday": used,
-            "blockAll": limit is None,
-        }
+        return await _ack(session, existing, duplicate=True)
 
     host = _clip(payload.host, 120)
     windows_user = _clip(payload.windowsUser, 200)
     if not host or not windows_user:
         raise HTTPException(status_code=400, detail="Некорректное описание события")
     settings = get_settings()
-    if await _events_created_today(session) >= settings.max_events_per_day:
-        raise HTTPException(status_code=429, detail="Слишком много событий за сегодня")
 
     file_name = safe_file_name(payload.fileName or payload.filePath)
     stored_name: str | None = None
@@ -149,17 +160,23 @@ async def ingest_event(
         body = await file.read(settings.max_upload_bytes + 1)
         if len(body) > settings.max_upload_bytes:
             raise HTTPException(status_code=413, detail="Файл больше допустимого размера")
-        if body and directory_size(settings.files_dir) + len(body) <= settings.max_stored_bytes:
-            stored_name = uuid.uuid4().hex
-            stored_path = resolve_stored_file(settings.files_dir, stored_name)
-            if stored_path is None:
-                stored_name = None
-            else:
-                stored_path.parent.mkdir(parents=True, exist_ok=True)
-                stored_path.write_bytes(body)
-                digest = hashlib.sha256(body).hexdigest()
-                size = len(body)
-                file_name = safe_file_name(file.filename or file_name)
+        if body:
+            digest = hashlib.sha256(body).hexdigest()
+            size = len(body)
+            file_name = safe_file_name(file.filename or file_name)
+            prior = await _same_stored_file(session, digest)
+            if prior is not None:
+                return await _ack(session, prior, duplicate=True)
+    if await _events_created_today(session) >= settings.max_events_per_day:
+        raise HTTPException(status_code=429, detail="Слишком много событий за сегодня")
+    if digest and size and directory_size(settings.files_dir) + size <= settings.max_stored_bytes:
+        stored_name = uuid.uuid4().hex
+        stored_path = resolve_stored_file(settings.files_dir, stored_name)
+        if stored_path is None:
+            stored_name = None
+        else:
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(body)
 
     occurred = payload.occurredAt
     if occurred.tzinfo is None:
@@ -194,18 +211,11 @@ async def ingest_event(
         existing = await session.scalar(
             select(FileGuardEventModel).where(FileGuardEventModel.client_event_id == payload.clientEventId)
         )
+        if existing is None and digest:
+            existing = await _same_stored_file(session, digest)
         if existing is None:
             raise
-        limit = await _policy_limit(session, existing.host, existing.windows_user)
-        used = await _sends_today(session, existing.host, existing.windows_user, existing.occurred_at)
-        return {
-            "id": existing.id,
-            "duplicate": True,
-            "storedFile": bool(existing.stored_name),
-            "dailySendLimit": limit,
-            "sendsToday": used,
-            "blockAll": limit is None,
-        }
+        return await _ack(session, existing, duplicate=True)
     except Exception:
         if stored_path is not None:
             stored_path.unlink(missing_ok=True)
