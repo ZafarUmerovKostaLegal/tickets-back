@@ -24,7 +24,8 @@ from presentation.deps import require_agent_token
 router = APIRouter(prefix="/api/v1/file-guard/agent", tags=["file-guard-agent"])
 
 _KINDS = {"send", "clip", "copy", "edit", "new", "open", "access"}
-_STATUSES = {"blocked"}
+_STATUSES = {"blocked", "logged"}
+_LIFE_KINDS = {"new", "edit", "open", "copy"}
 _CHANNELS = {"telegram", "browser", "clip", "net", "fs", ""}
 _MB = 1024 * 1024
 _QUOTA_KINDS = ("send", "clip")
@@ -147,7 +148,12 @@ async def ingest_event(
         payload = AgentEventMeta.model_validate(json.loads(meta))
     except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Некорректное описание события") from exc
-    if payload.kind not in _KINDS or payload.status not in _STATUSES or payload.channel not in _CHANNELS:
+    if payload.kind not in _KINDS or payload.channel not in _CHANNELS:
+        raise HTTPException(status_code=400, detail="Некорректный тип события")
+    if payload.kind in _LIFE_KINDS:
+        if payload.status not in _STATUSES:
+            raise HTTPException(status_code=400, detail="Некорректный тип события")
+    elif payload.status != "blocked":
         raise HTTPException(status_code=400, detail="Некорректный тип события")
 
     existing = await session.scalar(
@@ -198,7 +204,10 @@ async def ingest_event(
     channel = payload.channel or _channel_from_process(payload.process, payload.resource)
     limit = await _policy_limit(session, host, windows_user)
     used = await _bytes_today(session, host, windows_user, occurred)
-    stored_status = "allowed" if _fits(limit, used, size) else "blocked"
+    if payload.kind in _LIFE_KINDS:
+        stored_status = "logged"
+    else:
+        stored_status = "allowed" if _fits(limit, used, size) else "blocked"
     row = FileGuardEventModel(
         id=str(uuid.uuid4()),
         client_event_id=_clip(payload.clientEventId, 80),
