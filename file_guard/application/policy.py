@@ -9,11 +9,17 @@ def pick_daily_send_limit(
     host: str,
     windows_user: str,
 ) -> int | None:
-    """Most specific scope wins. None means the limit is not set."""
+    """Most specific scope with a number wins. The number is megabytes per day.
+
+    A row without a number does not override a broader limit. None means no
+    limit is configured, and the agent then blocks every send.
+    """
     host_key = (host or "").strip().lower()
     user_key = (windows_user or "").strip().lower()
-    ranked: list[tuple[int, int | None]] = []
+    ranked: list[tuple[int, int]] = []
     for row in rows:
+        if row.daily_send_limit is None:
+            continue
         row_host = (row.host or "*").strip().lower()
         row_user = (row.windows_user or "*").strip().lower()
         if row_host not in {host_key, "*"} or row_user not in {user_key, "*"}:

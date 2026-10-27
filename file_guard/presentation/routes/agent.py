@@ -26,6 +26,8 @@ router = APIRouter(prefix="/api/v1/file-guard/agent", tags=["file-guard-agent"])
 _KINDS = {"send", "clip", "copy", "edit", "new", "open", "access"}
 _STATUSES = {"blocked"}
 _CHANNELS = {"telegram", "browser", "clip", "net", "fs", ""}
+_MB = 1024 * 1024
+_QUOTA_KINDS = ("send", "clip")
 
 
 class AgentEventMeta(BaseModel):
@@ -72,18 +74,33 @@ async def _events_created_today(session: AsyncSession) -> int:
     return int(count or 0)
 
 
-async def _sends_today(session: AsyncSession, host: str, windows_user: str, moment: datetime) -> int:
+async def _bytes_today(session: AsyncSession, host: str, windows_user: str, moment: datetime) -> int:
     start = moment.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    count = await session.scalar(
-        select(func.count()).select_from(FileGuardEventModel).where(
+    total = await session.scalar(
+        select(func.coalesce(func.sum(FileGuardEventModel.file_size), 0)).where(
             FileGuardEventModel.host == host,
             FileGuardEventModel.windows_user == windows_user,
             FileGuardEventModel.occurred_at >= start,
-            FileGuardEventModel.kind == "send",
+            FileGuardEventModel.kind.in_(_QUOTA_KINDS),
             FileGuardEventModel.status == "allowed",
         )
     )
-    return int(count or 0)
+    return int(total or 0)
+
+
+def _quota(limit_mb: int | None, used_bytes: int) -> dict:
+    return {
+        "dailyLimitMb": limit_mb,
+        "bytesLimit": None if limit_mb is None else limit_mb * _MB,
+        "bytesUsedToday": used_bytes,
+        "blockAll": limit_mb is None,
+    }
+
+
+def _fits(limit_mb: int | None, used_bytes: int, size: int | None) -> bool:
+    if limit_mb is None or size is None:
+        return False
+    return used_bytes + size <= limit_mb * _MB
 
 
 async def _same_stored_file(session: AsyncSession, digest: str) -> FileGuardEventModel | None:
@@ -97,15 +114,12 @@ async def _same_stored_file(session: AsyncSession, digest: str) -> FileGuardEven
 
 async def _ack(session: AsyncSession, row: FileGuardEventModel, *, duplicate: bool) -> dict:
     limit = await _policy_limit(session, row.host, row.windows_user)
-    used = await _sends_today(session, row.host, row.windows_user, row.occurred_at)
-    return {
-        "id": row.id,
-        "duplicate": duplicate,
-        "storedFile": bool(row.stored_name),
-        "dailySendLimit": limit,
-        "sendsToday": used,
-        "blockAll": limit is None,
-    }
+    used = await _bytes_today(session, row.host, row.windows_user, row.occurred_at)
+    payload = _quota(limit, used)
+    payload["id"] = row.id
+    payload["duplicate"] = duplicate
+    payload["storedFile"] = bool(row.stored_name)
+    return payload
 
 
 @router.get("/policy")
@@ -118,12 +132,8 @@ async def agent_policy(
     host = _clip(host, 120)
     windows_user = _clip(windowsUser, 200)
     limit = await _policy_limit(session, host, windows_user)
-    used = await _sends_today(session, host, windows_user, datetime.now(timezone.utc))
-    return {
-        "dailySendLimit": limit,
-        "sendsToday": used,
-        "blockAll": limit is None,
-    }
+    used = await _bytes_today(session, host, windows_user, datetime.now(timezone.utc))
+    return _quota(limit, used)
 
 
 @router.post("/events", status_code=201)
@@ -187,8 +197,8 @@ async def ingest_event(
         occurred = occurred.replace(tzinfo=timezone.utc)
     channel = payload.channel or _channel_from_process(payload.process, payload.resource)
     limit = await _policy_limit(session, host, windows_user)
-    used = await _sends_today(session, host, windows_user, occurred)
-    stored_status = "blocked" if limit is None or used >= limit else "allowed"
+    used = await _bytes_today(session, host, windows_user, occurred)
+    stored_status = "allowed" if _fits(limit, used, size) else "blocked"
     row = FileGuardEventModel(
         id=str(uuid.uuid4()),
         client_event_id=_clip(payload.clientEventId, 80),
@@ -237,12 +247,9 @@ async def ingest_event(
     except Exception:
         pass
     limit = await _policy_limit(session, host, windows_user)
-    used = await _sends_today(session, host, windows_user, occurred)
-    return {
-        "id": row.id,
-        "duplicate": False,
-        "storedFile": stored_name is not None,
-        "dailySendLimit": limit,
-        "sendsToday": used,
-        "blockAll": limit is None,
-    }
+    used = await _bytes_today(session, host, windows_user, occurred)
+    payload = _quota(limit, used)
+    payload["id"] = row.id
+    payload["duplicate"] = False
+    payload["storedFile"] = stored_name is not None
+    return payload

@@ -28,7 +28,7 @@ def require_journal_user(user: dict = Depends(get_current_user)) -> dict:
 class PolicyBody(BaseModel):
     host: str = Field(default="*", max_length=120)
     windowsUser: str = Field(default="*", max_length=200)
-    dailySendLimit: int | None = Field(default=None, ge=0, le=10000)
+    dailyLimitMb: int | None = Field(default=None, ge=0, le=100000)
 
 
 def _event_out(row: FileGuardEventModel) -> dict:
@@ -100,7 +100,7 @@ async def list_policies(
                 "id": row.id,
                 "host": row.host,
                 "windowsUser": row.windows_user,
-                "dailySendLimit": row.daily_send_limit,
+                "dailyLimitMb": row.daily_send_limit,
             }
             for row in rows
         ]
@@ -121,22 +121,28 @@ async def upsert_policy(
             FileGuardPolicyModel.windows_user == windows_user,
         )
     )
+    if body.dailyLimitMb is None:
+        if row is not None:
+            await session.delete(row)
+            await session.commit()
+        return {"id": "", "host": host, "windowsUser": windows_user, "dailyLimitMb": None, "removed": True}
     if row is None:
         row = FileGuardPolicyModel(
             id=str(uuid.uuid4()),
             host=host,
             windows_user=windows_user,
-            daily_send_limit=body.dailySendLimit,
+            daily_send_limit=body.dailyLimitMb,
             updated_at=datetime.now(timezone.utc),
         )
         session.add(row)
     else:
-        row.daily_send_limit = body.dailySendLimit
+        row.daily_send_limit = body.dailyLimitMb
         row.updated_at = datetime.now(timezone.utc)
     await session.commit()
     return {
         "id": row.id,
         "host": row.host,
         "windowsUser": row.windows_user,
-        "dailySendLimit": row.daily_send_limit,
+        "dailyLimitMb": row.daily_send_limit,
+        "removed": False,
     }

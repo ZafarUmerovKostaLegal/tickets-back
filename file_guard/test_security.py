@@ -40,10 +40,13 @@ def test_stored_name_cannot_escape_directory(tmp_path):
 
 
 def test_policy_prefers_exact_user():
-    broad = FileGuardPolicyModel(id="1", host="*", windows_user="*", daily_send_limit=None)
+    broad = FileGuardPolicyModel(id="1", host="*", windows_user="*", daily_send_limit=100)
     exact = FileGuardPolicyModel(id="2", host="PC-1", windows_user=r"KOSTA\a", daily_send_limit=3)
     assert pick_daily_send_limit([broad, exact], host="PC-1", windows_user=r"KOSTA\a") == 3
-    assert pick_daily_send_limit([broad], host="PC-1", windows_user=r"KOSTA\a") is None
+    assert pick_daily_send_limit([broad], host="PC-1", windows_user=r"KOSTA\a") == 100
+    assert pick_daily_send_limit([], host="PC-1", windows_user=r"KOSTA\a") is None
+    blocked = FileGuardPolicyModel(id="3", host="PC-1", windows_user=r"KOSTA\a", daily_send_limit=0)
+    assert pick_daily_send_limit([broad, blocked], host="PC-1", windows_user=r"KOSTA\a") == 0
 
 
 def test_journal_accepts_session_cookie_when_header_is_missing():

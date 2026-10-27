@@ -283,28 +283,36 @@ async def test_journal_hides_files_from_other_users_and_path_escape(api, tmp_pat
 async def test_only_journal_user_can_set_send_limit(api):
     client, _, _ = api
     app.dependency_overrides[get_current_user] = lambda: {"id": 2, "email": "other@kostalegal.com"}
-    denied = await client.put("/api/v1/file-guard/policies", json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailySendLimit": 2})
+    denied = await client.put("/api/v1/file-guard/policies", json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailyLimitMb": 2})
     assert denied.status_code == 403
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
-    saved = await client.put("/api/v1/file-guard/policies", json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailySendLimit": 2})
+    saved = await client.put("/api/v1/file-guard/policies", json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailyLimitMb": 2})
     assert saved.status_code == 200
     policy = await client.get("/api/v1/file-guard/agent/policy", params={"host": "PC-1", "windowsUser": r"KOSTA\ivan"}, headers=_auth())
     assert policy.status_code == 200
-    assert policy.json()["dailySendLimit"] == 2
+    assert policy.json()["dailyLimitMb"] == 2
+    assert policy.json()["bytesLimit"] == 2 * 1024 * 1024
     assert policy.json()["blockAll"] is False
 
 
 @pytest.mark.asyncio
-async def test_daily_limit_allows_only_that_many_sends(api):
+async def test_daily_limit_is_megabytes_and_user_can_override(api):
     client, _, factory = api
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
-    saved = await client.put(
-        "/api/v1/file-guard/policies",
-        json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailySendLimit": 1},
+    shared = await client.put("/api/v1/file-guard/policies", json={"host": "*", "windowsUser": "*", "dailyLimitMb": 1})
+    assert shared.status_code == 200
+    first = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta()},
+        files={"file": ("a.pdf", b"a" * 700_000, "application/octet-stream")},
+        headers=_auth(),
     )
-    assert saved.status_code == 200
-    first = await client.post("/api/v1/file-guard/agent/events", data={"meta": _meta()}, headers=_auth())
-    second = await client.post("/api/v1/file-guard/agent/events", data={"meta": _meta(fileName="b.pdf")}, headers=_auth())
+    second = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(fileName="b.pdf", filePath=r"C:\Users\ivan\Desktop\b.pdf")},
+        files={"file": ("b.pdf", b"b" * 700_000, "application/octet-stream")},
+        headers=_auth(),
+    )
     assert first.status_code == 201
     assert second.status_code == 201
     async with factory() as session:
@@ -317,8 +325,33 @@ async def test_daily_limit_allows_only_that_many_sends(api):
         params={"host": "PC-1", "windowsUser": r"KOSTA\ivan"},
         headers=_auth(),
     )
-    assert policy.json()["sendsToday"] == 1
-    assert policy.json()["dailySendLimit"] == 1
+    assert policy.json()["dailyLimitMb"] == 1
+    assert policy.json()["bytesUsedToday"] == 700_000
+    personal = await client.put(
+        "/api/v1/file-guard/policies",
+        json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailyLimitMb": 2},
+    )
+    assert personal.status_code == 200
+    third = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(fileName="c.pdf", filePath=r"C:\Users\ivan\Desktop\c.pdf")},
+        files={"file": ("c.pdf", b"c" * 700_000, "application/octet-stream")},
+        headers=_auth(),
+    )
+    assert third.status_code == 201
+    assert third.json()["dailyLimitMb"] == 2
+    cleared = await client.put(
+        "/api/v1/file-guard/policies",
+        json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailyLimitMb": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["removed"] is True
+    inherited = await client.get(
+        "/api/v1/file-guard/agent/policy",
+        params={"host": "PC-1", "windowsUser": r"KOSTA\ivan"},
+        headers=_auth(),
+    )
+    assert inherited.json()["dailyLimitMb"] == 1
 
 
 @pytest.mark.asyncio
