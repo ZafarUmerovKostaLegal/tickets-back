@@ -165,18 +165,21 @@ async def ingest_event(
             size = len(body)
             file_name = safe_file_name(file.filename or file_name)
             prior = await _same_stored_file(session, digest)
-            if prior is not None:
-                return await _ack(session, prior, duplicate=True)
+            if prior is not None and prior.stored_name:
+                stored_name = prior.stored_name
+            elif directory_size(settings.files_dir) + len(body) <= settings.max_stored_bytes:
+                stored_name = uuid.uuid4().hex
+                stored_path = resolve_stored_file(settings.files_dir, stored_name)
+                if stored_path is None:
+                    stored_name = None
+                else:
+                    stored_path.parent.mkdir(parents=True, exist_ok=True)
+                    stored_path.write_bytes(body)
+
     if await _events_created_today(session) >= settings.max_events_per_day:
+        if stored_path is not None:
+            stored_path.unlink(missing_ok=True)
         raise HTTPException(status_code=429, detail="Слишком много событий за сегодня")
-    if digest and size and directory_size(settings.files_dir) + size <= settings.max_stored_bytes:
-        stored_name = uuid.uuid4().hex
-        stored_path = resolve_stored_file(settings.files_dir, stored_name)
-        if stored_path is None:
-            stored_name = None
-        else:
-            stored_path.parent.mkdir(parents=True, exist_ok=True)
-            stored_path.write_bytes(body)
 
     occurred = payload.occurredAt
     if occurred.tzinfo is None:

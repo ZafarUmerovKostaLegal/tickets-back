@@ -172,13 +172,19 @@ async def test_same_file_from_another_user_is_kept_once(api):
     assert first.json()["duplicate"] is False
     second = await client.post(
         "/api/v1/file-guard/agent/events",
-        data={"meta": _meta(windowsUser=r"KOSTA\petr", host="OTHER-PC", fileName="copy.pdf")},
+        data={"meta": _meta(
+            windowsUser=r"KOSTA\petr",
+            host="OTHER-PC",
+            fileName="copy.pdf",
+            filePath=r"\\server\share\copy.pdf",
+        )},
         files={"file": ("copy.pdf", payload, "application/octet-stream")},
         headers=_auth(),
     )
     assert second.status_code == 201, second.text
-    assert second.json()["duplicate"] is True
-    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["duplicate"] is False
+    assert second.json()["storedFile"] is True
+    assert second.json()["id"] != first.json()["id"]
     assert len(list(Path(settings.files_dir).iterdir())) == 1
     different = await client.post(
         "/api/v1/file-guard/agent/events",
@@ -190,7 +196,10 @@ async def test_same_file_from_another_user_is_kept_once(api):
     assert different.json()["duplicate"] is False
     async with factory() as session:
         rows = list((await session.scalars(select(FileGuardEventModel))).all())
-    assert len(rows) == 2
+    by_name = {row.file_name: row for row in rows}
+    assert by_name["a.pdf"].stored_name == by_name["copy.pdf"].stored_name
+    assert by_name["a.pdf"].stored_name != by_name["b.pdf"].stored_name
+    assert by_name["copy.pdf"].file_path == r"\\server\share\copy.pdf"
 
 
 @pytest.mark.asyncio

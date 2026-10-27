@@ -51,21 +51,6 @@ def _event_out(row: FileGuardEventModel) -> dict:
     }
 
 
-def _one_copy_of_each_file(rows: list[FileGuardEventModel]) -> list[FileGuardEventModel]:
-    """Keep the first stored copy when several people sent the same bytes."""
-    seen: set[str] = set()
-    kept: list[FileGuardEventModel] = []
-    for row in sorted(rows, key=lambda item: item.occurred_at):
-        digest = (row.file_sha256 or "").strip()
-        if digest:
-            if digest in seen:
-                continue
-            seen.add(digest)
-        kept.append(row)
-    kept.sort(key=lambda item: item.occurred_at, reverse=True)
-    return kept
-
-
 @router.get("/events")
 async def list_events(
     host: str = Query(default="", max_length=120),
@@ -80,7 +65,7 @@ async def list_events(
     if windowsUser.strip():
         stmt = stmt.where(FileGuardEventModel.windows_user == windowsUser.strip())
     rows = list((await session.scalars(stmt)).all())
-    return {"items": [_event_out(row) for row in _one_copy_of_each_file(rows)]}
+    return {"items": [_event_out(row) for row in rows]}
 
 
 @router.get("/events/{event_id}/file")
