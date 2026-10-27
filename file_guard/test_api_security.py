@@ -295,6 +295,33 @@ async def test_only_journal_user_can_set_send_limit(api):
 
 
 @pytest.mark.asyncio
+async def test_daily_limit_allows_only_that_many_sends(api):
+    client, _, factory = api
+    app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
+    saved = await client.put(
+        "/api/v1/file-guard/policies",
+        json={"host": "PC-1", "windowsUser": r"KOSTA\ivan", "dailySendLimit": 1},
+    )
+    assert saved.status_code == 200
+    first = await client.post("/api/v1/file-guard/agent/events", data={"meta": _meta()}, headers=_auth())
+    second = await client.post("/api/v1/file-guard/agent/events", data={"meta": _meta(fileName="b.pdf")}, headers=_auth())
+    assert first.status_code == 201
+    assert second.status_code == 201
+    async with factory() as session:
+        rows = list((await session.scalars(select(FileGuardEventModel))).all())
+    by_name = {row.file_name: row.status for row in rows}
+    assert by_name["a.pdf"] == "allowed"
+    assert by_name["b.pdf"] == "blocked"
+    policy = await client.get(
+        "/api/v1/file-guard/agent/policy",
+        params={"host": "PC-1", "windowsUser": r"KOSTA\ivan"},
+        headers=_auth(),
+    )
+    assert policy.json()["sendsToday"] == 1
+    assert policy.json()["dailySendLimit"] == 1
+
+
+@pytest.mark.asyncio
 async def test_notification_stays_on_internal_services(api, monkeypatch):
     client, settings, _ = api
     settings.ws_internal_secret = "internal-secret"

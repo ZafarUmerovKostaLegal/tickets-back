@@ -80,6 +80,7 @@ async def _sends_today(session: AsyncSession, host: str, windows_user: str, mome
             FileGuardEventModel.windows_user == windows_user,
             FileGuardEventModel.occurred_at >= start,
             FileGuardEventModel.kind == "send",
+            FileGuardEventModel.status == "allowed",
         )
     )
     return int(count or 0)
@@ -185,6 +186,9 @@ async def ingest_event(
     if occurred.tzinfo is None:
         occurred = occurred.replace(tzinfo=timezone.utc)
     channel = payload.channel or _channel_from_process(payload.process, payload.resource)
+    limit = await _policy_limit(session, host, windows_user)
+    used = await _sends_today(session, host, windows_user, occurred)
+    stored_status = "blocked" if limit is None or used >= limit else "allowed"
     row = FileGuardEventModel(
         id=str(uuid.uuid4()),
         client_event_id=_clip(payload.clientEventId, 80),
@@ -197,7 +201,7 @@ async def ingest_event(
         file_path=_clip(payload.filePath, 2000),
         file_name=file_name,
         kind=payload.kind,
-        status="blocked",
+        status=stored_status,
         channel=channel,
         note=_clip(payload.note, 500),
         file_sha256=digest,
