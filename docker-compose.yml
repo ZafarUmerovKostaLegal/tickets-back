@@ -136,6 +136,7 @@ services:
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
       - AUTH_SESSION_COOKIE_NAME=${AUTH_SESSION_COOKIE_NAME:-kl_access_token}
       - DATABASE_URL=${HR_DATABASE_URL:-sqlite+aiosqlite:///./data/hr.db}
+      - MEDIA_PATH=/app/data/media
     volumes:
       - hr_data:/app/data
     healthcheck:

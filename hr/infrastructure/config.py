@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     auth_service_url: str = "http://auth:1236"
     auth_session_cookie_name: str = "kl_access_token"
     database_url: str = "sqlite+aiosqlite:///./data/hr.db"
-    media_path: str = Field(default="/app/media", validation_alias="MEDIA_PATH")
+    media_path: str = Field(default="/app/data/media", validation_alias="MEDIA_PATH")
 
     @field_validator("auth_service_url", mode="before")
     @classmethod

@@ -32,6 +32,19 @@ def _media_base() -> Path:
     return Path(get_settings().media_path).resolve()
 
 
+def _personnel_file(storage_key: str) -> Path | None:
+    found = personnel_disk_path(_media_base(), storage_key)
+    if found is not None:
+        return found
+    legacy = Path("/app/media")
+    try:
+        if legacy.resolve() == _media_base():
+            return None
+    except OSError:
+        return None
+    return personnel_disk_path(legacy, storage_key)
+
+
 def _payload(row: PersonnelFileModel) -> dict:
     return {
         "id": row.id,
@@ -224,7 +237,7 @@ async def get_primary_photo(
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Главное фото не задано")
-    target = personnel_disk_path(_media_base(), row.storage_key)
+    target = _personnel_file(row.storage_key)
     if target is None:
         raise HTTPException(status_code=404, detail="Файл фото не найден")
     return FileResponse(target, media_type=row.content_type or "image/jpeg")
@@ -238,7 +251,7 @@ async def download_personnel_file(
     _: dict = Depends(require_hr_user),
 ):
     row = await _load_file(session, _check_user_id(user_id), file_id)
-    target = personnel_disk_path(_media_base(), row.storage_key)
+    target = _personnel_file(row.storage_key)
     if target is None:
         raise HTTPException(status_code=404, detail="Файл не найден на диске")
     return FileResponse(

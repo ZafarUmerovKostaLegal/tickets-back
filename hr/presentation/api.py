@@ -10,10 +10,39 @@ from presentation.routes.accounting_settings import router as accounting_setting
 from presentation.routes.personnel import router as personnel_router
 
 
+def _adopt_legacy_media() -> None:
+    """Keep photos that were written to the old container path before the data volume."""
+    from pathlib import Path
+
+    from infrastructure.config import get_settings
+    from infrastructure.personnel_files import save_personnel_bytes
+    from backend_common.media_path import safe_media_path
+
+    current = Path(get_settings().media_path).resolve()
+    legacy = Path("/app/media")
+    try:
+        if not legacy.is_dir() or legacy.resolve() == current:
+            return
+        source = legacy / "hr_personnel"
+        if not source.is_dir():
+            return
+        for src in source.rglob("*"):
+            if not src.is_file():
+                continue
+            relative = src.relative_to(legacy).as_posix()
+            dest = safe_media_path(current, relative)
+            if dest is None or dest.is_file():
+                continue
+            save_personnel_bytes(current, relative, src.read_bytes())
+    except OSError:
+        return
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    _adopt_legacy_media()
     yield
 
 
