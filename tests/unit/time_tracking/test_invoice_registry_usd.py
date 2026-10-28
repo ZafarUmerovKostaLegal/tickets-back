@@ -20,6 +20,12 @@ def test_usd_snapshot_rejects_bad_amounts():
         "amount_usd": "1,000.00",
         "basis": "1000|EUR|2026-10-02",
     }
+    with_rate = clean_registry_usd_item(RegistryUsdItem(
+        id="row1",
+        amountUsd="130.00",
+        basis="120|EUR|2026-10-02|0.92307692",
+    ))
+    assert with_rate["basis"] == "120|EUR|2026-10-02|0.92307692"
     with pytest.raises(HTTPException):
         clean_registry_usd_item(RegistryUsdItem(id="../secret", amountUsd="1.00", basis="1|USD|-"))
     with pytest.raises(HTTPException):

@@ -16,7 +16,9 @@ router = APIRouter(prefix="/invoice-registry", tags=["invoice_registry"])
 
 ARCHIVE_YEARS: tuple[str, ...] = ("2025", "2024", "2023", "2022", "2021", "2020", "checklist")
 _USD_AMOUNT = re.compile(r"^\d{1,3}(?:,\d{3})*\.\d{2}$")
-_USD_BASIS = re.compile(r"^[0-9]+(?:\.[0-9]+)?\|[A-Z]{3}\|(?:-|\d{4}-\d{2}-\d{2})$")
+_USD_BASIS = re.compile(
+    r"^[0-9]+(?:\.[0-9]+)?\|[A-Z]{3}\|(?:-|\d{4}-\d{2}-\d{2})(?:\|[0-9]+(?:\.[0-9]+)?)?$"
+)
 _USD_ROW_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 SYSTEM_YEAR = "2026-system"
 USD_YEARS: tuple[str, ...] = ("2026", SYSTEM_YEAR, "2025", "2024", "2023", "2022", "2021", "2020")
