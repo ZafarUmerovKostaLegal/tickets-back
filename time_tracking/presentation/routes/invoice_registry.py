@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -277,6 +277,7 @@ async def invoice_registry_statistics(
 async def get_invoice_registry_sheet(
     year_id: str,
     q: str | None = Query(None),
+    authorization: str | None = Header(None, alias="Authorization"),
     session: AsyncSession = Depends(get_session),
     _: dict = Depends(require_bearer_user),
 ):
@@ -293,7 +294,7 @@ async def get_invoice_registry_sheet(
             "statuses": sorted(CANON_STATUSES),
         }
     if year_id == SYSTEM_YEAR:
-        rows = await repo.list_system_invoice_rows_2026(q=q)
+        rows = await repo.list_system_invoice_rows_2026(q=q, authorization=authorization)
         return {
             "year": SYSTEM_YEAR,
             "sheetName": SHEET_NAMES[SYSTEM_YEAR],
