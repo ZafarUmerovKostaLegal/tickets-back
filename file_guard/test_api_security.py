@@ -403,3 +403,110 @@ async def test_notification_stays_on_internal_services(api, monkeypatch):
         "http://auth.test/internal/users/by-email",
         "http://notes.test/notifications/system",
     ]
+
+
+@pytest.mark.asyncio
+async def test_storage_lists_unique_files_and_delete_frees_disk(api, tmp_path: Path):
+    client, settings, factory = api
+    payload = b"stored-bytes"
+    first = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(occurredAt="2026-09-02T08:00:00+00:00", fileName="sept.pdf")},
+        files={"file": ("sept.pdf", payload, "application/pdf")},
+        headers=_auth(),
+    )
+    second = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(
+            occurredAt="2026-10-03T08:00:00+00:00",
+            windowsUser=r"KOSTA\petr",
+            host="OTHER-PC",
+            fileName="copy.pdf",
+        )},
+        files={"file": ("copy.pdf", payload, "application/pdf")},
+        headers=_auth(),
+    )
+    other = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta(occurredAt="2026-10-04T08:00:00+00:00", fileName="oct.pdf")},
+        files={"file": ("oct.pdf", b"october-only", "application/pdf")},
+        headers=_auth(),
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert other.status_code == 201
+    assert len(list(Path(settings.files_dir).iterdir())) == 2
+
+    anonymous = await client.get("/api/v1/file-guard/storage")
+    assert anonymous.status_code == 401
+    app.dependency_overrides[get_current_user] = lambda: {"id": 2, "email": "other@kostalegal.com"}
+    forbidden = await client.delete(f"/api/v1/file-guard/storage/{first.json()['id']}")
+    assert forbidden.status_code == 403
+    assert len(list(Path(settings.files_dir).iterdir())) == 2
+
+    app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
+    listed = await client.get("/api/v1/file-guard/storage")
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["totalBytes"] == len(payload) + len(b"october-only")
+    assert len(body["items"]) == 2
+    assert "storedName" not in body["items"][0]
+    assert "stored_name" not in body["items"][0]
+    shared = next(item for item in body["items"] if item["fileName"] == "sept.pdf")
+    assert shared["copies"] == 2
+    assert {person["windowsUser"] for person in shared["users"]} == {r"KOSTA\ivan", r"KOSTA\petr"}
+
+    removed = await client.delete(f"/api/v1/file-guard/storage/{shared['id']}")
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["removedFiles"] == 1
+    assert removed.json()["freedBytes"] == len(payload)
+    assert removed.json()["clearedEvents"] == 2
+    assert len(list(Path(settings.files_dir).iterdir())) == 1
+    async with factory() as session:
+        rows = list((await session.scalars(select(FileGuardEventModel))).all())
+    by_name = {row.file_name: row for row in rows}
+    assert by_name["sept.pdf"].stored_name is None
+    assert by_name["copy.pdf"].stored_name is None
+    assert by_name["oct.pdf"].stored_name
+    assert len(rows) == 3
+
+    month = await client.post("/api/v1/file-guard/storage/remove", json={"ids": [other.json()["id"]]})
+    assert month.status_code == 200
+    assert month.json()["freedBytes"] == len(b"october-only")
+    assert list(Path(settings.files_dir).iterdir()) == []
+    again = await client.get("/api/v1/file-guard/storage")
+    assert again.json()["items"] == []
+    assert again.json()["totalBytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_storage_delete_cannot_escape_the_directory(api, tmp_path: Path):
+    client, settings, factory = api
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET", encoding="utf-8")
+    created = await client.post(
+        "/api/v1/file-guard/agent/events",
+        data={"meta": _meta()},
+        files={"file": ("a.pdf", b"pdf-bytes", "application/pdf")},
+        headers=_auth(),
+    )
+    event_id = created.json()["id"]
+    async with factory() as session:
+        row = await session.get(FileGuardEventModel, event_id)
+        assert row is not None
+        row.stored_name = "../secret.txt"
+        await session.commit()
+    app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
+    escaped = await client.delete(f"/api/v1/file-guard/storage/{event_id}")
+    assert escaped.status_code == 200
+    assert escaped.json()["freedBytes"] == 0
+    assert secret.read_text(encoding="utf-8") == "TOPSECRET"
+    assert Path(settings.files_dir).is_dir()
+    injected = await client.post("/api/v1/file-guard/storage/remove", json={"ids": ["../secret.txt"]})
+    assert injected.status_code == 400
+    quoted = await client.post(
+        "/api/v1/file-guard/storage/remove",
+        json={"ids": ["' OR 1=1 --"]},
+    )
+    assert quoted.status_code == 400
+    assert secret.read_text(encoding="utf-8") == "TOPSECRET"
