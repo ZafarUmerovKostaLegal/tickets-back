@@ -1439,6 +1439,23 @@ async def apply_time_entries_active_partial_indexes_patch(conn: AsyncConnection)
     )
 
 
+async def apply_invoice_registry_usd_patch(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS invoice_registry_usd (
+                year_id VARCHAR(32) NOT NULL,
+                row_id VARCHAR(80) NOT NULL,
+                amount_usd VARCHAR(40) NOT NULL DEFAULT '',
+                basis VARCHAR(160) NOT NULL DEFAULT '',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (year_id, row_id)
+            )
+            """
+        )
+    )
+
+
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
@@ -1483,5 +1500,6 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entry_archives", apply_time_entry_archives_patch),
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
     ("time_entries_active_partial_indexes", apply_time_entries_active_partial_indexes_patch),
+    ("invoice_registry_usd", apply_invoice_registry_usd_patch),
 )
 

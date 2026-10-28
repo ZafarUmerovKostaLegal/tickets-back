@@ -1780,6 +1780,15 @@ async def invoice_registry_replace_rows(
     return await _tt_json("PUT", "/invoice-registry/2026/rows", json=body, params=params or None, timeout=90.0)
 
 
+@router.put("/invoice-registry/{year_id}/usd")
+async def invoice_registry_save_usd(
+    year_id: str,
+    body: dict = Body(...),
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("PUT", f"/invoice-registry/{year_id}/usd", json=body, timeout=30.0)
+
+
 @router.put("/invoice-registry/archive/{year_id}")
 async def invoice_registry_replace_archive(
     year_id: str,

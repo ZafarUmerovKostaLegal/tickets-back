@@ -15,7 +15,11 @@ router = APIRouter(prefix="/invoice-registry", tags=["invoice_registry"])
 
 
 ARCHIVE_YEARS: tuple[str, ...] = ("2025", "2024", "2023", "2022", "2021", "2020", "checklist")
+_USD_AMOUNT = re.compile(r"^\d{1,3}(?:,\d{3})*\.\d{2}$")
+_USD_BASIS = re.compile(r"^[0-9]+(?:\.[0-9]+)?\|[A-Z]{3}\|(?:-|\d{4}-\d{2}-\d{2})$")
+_USD_ROW_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 SYSTEM_YEAR = "2026-system"
+USD_YEARS: tuple[str, ...] = ("2026", SYSTEM_YEAR, "2025", "2024", "2023", "2022", "2021", "2020")
 MANUAL_2026_SEED = "manual-excel-2026-v1"
 SEED_META_ID = "__seed2026"
 SHEET_NAMES: dict[str, str] = {
@@ -142,6 +146,36 @@ class RegistryRowsReplaceBody(BaseModel):
     rows: list[RegistryRowBody] = Field(default_factory=list)
 
 
+class RegistryUsdItem(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    amountUsd: str = Field(min_length=1, max_length=40)
+    basis: str = Field(min_length=1, max_length=160)
+
+
+class RegistryUsdBody(BaseModel):
+    items: list[RegistryUsdItem] = Field(min_length=1, max_length=100)
+
+
+def clean_registry_usd_item(item: RegistryUsdItem) -> dict[str, str]:
+    row_id = item.id.strip()
+    amount = item.amountUsd.strip()
+    basis = item.basis.strip()
+    if not _USD_ROW_ID.fullmatch(row_id) or not _USD_AMOUNT.fullmatch(amount) or not _USD_BASIS.fullmatch(basis):
+        raise HTTPException(status_code=400, detail="Некорректная сумма в долларах")
+    return {"row_id": row_id, "amount_usd": amount, "basis": basis}
+
+
+async def _attach_usd(repo: InvoiceRegistryRepository, year_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    saved = await repo.usd_snapshots(year_id, [str(row.get("id") or "") for row in rows])
+    for row in rows:
+        snap = saved.get(str(row.get("id") or ""))
+        if snap is None:
+            continue
+        row["amountUsd"] = snap.amount_usd
+        row["amountUsdBasis"] = snap.basis
+    return rows
+
+
 @router.get("/years")
 async def list_invoice_registry_years(
     session: AsyncSession = Depends(get_session),
@@ -247,12 +281,13 @@ async def get_invoice_registry_sheet(
     repo = InvoiceRegistryRepository(session)
     if year_id == "2026":
         rows = await repo.list_2026_rows(q=q)
+        payloads = [_row_to_payload(r) for r in rows]
         return {
             "year": "2026",
             "sheetName": SHEET_NAMES["2026"],
             "mode": "active",
             "columns": COL_2026,
-            "rows": [_row_to_payload(r) for r in rows],
+            "rows": await _attach_usd(repo, "2026", payloads),
             "statuses": sorted(CANON_STATUSES),
         }
     if year_id == SYSTEM_YEAR:
@@ -262,13 +297,15 @@ async def get_invoice_registry_sheet(
             "sheetName": SHEET_NAMES[SYSTEM_YEAR],
             "mode": "system",
             "columns": COL_2026,
-            "rows": rows,
+            "rows": await _attach_usd(repo, SYSTEM_YEAR, rows),
             "statuses": sorted(CANON_STATUSES),
         }
     if year_id not in ARCHIVE_YEARS:
         raise HTTPException(status_code=404, detail="Unknown sheet")
     archive = await repo.get_archive_sheet(year_id)
     rows = _safe_rows_json(archive.rows_json if archive else "[]")
+    if year_id in USD_YEARS:
+        rows = await _attach_usd(repo, year_id, rows)
     return {
         "year": year_id,
         "sheetName": SHEET_NAMES.get(year_id, year_id),
@@ -360,6 +397,21 @@ async def replace_invoice_registry_rows_2026(
         await repo.upsert_archive_sheet(SEED_META_ID, sheet_name=revision, rows=[])
     await session.commit()
     return {"ok": True, "rows": n}
+
+
+@router.put("/{year_id}/usd")
+async def save_invoice_registry_usd(
+    year_id: str,
+    body: RegistryUsdBody,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_bearer_user),
+):
+    if year_id not in USD_YEARS:
+        raise HTTPException(status_code=404, detail="Unknown sheet")
+    repo = InvoiceRegistryRepository(session)
+    saved = await repo.save_usd_snapshots(year_id, [clean_registry_usd_item(item) for item in body.items])
+    await session.commit()
+    return {"ok": True, "saved": saved}
 
 
 @router.put("/archive/{year_id}")

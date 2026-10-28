@@ -36,6 +36,18 @@ class InvoiceRegistryRowModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class InvoiceRegistryUsdModel(Base):
+    """Saved dollar amount for a registry row, so the table works when the bank rate API is down."""
+
+    __tablename__ = "invoice_registry_usd"
+
+    year_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    row_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    amount_usd: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    basis: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class InvoiceRegistryArchiveSheetModel(Base):
     __tablename__ = "invoice_registry_archive_sheets"
 

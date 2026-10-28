@@ -11,6 +11,7 @@ from infrastructure.models_invoices import InvoiceModel
 from infrastructure.models_invoice_registry import (
     InvoiceRegistryArchiveSheetModel,
     InvoiceRegistryRowModel,
+    InvoiceRegistryUsdModel,
 )
 
 
@@ -337,6 +338,47 @@ class InvoiceRegistryRepository:
             )
         )
         return bool(res.rowcount and res.rowcount > 0)
+
+    async def usd_snapshots(self, year_id: str, row_ids: list[str]) -> dict[str, InvoiceRegistryUsdModel]:
+        ids = [row_id for row_id in row_ids if row_id][:5000]
+        if not ids:
+            return {}
+        stmt = select(InvoiceRegistryUsdModel).where(
+            InvoiceRegistryUsdModel.year_id == year_id,
+            InvoiceRegistryUsdModel.row_id.in_(ids),
+        )
+        rows = list((await self._s.execute(stmt)).scalars().all())
+        return {row.row_id: row for row in rows}
+
+    async def save_usd_snapshots(self, year_id: str, items: list[dict[str, str]]) -> int:
+        saved = 0
+        for item in items:
+            row_id = item["row_id"]
+            existing = (
+                await self._s.execute(
+                    select(InvoiceRegistryUsdModel).where(
+                        InvoiceRegistryUsdModel.year_id == year_id,
+                        InvoiceRegistryUsdModel.row_id == row_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                self._s.add(
+                    InvoiceRegistryUsdModel(
+                        year_id=year_id,
+                        row_id=row_id,
+                        amount_usd=item["amount_usd"],
+                        basis=item["basis"],
+                        updated_at=_now_utc(),
+                    )
+                )
+            else:
+                existing.amount_usd = item["amount_usd"]
+                existing.basis = item["basis"]
+                existing.updated_at = _now_utc()
+            saved += 1
+        await self._s.flush()
+        return saved
 
     async def list_archive_sheets(self) -> list[InvoiceRegistryArchiveSheetModel]:
         stmt = select(InvoiceRegistryArchiveSheetModel).order_by(InvoiceRegistryArchiveSheetModel.year_id.asc())
