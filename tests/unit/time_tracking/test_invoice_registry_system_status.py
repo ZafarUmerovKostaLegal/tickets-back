@@ -49,7 +49,7 @@ def test_system_status_registry_notes_stay_as_set():
 
     assert _system_status(_invoice(status="issued")) == "Выставлен"
     assert _system_status(_invoice(status="issued", amount_paid=Decimal("1000"))) == "Выставлен"
-    assert _system_status(_invoice(status="client_paid", amount_paid=Decimal("1000"))) == "Оплачен клиентом"
+    assert _system_status(_invoice(status="client_paid", amount_paid=Decimal("1000"))) == "Оплачен"
     assert _system_status(_invoice(status="send_to_olga", due_date=date.today() - timedelta(days=3))) == "Ольге направить"
     assert _system_status(_invoice(status="client_review")) == "На согласовании с Клиентом"
     assert _system_status(_invoice(status="awaiting_client", due_date=date.today() - timedelta(days=2))) == "Жду подтверждения от клиента"

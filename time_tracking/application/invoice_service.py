@@ -103,6 +103,8 @@ def effective_invoice_status(
     paid = _money4(amount_paid_override) if amount_paid_override is not None else _money4(inv.amount_paid)
     if inv.status == "canceled":
         return "canceled"
+    if inv.status == "client_paid":
+        return "paid"
     if inv.status in _REGISTRY_NOTE_STATUSES:
         return inv.status
     bal = _money4(inv.total_amount - paid)
@@ -664,12 +666,17 @@ async def create_invoice(
 
     eff_pid = (project_id or "").strip() or None
     skip_partner_gate = False
+    # Combined invoice: no single project, explicit time/expense ids, caller asked to bill
+    # before partner signatures. Do not collapse the bill onto the first project's confirmation.
+    multi_project_bill = eff_pid is None and defer_partner_confirmation
     proj: TimeManagerClientProjectModel | None = None
     if project_id:
         proj = await session.get(TimeManagerClientProjectModel, project_id)
         if not proj or proj.client_id != client_id:
             raise HTTPException(status_code=400, detail="Проект не принадлежит клиенту")
         skip_partner_gate = bool(getattr(proj, "skip_partner_invoice_confirmation", False))
+    elif multi_project_bill:
+        skip_partner_gate = True
 
     project_ccy = (
         (getattr(proj, "currency", None) or "").strip().upper()[:10] if proj is not None else ""
@@ -954,6 +961,7 @@ async def create_invoice(
             for tid in time_entry_ids:
                 added, month_hit = await _append_time_line(
                     session, repo, inv, tid, sort_order, actor_auth_user_id, fx_book=fx_book,
+                    allow_cross_project=multi_project_bill,
                 )
                 if added:
                     sort_order += 1
@@ -961,19 +969,25 @@ async def create_invoice(
                     package_months.add(month_hit)
             await session.flush()
         if expense_ids:
-            pid_for_exp = project_id or inv.project_id
-            if not pid_for_exp:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Укажите projectId или добавьте сначала строки времени по проекту",
+            if multi_project_bill:
+                exp_rows = await _load_expense_rows_for_project(
+                    session, None, expense_ids, any_project=True,
                 )
-            exp_rows = await _load_expense_rows_for_project(session, pid_for_exp, expense_ids)
+            else:
+                pid_for_exp = project_id or inv.project_id
+                if not pid_for_exp:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Укажите projectId или добавьте сначала строки времени по проекту",
+                    )
+                exp_rows = await _load_expense_rows_for_project(session, pid_for_exp, expense_ids)
             for eid in expense_ids:
                 row = exp_rows.get(eid)
                 if not row:
                     raise HTTPException(status_code=400, detail=f"Расход {eid} не найден или не проходит фильтр")
                 await _append_expense_line(
                     session, repo, inv, row, sort_order, actor_auth_user_id, fx_book=fx_book,
+                    allow_cross_project=multi_project_bill,
                 )
                 sort_order += 1
         if lines:
@@ -1185,6 +1199,7 @@ async def _append_time_line(
     actor_id: int,
     *,
     fx_book: FxRateBook | None = None,
+    allow_cross_project: bool = False,
 ) -> tuple[bool, tuple[str, int, int] | None]:
     """Returns (line_added, optional (project_id, year, month) for package fee)."""
     other = await repo.time_entry_on_active_invoice(time_entry_id, exclude_invoice_id=inv.id)
@@ -1200,11 +1215,12 @@ async def _append_time_line(
         raise HTTPException(status_code=404, detail="Запись времени не найдена")
     if not entry.is_billable:
         raise HTTPException(status_code=400, detail="В счёт можно включать только billable-записи")
-    if inv.project_id and entry.project_id and entry.project_id != inv.project_id:
-        raise HTTPException(status_code=400, detail="Запись относится к другому проекту")
-    if inv.project_id is None and entry.project_id:
-        inv.project_id = entry.project_id
-        await session.flush()
+    if not allow_cross_project:
+        if inv.project_id and entry.project_id and entry.project_id != inv.project_id:
+            raise HTTPException(status_code=400, detail="Запись относится к другому проекту")
+        if inv.project_id is None and entry.project_id:
+            inv.project_id = entry.project_id
+            await session.flush()
     rates = await _load_user_rates(session, None)
     user_rates = rates.get(entry.auth_user_id)
     cpr = ClientProjectRepository(session)
@@ -1342,6 +1358,7 @@ async def _append_expense_line(
     actor_id: int,
     *,
     fx_book: FxRateBook | None = None,
+    allow_cross_project: bool = False,
 ) -> None:
     eid = str(row["id"])
     other = await repo.expense_on_active_invoice(eid, exclude_invoice_id=inv.id)
@@ -1358,11 +1375,12 @@ async def _append_expense_line(
     if not reimb:
         raise HTTPException(status_code=400, detail="В счёт можно включать только reimbursable-расходы")
     pid = row.get("project_id")
-    if pid and not inv.project_id:
-        inv.project_id = str(pid)
-        await session.flush()
-    if inv.project_id and pid and str(pid) != str(inv.project_id):
-        raise HTTPException(status_code=400, detail="Расход привязан к другому проекту")
+    if not allow_cross_project:
+        if pid and not inv.project_id:
+            inv.project_id = str(pid)
+            await session.flush()
+        if inv.project_id and pid and str(pid) != str(inv.project_id):
+            raise HTTPException(status_code=400, detail="Расход привязан к другому проекту")
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
     book = fx_book or await load_fx_rate_book(session)
     conv = convert_expense_amount(book, row, inv_ccy, inv.issue_date)
@@ -1421,13 +1439,18 @@ async def _append_manual_line(
 
 
 async def _load_expense_rows_for_project(
-    session: AsyncSession, project_id: str | None, expense_ids: list[str]
+    session: AsyncSession,
+    project_id: str | None,
+    expense_ids: list[str],
+    *,
+    any_project: bool = False,
 ) -> dict[str, dict]:
-    if not project_id or not expense_ids:
+    if not expense_ids or (not project_id and not any_project):
         return {}
     df = date(2000, 1, 1)
     dt = date(2099, 12, 31)
-    rows = await _fetch_expense_report_data(df, dt, None, [project_id])
+    project_ids = [project_id] if project_id else None
+    rows = await _fetch_expense_report_data(df, dt, None, project_ids)
     by_id = {str(r["id"]): r for r in rows if r.get("id")}
     return {eid: by_id[eid] for eid in expense_ids if eid in by_id}
 
@@ -1757,7 +1780,6 @@ async def record_payment_confirmation_document(
 
 _REGISTRY_NOTE_STATUSES = frozenset({
     "issued",
-    "client_paid",
     "send_to_olga",
     "client_review",
     "awaiting_client",
@@ -1772,7 +1794,7 @@ _REGISTRY_STATUS_KEYS = {
     "Просмотрен": "viewed",
     "Частично оплачен": "partial_paid",
     "Оплачен": "paid",
-    "Оплачен клиентом": "client_paid",
+    "Оплачен клиентом": "paid",
     "Ольге направить": "send_to_olga",
     "Ольге направила": "send_to_olga",
     "Просрочен": "overdue",

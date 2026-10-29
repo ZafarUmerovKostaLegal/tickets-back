@@ -444,6 +444,22 @@ async def apply_client_projects_is_paused_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_drop_client_paid_invoice_status_patch(conn: AsyncConnection) -> None:
+    """Retired status: client_paid is the same as paid."""
+    await conn.execute(
+        text("UPDATE time_tracking_invoices SET status = 'paid' WHERE status = 'client_paid'")
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE invoice_registry_rows
+            SET status_note = 'Оплачен'
+            WHERE lower(btrim(status_note)) IN ('оплачен клиентом', 'оплачен клиентом.')
+            """
+        )
+    )
+
+
 async def apply_client_projects_skip_partner_invoice_confirmation_patch(conn: AsyncConnection) -> None:
     """Exception projects: create invoices without fully_confirmed partner period."""
     await add_columns_if_missing(
@@ -1501,5 +1517,6 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
     ("time_entries_active_partial_indexes", apply_time_entries_active_partial_indexes_patch),
     ("invoice_registry_usd", apply_invoice_registry_usd_patch),
+    ("drop_client_paid_invoice_status", apply_drop_client_paid_invoice_status_patch),
 )
 
