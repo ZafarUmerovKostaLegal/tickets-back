@@ -261,26 +261,13 @@ _FIXED_FEE_LINE_KIND = "fixed_fee"
 _DEFAULT_FIXED_FEE_DESCRIPTION = "Fixed amount"
 
 
-def _money_text_is_zero(value: object) -> bool:
-    if value is None:
-        return True
-    parts = str(value).strip().split()
-    if not parts:
-        return True
-    num = parts[-1].replace(",", "")
-    try:
-        return Decimal(num) == 0
-    except Exception:
-        return False
-
-
 def _refresh_cover_after_fixed_fee(
     inv: InvoiceModel,
     *,
     fee_display: str | None,
     removed_display: str | None,
 ) -> None:
-    """Keep the saved cover total and legal extra-expenses row aligned with the invoice."""
+    """Keep the saved cover total aligned with the invoice. The fixed fee stays in that total, not in EXTRA EXPENSES."""
     cur = (inv.currency or "USD").strip().upper()[:10] or "USD"
     total_fmt = format_invoice_total_display(inv.total_amount, cur)
     doc = _parse_document_overrides_json(getattr(inv, "document_overrides_json", None)) or {"v": 1}
@@ -295,14 +282,9 @@ def _refresh_cover_after_fixed_fee(
                 cover[key] = text.replace(old_total, total_fmt)
     cover["totalFormatted"] = total_fmt
     legal = dict(doc.get("legal") or {})
-    if fee_display:
-        current = legal.get("extraExpensesAmount")
-        if _money_text_is_zero(current) or current == removed_display:
-            legal["extraExpensesAmount"] = fee_display
-    elif removed_display:
-        current = legal.get("extraExpensesAmount")
-        if current == removed_display or _money_text_is_zero(current):
-            legal["extraExpensesAmount"] = format_invoice_total_display(Decimal(0), cur)
+    current = legal.get("extraExpensesAmount")
+    if (fee_display and current == fee_display) or (removed_display and current == removed_display):
+        legal["extraExpensesAmount"] = format_invoice_total_display(Decimal(0), cur)
     doc["v"] = 1
     doc["cover"] = cover
     if legal:
