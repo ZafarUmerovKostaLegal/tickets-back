@@ -25,6 +25,7 @@ services:
       - CONTACTS_SERVICE_URL=${CONTACTS_SERVICE_URL:-http://contacts:1248}
       - CORRESPONDENCE_SERVICE_URL=${CORRESPONDENCE_SERVICE_URL:-http://correspondence:1249}
       - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:1250}
+      - LEGAL_HUB_SERVICE_URL=${LEGAL_HUB_SERVICE_URL:-http://legal_hub:1254}
       - KOSTA_DAILY_SERVICE_URL=${KOSTA_DAILY_SERVICE_URL:-http://kosta_daily:1251}
       - FILE_GUARD_SERVICE_URL=${FILE_GUARD_SERVICE_URL:-http://file_guard:1253}
       - SMART_HOME_SERVICE_URL=${SMART_HOME_SERVICE_URL:-http://host.docker.internal:8765}
@@ -99,6 +100,8 @@ services:
         condition: service_started
       hr:
         condition: service_started
+      legal_hub:
+        condition: service_started
       kosta_daily:
         condition: service_started
       file_guard:
@@ -141,6 +144,27 @@ services:
       - hr_data:/app/data
     healthcheck:
       test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1250/health\", timeout=3)"' ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      auth:
+        condition: service_healthy
+
+  legal_hub:
+    build:
+      context: .
+      dockerfile: legal_hub/Dockerfile
+    restart: unless-stopped
+    environment:
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth:1236}
+      - AUTH_SESSION_COOKIE_NAME=${AUTH_SESSION_COOKIE_NAME:-kl_access_token}
+      - DATABASE_URL=${LEGAL_HUB_DATABASE_URL:-sqlite+aiosqlite:///./data/legal_hub.db}
+    volumes:
+      - legal_hub_data:/app/data
+    healthcheck:
+      test: [ "CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:1254/health\", timeout=3)"' ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -939,4 +963,5 @@ volumes:
   call_schedule_db_data:
   contacts_data:
   hr_data:
+  legal_hub_data:
   file_guard_data:
