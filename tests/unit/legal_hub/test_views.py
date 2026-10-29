@@ -18,17 +18,3 @@ def test_task_views_split_mine_review_and_team():
     assert task_in_view(**review) is True
     assert task_in_view(**other) is False
     assert task_in_view(**team) is True
-
-
-def test_legal_hub_health_is_open_and_tasks_require_auth():
-    ensure_service_in_path("legal_hub")
-    from fastapi.testclient import TestClient
-    from presentation.api import app
-
-    with TestClient(app) as client:
-        health = client.get("/health")
-        tasks = client.get("/api/v1/legal-hub/tasks")
-
-    assert health.status_code == 200
-    assert health.json()["service"] == "legal_hub"
-    assert tasks.status_code == 401

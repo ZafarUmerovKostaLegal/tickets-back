@@ -102,6 +102,7 @@ _SYSTEM_STATUS_LABELS = {
     "viewed": "Просмотрен",
     "partial_paid": "Частично оплачен",
     "paid": "Оплачен",
+    "client_paid": "Оплачен клиентом",
     "send_to_olga": "Ольге направить",
     "client_review": "На согласовании с Клиентом",
     "awaiting_client": "Жду подтверждения от клиента",
@@ -123,9 +124,7 @@ def _system_status(inv: InvoiceModel) -> str:
     from decimal import Decimal
 
     raw = (inv.status or "").strip()
-    if raw == "client_paid":
-        return _SYSTEM_STATUS_LABELS["paid"]
-    if raw in ("issued", "send_to_olga", "client_review", "awaiting_client", "canceled"):
+    if raw in ("issued", "client_paid", "send_to_olga", "client_review", "awaiting_client", "canceled"):
         return _SYSTEM_STATUS_LABELS[raw]
     try:
         total = Decimal(str(inv.total_amount or 0))
