@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,13 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from application.kind_legend import KIND_LEGEND_ENTRIES, KindLegendEntry
+from application.leave_request_service import ensure_current_pdf, render_and_attach_pdf
 from application.schedule_employee_sync import (
     audit_schedule_employees_for_year,
     sync_schedule_employees_for_year,
 )
+from backend_common.media_path import safe_media_path
 from infrastructure.auth_lookup import list_staff_users
+from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.models import AbsenceDay, ScheduleEmployee, ScheduleRosterHidden
+from infrastructure.models import (
+    LEAVE_STATUS_APPROVED,
+    AbsenceDay,
+    LeaveRequest,
+    ScheduleEmployee,
+    ScheduleRosterHidden,
+)
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -45,6 +55,7 @@ class AbsenceDayOut(BaseModel):
     absence_on: date
     kind_code: int
     kind: str = Field(description="Стабильный ключ вида отсутствия")
+    leave_request_id: int | None = None
 
 
 class AbsenceDayWithEmployeeOut(BaseModel):
@@ -56,8 +67,16 @@ class AbsenceDayWithEmployeeOut(BaseModel):
     kind: str
 
 
+class LeaveDocumentOut(BaseModel):
+    leave_request_id: int
+    date_from: date
+    date_to: date
+    kind: str
+
+
 class EmployeeWithAbsencesOut(EmployeeOut):
     absence_days: list[AbsenceDayOut]
+    leave_documents: list[LeaveDocumentOut] = []
 
 
 class ImportResultOut(BaseModel):
@@ -141,7 +160,79 @@ def _absence_out(d: AbsenceDay) -> AbsenceDayOut:
         absence_on=d.absence_on,
         kind_code=d.kind_code,
         kind=KIND_LABELS.get(d.kind_code, "unknown"),
+        leave_request_id=d.leave_request_id,
     )
+
+
+def _person_name_key(value: str | None) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _request_covers_day(req: LeaveRequest, day: date) -> bool:
+    return req.date_from <= day <= req.date_to
+
+
+async def _leave_documents_for_employee(
+    session: AsyncSession,
+    employee: ScheduleEmployee,
+    days: list[AbsenceDay],
+) -> list[LeaveDocumentOut]:
+    """Заявления, чьи дни есть в графике этого сотрудника.
+
+    Связка по leave_request_id, по пользователю системы и по имени —
+    дни, внесённые до появления связи, тоже находят свой PDF.
+    """
+    if not days:
+        return []
+    linked_ids = {d.leave_request_id for d in days if d.leave_request_id}
+    year_start = date(employee.year, 1, 1)
+    year_end = date(employee.year, 12, 31)
+    rows = await session.execute(
+        select(LeaveRequest).where(
+            LeaveRequest.status == LEAVE_STATUS_APPROVED,
+            LeaveRequest.date_from <= year_end,
+            LeaveRequest.date_to >= year_start,
+        )
+    )
+    name_key = _person_name_key(employee.full_name)
+    found: list[LeaveDocumentOut] = []
+    seen: set[int] = set()
+    for req in rows.scalars():
+        if req.id in seen:
+            continue
+        linked = req.id in linked_ids
+        same_user = employee.auth_user_id is not None and req.employee_user_id == employee.auth_user_id
+        same_name = bool(name_key) and _person_name_key(req.employee_full_name) == name_key
+        if not (linked or same_user or same_name):
+            continue
+        if not any(_request_covers_day(req, d.absence_on) for d in days):
+            continue
+        seen.add(req.id)
+        found.append(
+            LeaveDocumentOut(
+                leave_request_id=req.id,
+                date_from=req.date_from,
+                date_to=req.date_to,
+                kind=KIND_LABELS.get(req.kind_code, "unknown"),
+            )
+        )
+    found.sort(key=lambda item: (item.date_from, item.leave_request_id))
+    return found
+
+
+async def _load_employee_leave_request(
+    session: AsyncSession,
+    employee: ScheduleEmployee,
+    leave_request_id: int,
+) -> LeaveRequest:
+    days = list(employee.absence_days or [])
+    docs = await _leave_documents_for_employee(session, employee, days)
+    if not any(doc.leave_request_id == leave_request_id for doc in docs):
+        raise HTTPException(status_code=404, detail="Заявление для этого сотрудника не найдено")
+    row = await session.get(LeaveRequest, leave_request_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    return row
 
 
 @router.post("/import", response_model=ImportResultOut)
@@ -323,6 +414,7 @@ async def get_employee(
     if year is not None and e.year != year:
         raise HTTPException(status_code=404, detail="Employee not found for this year")
     days = sorted(e.absence_days, key=lambda d: d.absence_on)
+    documents = await _leave_documents_for_employee(session, e, days)
     return EmployeeWithAbsencesOut(
         id=e.id,
         year=e.year,
@@ -332,6 +424,40 @@ async def get_employee(
         email=e.email,
         planned_period_note=e.planned_period_note,
         absence_days=[_absence_out(d) for d in days],
+        leave_documents=documents,
+    )
+
+
+@router.get("/employees/{employee_id}/leave-requests/{leave_request_id}/pdf")
+async def download_employee_leave_request_pdf(
+    employee_id: int,
+    leave_request_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    q = (
+        select(ScheduleEmployee)
+        .options(selectinload(ScheduleEmployee.absence_days))
+        .where(ScheduleEmployee.id == employee_id)
+    )
+    employee = (await session.execute(q)).scalar_one_or_none()
+    if employee is None:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    req = await _load_employee_leave_request(session, employee, leave_request_id)
+    changed = await ensure_current_pdf(session, req)
+    if not req.pdf_storage_key:
+        await render_and_attach_pdf(session, req)
+        changed = True
+    if changed:
+        await session.commit()
+    if not req.pdf_storage_key:
+        raise HTTPException(status_code=404, detail="PDF не сформирован")
+    target = safe_media_path(get_settings().media_path, req.pdf_storage_key)
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="PDF файл недоступен")
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        filename=f"leave_request_{req.id}.pdf",
     )
 
 
