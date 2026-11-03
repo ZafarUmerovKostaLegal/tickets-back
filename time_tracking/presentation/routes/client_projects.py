@@ -858,7 +858,12 @@ async def create_client_project(
                 detail="Для фикс-проекта задайте сумму в поле бюджета (budgetAmount); при пакете «сумма + часы» добавьте лимит часов (budgetHours).",
             )
     money_for_type = budget_amount
-    if body.project_type in (ProjectType.time_and_materials, ProjectType.non_billable):
+    _raw_bt_create = str(body.budget_type or "").lower().replace("-", "_")
+    _soft_bt_create = _raw_bt_create in ("hourly_rate", "hourly", "no_budget", "none")
+    if (
+        not _soft_bt_create
+        and body.project_type in (ProjectType.time_and_materials, ProjectType.non_billable)
+    ):
         if not _positive_budget_amount(money_for_type) and body.progress_budget_amount is not None:
             if _d(body.progress_budget_amount) > 0:
                 money_for_type = body.progress_budget_amount
@@ -866,7 +871,14 @@ async def create_client_project(
         body_budget_hours,
         money_for_type if _positive_budget_amount(money_for_type) else None,
     )
-    _budget_type_create = _bt_persist if _bt_persist is not None else body.budget_type
+    if _bt_persist is not None:
+        _budget_type_create = _bt_persist
+    elif _raw_bt_create == "hourly":
+        _budget_type_create = "hourly_rate"
+    elif _raw_bt_create == "none":
+        _budget_type_create = "no_budget"
+    else:
+        _budget_type_create = body.budget_type
     fixed_fee_stored = (
         budget_amount
         if body.project_type == ProjectType.fixed_fee and _positive_budget_amount(budget_amount)
@@ -1142,8 +1154,13 @@ async def patch_client_project(
             )
         else:
             money_for_type = m_a
-            if eff_pt in ("time_and_materials", "non_billable") and not _positive_budget_amount(
-                money_for_type
+            raw_bt = str(patch.get("budget_type") or "").lower().replace("-", "_")
+            soft_bt = raw_bt in ("hourly_rate", "hourly", "no_budget", "none")
+            # Soft modes may keep progressBudgetAmount for UI only — do not promote them to money.
+            if (
+                not soft_bt
+                and eff_pt in ("time_and_materials", "non_billable")
+                and not _positive_budget_amount(money_for_type)
             ):
                 if m_pb is not None and _d(m_pb) > 0:
                     money_for_type = m_pb
@@ -1154,7 +1171,13 @@ async def patch_client_project(
         if nt is not None:
             patch["budget_type"] = nt
         elif "budget_type" in patch and patch.get("budget_type"):
-            pass
+            bt = str(patch.get("budget_type") or "").lower().replace("-", "_")
+            if bt == "hourly":
+                patch["budget_type"] = "hourly_rate"
+            elif bt == "none":
+                patch["budget_type"] = "no_budget"
+            else:
+                pass
         else:
             patch["budget_type"] = None
 
