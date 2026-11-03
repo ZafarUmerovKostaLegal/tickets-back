@@ -1151,7 +1151,12 @@ async def patch_client_project(
                 m_h,
                 money_for_type if _positive_budget_amount(money_for_type) else None,
             )
-        patch["budget_type"] = nt
+        if nt is not None:
+            patch["budget_type"] = nt
+        elif "budget_type" in patch and patch.get("budget_type"):
+            pass
+        else:
+            patch["budget_type"] = None
 
     try:
         updated = await repo.update(client_id, project_id, patch)
