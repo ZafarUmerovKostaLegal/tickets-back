@@ -206,6 +206,18 @@ class ExpenseRepository:
         res = await self._session.execute(stmt)
         return list(res.scalars().all())
 
+    async def list_paid_client_expenses(self) -> list[ExpenseRequestModel]:
+        stmt = (
+            select(ExpenseRequestModel)
+            .where(
+                ExpenseRequestModel.status == "paid",
+                ExpenseRequestModel.expense_type == "client_expense",
+            )
+            .options(selectinload(ExpenseRequestModel.status_history))
+        )
+        res = await self._session.execute(stmt)
+        return list(res.scalars().all())
+
     async def create(
         self,
         *,

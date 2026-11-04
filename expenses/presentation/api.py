@@ -75,9 +75,13 @@ async def lifespan(app: FastAPI):
                 await seed_reference_data(session)
                 await session.commit()
                 repo = ExpenseRepository(session)
-                paid = await expenses._auto_pay_open_expenses(repo, session, None)
-                if paid:
-                    _log.info("Уже созданные заявки переведены в оплачено: %s", paid)
+                paid, restored = await expenses._auto_pay_open_expenses(repo, session, None)
+                if paid or restored:
+                    _log.info(
+                        "Заявки без согласования оплачены: %s; расходы за клиента возвращены на согласование: %s",
+                        paid,
+                        restored,
+                    )
             break
         except Exception as e:
             last_exc = e

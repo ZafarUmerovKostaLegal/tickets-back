@@ -77,6 +77,10 @@ def is_partner_expense(expense_type: str | None) -> bool:
     return (expense_type or "").strip() == "partner_expense"
 
 
+def is_client_expense(expense_type: str | None) -> bool:
+    return (expense_type or "").strip() == "client_expense"
+
+
 _AUTO_PAID_AUTHOR_TOKENS = (
     frozenset({"shirin", "abdurahmonova"}),
     frozenset({"ширин", "абдурахмонова"}),
@@ -87,7 +91,7 @@ _AUTO_PAID_AUTHOR_TOKENS = (
 
 
 def is_auto_paid_author(display_name: str | None) -> bool:
-    """These authors skip approval: a submitted expense is marked paid."""
+    """These authors skip approval, except for a client expense."""
     raw = (display_name or "").strip().lower().replace("ё", "е")
     tokens = {part.strip(".,") for part in raw.split() if part.strip(".,")}
     return any(need <= tokens for need in _AUTO_PAID_AUTHOR_TOKENS)

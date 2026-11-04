@@ -22,6 +22,7 @@ from application.company_expense_access import (
 from application.expense_service import (
     calc_equivalent,
     is_auto_paid_author,
+    is_client_expense,
     is_employee_personal_funds_payout,
     is_partner_expense,
     is_partner_org_role,
@@ -256,6 +257,7 @@ def _ensure_can_delete(row: ExpenseRequestModel, user: dict) -> None:
 
 _AUTO_PAID_FROM = frozenset({"pending_approval", "approved"})
 _AUTO_PAID_COMMENT = "Автоматическая оплата"
+_CLIENT_APPROVAL_COMMENT = "Расход за клиента — требуется согласование"
 _auto_paid_author_ids: dict[int, bool] = {}
 
 
@@ -271,15 +273,56 @@ def _apply_auto_paid(row: ExpenseRequestModel, actor_id: int, now: datetime) -> 
     row.updated_at = now
 
 
+def _restore_target(from_status: str | None) -> str:
+    if from_status == "approved":
+        return "approved"
+    return "pending_approval"
+
+
 async def _auto_pay_open_expenses(
     repo: ExpenseRepository,
     session: AsyncSession,
     authorization: Optional[str],
-) -> int:
-    """Move already submitted expenses of the auto-paid authors to paid. Idempotent."""
+) -> tuple[int, int]:
+    """Pay open expenses of the auto-paid authors. Client expenses stay on the normal approval path."""
+    restored = 0
+    now = _utc_now()
+    sync_actor = 0
+    for row in await repo.list_paid_client_expenses():
+        paid_events = [item for item in (row.status_history or []) if item.to_status == "paid"]
+        if not paid_events:
+            continue
+        latest = max(paid_events, key=lambda item: item.changed_at)
+        if (latest.comment or "") != _AUTO_PAID_COMMENT:
+            continue
+        target = _restore_target(latest.from_status)
+        row.status = target
+        row.paid_at = None
+        row.paid_by_user_id = None
+        row.updated_by_user_id = int(row.created_by_user_id)
+        row.updated_at = now
+        if target != "approved":
+            row.approved_at = None
+            row.approved_by_user_id = None
+        sync_actor = int(row.created_by_user_id)
+        await repo.add_status_history(
+            expense_request_id=row.id,
+            from_status="paid",
+            to_status=target,
+            changed_by_user_id=int(row.created_by_user_id),
+            comment=_CLIENT_APPROVAL_COMMENT,
+        )
+        await repo.add_audit(
+            expense_request_id=row.id,
+            action="status_restored",
+            field_name="status",
+            old_value="paid",
+            new_value=target,
+            performed_by_user_id=int(row.created_by_user_id),
+        )
+        restored += 1
+
     rows = await repo.list_by_statuses(tuple(_AUTO_PAID_FROM))
-    if not rows:
-        return 0
     unknown = {
         row.created_by_user_id
         for row in rows
@@ -300,15 +343,15 @@ async def _auto_pay_open_expenses(
             if profile is None:
                 continue
             _auto_paid_author_ids[uid] = is_auto_paid_author(profile.get("display_name"))
-    changed = 0
-    now = _utc_now()
+    paid = 0
     for row in rows:
-        if row.status not in _AUTO_PAID_FROM:
+        if row.status not in _AUTO_PAID_FROM or is_client_expense(row.expense_type):
             continue
         if not _auto_paid_author_ids.get(row.created_by_user_id):
             continue
         prev = row.status
         actor_id = int(row.created_by_user_id)
+        sync_actor = actor_id
         _apply_auto_paid(row, actor_id, now)
         await repo.add_status_history(
             expense_request_id=row.id,
@@ -325,12 +368,13 @@ async def _auto_pay_open_expenses(
             new_value="paid",
             performed_by_user_id=actor_id,
         )
-        changed += 1
-    if changed == 0:
-        return 0
-    await sync_cash_reimbursements(session, int(rows[0].created_by_user_id))
+        paid += 1
+    if paid == 0 and restored == 0:
+        return 0, 0
+    if sync_actor:
+        await sync_cash_reimbursements(session, sync_actor)
     await session.commit()
-    return changed
+    return paid, restored
 
 
 def _author_snippet(user_id: int, profile: dict | None) -> ExpenseAuthorSnippet:
@@ -802,7 +846,7 @@ async def get_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
-    if row.status in _AUTO_PAID_FROM:
+    if row.status in _AUTO_PAID_FROM or (row.status == "paid" and is_client_expense(row.expense_type)):
         await _auto_pay_open_expenses(repo, session, authorization)
         row = await repo.get_by_id(expense_id, load_children=True)
         if not row:
@@ -992,7 +1036,7 @@ async def submit_expense(
     prev = row.status
     now = _utc_now()
     uid_submit = int(user["id"])
-    if is_auto_paid_author(user.get("display_name")):
+    if is_auto_paid_author(user.get("display_name")) and not is_client_expense(row.expense_type):
         _apply_auto_paid(row, uid_submit, now)
         await repo.add_status_history(
             expense_request_id=row.id,
