@@ -199,10 +199,17 @@ class ExpenseRepository:
             Decimal(str(total_equiv or 0)),
         )
 
-    async def list_by_statuses(self, statuses: tuple[str, ...]) -> list[ExpenseRequestModel]:
+    async def list_by_statuses(
+        self,
+        statuses: tuple[str, ...],
+        *,
+        with_history: bool = False,
+    ) -> list[ExpenseRequestModel]:
         if not statuses:
             return []
         stmt = select(ExpenseRequestModel).where(ExpenseRequestModel.status.in_(statuses))
+        if with_history:
+            stmt = stmt.options(selectinload(ExpenseRequestModel.status_history))
         res = await self._session.execute(stmt)
         return list(res.scalars().all())
 

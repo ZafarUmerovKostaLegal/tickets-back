@@ -279,6 +279,28 @@ def _restore_target(from_status: str | None) -> str:
     return "pending_approval"
 
 
+def _latest_paid_event(row: ExpenseRequestModel):
+    paid_events = [item for item in (row.status_history or []) if item.to_status == "paid"]
+    if not paid_events:
+        return None
+    return max(paid_events, key=lambda item: item.changed_at)
+
+
+def _was_auto_paid(row: ExpenseRequestModel) -> bool:
+    latest = _latest_paid_event(row)
+    if latest is not None and (latest.comment or "") == _AUTO_PAID_COMMENT:
+        return True
+    return row.paid_by_user_id is not None and int(row.paid_by_user_id) == int(row.created_by_user_id)
+
+
+def _returned_from_paid(row: ExpenseRequestModel) -> bool:
+    """A person already cancelled the automatic payment; do not put it back."""
+    return any(
+        item.from_status == "paid" and item.to_status in ("approved", "pending_approval")
+        for item in (row.status_history or [])
+    )
+
+
 async def _auto_pay_open_expenses(
     repo: ExpenseRepository,
     session: AsyncSession,
@@ -289,13 +311,10 @@ async def _auto_pay_open_expenses(
     now = _utc_now()
     sync_actor = 0
     for row in await repo.list_paid_client_expenses():
-        paid_events = [item for item in (row.status_history or []) if item.to_status == "paid"]
-        if not paid_events:
+        if not _was_auto_paid(row):
             continue
-        latest = max(paid_events, key=lambda item: item.changed_at)
-        if (latest.comment or "") != _AUTO_PAID_COMMENT:
-            continue
-        target = _restore_target(latest.from_status)
+        latest = _latest_paid_event(row)
+        target = _restore_target(latest.from_status if latest is not None else None)
         row.status = target
         row.paid_at = None
         row.paid_by_user_id = None
@@ -322,7 +341,7 @@ async def _auto_pay_open_expenses(
         )
         restored += 1
 
-    rows = await repo.list_by_statuses(tuple(_AUTO_PAID_FROM))
+    rows = await repo.list_by_statuses(tuple(_AUTO_PAID_FROM), with_history=True)
     unknown = {
         row.created_by_user_id
         for row in rows
@@ -346,6 +365,8 @@ async def _auto_pay_open_expenses(
     paid = 0
     for row in rows:
         if row.status not in _AUTO_PAID_FROM or is_client_expense(row.expense_type):
+            continue
+        if _returned_from_paid(row) or _latest_paid_event(row) is not None:
             continue
         if not _auto_paid_author_ids.get(row.created_by_user_id):
             continue
@@ -1393,15 +1414,21 @@ async def unpay_expense(
     ensure_not_moderating_own_expense(user, row.created_by_user_id)
     prev = row.status
     comment = body.comment.strip()
-    row.status = "approved"
+    # Automatic payment never had a real approval, so cancelling it returns the request to the queue.
+    back_to_queue = _was_auto_paid(row)
+    target = "pending_approval" if back_to_queue else "approved"
+    row.status = target
     row.paid_at = None
     row.paid_by_user_id = None
     row.updated_by_user_id = int(user["id"])
     row.updated_at = _utc_now()
+    if back_to_queue:
+        row.approved_at = None
+        row.approved_by_user_id = None
     await repo.add_status_history(
         expense_request_id=row.id,
         from_status=prev,
-        to_status="approved",
+        to_status=target,
         changed_by_user_id=int(user["id"]),
         comment=comment,
     )
@@ -1410,7 +1437,7 @@ async def unpay_expense(
         action="unpaid",
         field_name="status",
         old_value=prev,
-        new_value=f"approved: {comment}",
+        new_value=f"{target}: {comment}",
         performed_by_user_id=int(user["id"]),
     )
     await sync_cash_reimbursements(session, int(user["id"]))
