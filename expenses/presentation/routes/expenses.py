@@ -21,6 +21,7 @@ from application.company_expense_access import (
 )
 from application.expense_service import (
     calc_equivalent,
+    is_auto_paid_author,
     is_employee_personal_funds_payout,
     is_partner_expense,
     is_partner_org_role,
@@ -31,7 +32,7 @@ from application.expense_service import (
 from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids
+from infrastructure.auth_users import fetch_user_by_id, fetch_users_by_ids, fetch_users_by_ids_internal
 from infrastructure.expense_author_decision_notify import (
     run_author_decision_notification_safe,
     run_expense_paid_notification_safe,
@@ -251,6 +252,85 @@ def _ensure_can_delete(row: ExpenseRequestModel, user: dict) -> None:
             "модератор (кроме выплаченных и закрытых) или администратор"
         ),
     )
+
+
+_AUTO_PAID_FROM = frozenset({"pending_approval", "approved"})
+_AUTO_PAID_COMMENT = "Автоматическая оплата"
+_auto_paid_author_ids: dict[int, bool] = {}
+
+
+def _apply_auto_paid(row: ExpenseRequestModel, actor_id: int, now: datetime) -> None:
+    row.status = "paid"
+    row.rejection_reason = None
+    row.submitted_at = row.submitted_at or now
+    row.approved_at = row.approved_at or now
+    row.approved_by_user_id = row.approved_by_user_id or actor_id
+    row.paid_at = now
+    row.paid_by_user_id = actor_id
+    row.updated_by_user_id = actor_id
+    row.updated_at = now
+
+
+async def _auto_pay_open_expenses(
+    repo: ExpenseRepository,
+    session: AsyncSession,
+    authorization: Optional[str],
+) -> int:
+    """Move already submitted expenses of the auto-paid authors to paid. Idempotent."""
+    rows = await repo.list_by_statuses(tuple(_AUTO_PAID_FROM))
+    if not rows:
+        return 0
+    unknown = {
+        row.created_by_user_id
+        for row in rows
+        if row.created_by_user_id not in _auto_paid_author_ids
+    }
+    if unknown:
+        settings = get_settings()
+        profiles = await fetch_users_by_ids_internal(
+            settings.auth_service_url,
+            unknown,
+            internal_key=settings.ws_internal_secret,
+        )
+        still_unknown = {uid for uid in unknown if uid not in profiles}
+        if still_unknown and authorization:
+            profiles.update(await fetch_users_by_ids(settings.auth_service_url, authorization, still_unknown))
+        for uid in unknown:
+            profile = profiles.get(uid)
+            if profile is None:
+                continue
+            _auto_paid_author_ids[uid] = is_auto_paid_author(profile.get("display_name"))
+    changed = 0
+    now = _utc_now()
+    for row in rows:
+        if row.status not in _AUTO_PAID_FROM:
+            continue
+        if not _auto_paid_author_ids.get(row.created_by_user_id):
+            continue
+        prev = row.status
+        actor_id = int(row.created_by_user_id)
+        _apply_auto_paid(row, actor_id, now)
+        await repo.add_status_history(
+            expense_request_id=row.id,
+            from_status=prev,
+            to_status="paid",
+            changed_by_user_id=actor_id,
+            comment=_AUTO_PAID_COMMENT,
+        )
+        await repo.add_audit(
+            expense_request_id=row.id,
+            action="paid",
+            field_name="status",
+            old_value=prev,
+            new_value="paid",
+            performed_by_user_id=actor_id,
+        )
+        changed += 1
+    if changed == 0:
+        return 0
+    await sync_cash_reimbursements(session, int(rows[0].created_by_user_id))
+    await session.commit()
+    return changed
 
 
 def _author_snippet(user_id: int, profile: dict | None) -> ExpenseAuthorSnippet:
@@ -594,6 +674,7 @@ async def list_expenses(
             detail="partnerUserId допустим только для расходов партнёров",
         )
     repo = ExpenseRepository(session)
+    await _auto_pay_open_expenses(repo, session, authorization)
     rows, total, total_uzs, total_equiv = await repo.list_requests(
         created_by_user_id=eff_creator,
         status=status,
@@ -721,6 +802,11 @@ async def get_expense(
     if not row:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     await _ensure_access(row, user)
+    if row.status in _AUTO_PAID_FROM:
+        await _auto_pay_open_expenses(repo, session, authorization)
+        row = await repo.get_by_id(expense_id, load_children=True)
+        if not row:
+            raise HTTPException(status_code=404, detail="Заявка не найдена")
     return await _detail_response(row, authorization)
 
 
@@ -906,6 +992,28 @@ async def submit_expense(
     prev = row.status
     now = _utc_now()
     uid_submit = int(user["id"])
+    if is_auto_paid_author(user.get("display_name")):
+        _apply_auto_paid(row, uid_submit, now)
+        await repo.add_status_history(
+            expense_request_id=row.id,
+            from_status=prev,
+            to_status="paid",
+            changed_by_user_id=uid_submit,
+            comment=_AUTO_PAID_COMMENT,
+        )
+        await repo.add_audit(
+            expense_request_id=row.id,
+            action="paid",
+            field_name="status",
+            old_value=prev,
+            new_value="paid",
+            performed_by_user_id=uid_submit,
+        )
+        await sync_cash_reimbursements(session, uid_submit)
+        await session.commit()
+        row = await repo.get_by_id(expense_id, load_children=True)
+        return await _detail_response(row, authorization)
+
     if is_partner_expense(row.expense_type):
         row.status = "approved"
         row.submitted_at = row.submitted_at or now

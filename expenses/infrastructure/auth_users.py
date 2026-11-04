@@ -110,3 +110,43 @@ async def fetch_users_by_ids(
         if data is not None:
             out[uid] = data
     return out
+
+
+async def fetch_users_by_ids_internal(
+    auth_base_url: str,
+    user_ids: set[int],
+    *,
+    internal_key: str | None,
+) -> dict[int, dict]:
+    """Batch profiles without a user token. Auth service caps a request at 500 ids."""
+    secret = (internal_key or "").strip()
+    ids = sorted({uid for uid in user_ids if uid > 0})
+    if not secret or not ids:
+        return {}
+    base = auth_base_url.rstrip("/")
+    out: dict[int, dict] = {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                r = await client.get(
+                    f"{base}/internal/users/by-ids",
+                    params={"ids": ",".join(str(uid) for uid in chunk)},
+                    headers={"X-Internal-Key": secret},
+                )
+                if r.status_code != 200:
+                    _log.warning("auth internal users/by-ids status=%s", r.status_code)
+                    continue
+                data = r.json()
+                if not isinstance(data, dict):
+                    continue
+                for key, profile in data.items():
+                    try:
+                        uid = int(key)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(profile, dict):
+                        out[uid] = profile
+    except httpx.RequestError as e:
+        _log.warning("auth internal users/by-ids err=%s", e)
+    return out

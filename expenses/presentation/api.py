@@ -11,7 +11,7 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models
-from infrastructure.repositories import seed_reference_data
+from infrastructure.repositories import ExpenseRepository, seed_reference_data
 from infrastructure.schema_patches import REGISTERED_EXPENSE_SCHEMA_PATCHES
 from presentation.routes import cash, expense_email_action, expenses, health, reference, reimbursed_feed
 
@@ -74,6 +74,10 @@ async def lifespan(app: FastAPI):
             async with async_session_factory() as session:
                 await seed_reference_data(session)
                 await session.commit()
+                repo = ExpenseRepository(session)
+                paid = await expenses._auto_pay_open_expenses(repo, session, None)
+                if paid:
+                    _log.info("Уже созданные заявки переведены в оплачено: %s", paid)
             break
         except Exception as e:
             last_exc = e
