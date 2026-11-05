@@ -6,6 +6,7 @@ from backend_common.cors_origins import resolve_cors_origins
 
 from infrastructure.database import Base, engine
 from infrastructure import models as _models  # noqa: F401
+from presentation.routes.board import router as board_router
 from presentation.routes.tasks import router as tasks_router
 
 
@@ -32,6 +33,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(board_router, prefix="/api/v1/legal-hub")
 app.include_router(tasks_router, prefix="/api/v1/legal-hub")
 
 
