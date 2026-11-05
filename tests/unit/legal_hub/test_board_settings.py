@@ -86,7 +86,12 @@ async def test_board_settings_are_stored_per_user():
                     "color": "accent",
                     "projectIds": ["p1"],
                     "collapsed": False,
+                    "clientOrder": ["Kosta Legal"],
                 }],
+                "sidebarOrder": [
+                    {"type": "client", "name": "North"},
+                    {"type": "folder", "id": "fld-1"},
+                ],
             })
             assert folders.status_code == 200, folders.text
 
@@ -108,6 +113,11 @@ async def test_board_settings_are_stored_per_user():
             assert body["columns"]["custom"][0]["title"] == "Суд"
             assert body["folders"]["hideLocked"] is True
             assert body["folders"]["folders"][0]["projectIds"] == ["p1"]
+            assert body["folders"]["folders"][0]["clientOrder"] == ["Kosta Legal"]
+            assert body["folders"]["sidebarOrder"] == [
+                {"type": "client", "name": "North"},
+                {"type": "folder", "id": "fld-1"},
+            ]
             assert body["filters"] == [{
                 "scope": "mine",
                 "onlyLate": True,

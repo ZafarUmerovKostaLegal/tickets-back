@@ -40,6 +40,7 @@ class LegalHubProjectFoldersModel(Base):
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     hide_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     folders: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    sidebar_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

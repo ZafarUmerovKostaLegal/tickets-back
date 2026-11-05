@@ -38,17 +38,25 @@ class ColumnsIn(BaseModel):
     collapsed: list[str] = Field(default_factory=list)
 
 
+class SidebarTokenIn(BaseModel):
+    type: str = ""
+    id: str = ""
+    name: str = ""
+
+
 class FolderIn(BaseModel):
     id: str = ""
     name: str = ""
     color: str = "slate"
     projectIds: list[str] = Field(default_factory=list)
     collapsed: bool = False
+    clientOrder: list[str] = Field(default_factory=list)
 
 
 class FoldersIn(BaseModel):
     hideLocked: bool = False
     folders: list[FolderIn] = Field(default_factory=list)
+    sidebarOrder: list[SidebarTokenIn] = Field(default_factory=list)
 
 
 class FilterIn(BaseModel):
@@ -83,7 +91,11 @@ def _columns_out(row: LegalHubBoardColumnsModel | None) -> dict:
 def _folders_out(row: LegalHubProjectFoldersModel | None) -> dict:
     if row is None:
         return default_folders()
-    return normalize_folders({"hideLocked": row.hide_locked, "folders": row.folders or []})
+    return normalize_folders({
+        "hideLocked": row.hide_locked,
+        "folders": row.folders or [],
+        "sidebarOrder": row.sidebar_order or [],
+    })
 
 
 def _filter_out(row: LegalHubBoardFilterModel) -> dict:
@@ -153,6 +165,7 @@ async def put_folders(
         session.add(row)
     row.hide_locked = saved["hideLocked"]
     row.folders = saved["folders"]
+    row.sidebar_order = saved["sidebarOrder"]
     row.updated_at = _now()
     await session.commit()
     return saved

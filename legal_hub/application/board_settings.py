@@ -71,7 +71,49 @@ def normalize_columns(raw: object) -> dict:
 
 
 def default_folders() -> dict:
-    return {"hideLocked": False, "folders": []}
+    return {"hideLocked": False, "folders": [], "sidebarOrder": []}
+
+
+def _clean_names(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        name = _clip(item, 120)
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def _sidebar_order(raw: object) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    tokens: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "folder":
+            folder_id = _clean_id(item.get("id"))
+            key = f"folder:{folder_id}"
+            if not folder_id or key in seen:
+                continue
+            seen.add(key)
+            tokens.append({"type": "folder", "id": folder_id})
+            continue
+        if kind == "client":
+            name = _clip(item.get("name"), 120)
+            key = f"client:{name.casefold()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append({"type": "client", "name": name})
+    return tokens
 
 
 def normalize_folders(raw: object) -> dict:
@@ -100,8 +142,13 @@ def normalize_folders(raw: object) -> dict:
             "color": color if isinstance(color, str) and color in FOLDER_COLORS else "slate",
             "projectIds": project_ids,
             "collapsed": item.get("collapsed") is True,
+            "clientOrder": _clean_names(item.get("clientOrder")),
         })
-    return {"hideLocked": body.get("hideLocked") is True, "folders": folders}
+    return {
+        "hideLocked": body.get("hideLocked") is True,
+        "folders": folders,
+        "sidebarOrder": _sidebar_order(body.get("sidebarOrder")),
+    }
 
 
 def default_filter(scope: str) -> dict:

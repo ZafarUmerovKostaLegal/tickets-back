@@ -10,10 +10,22 @@ from presentation.routes.board import router as board_router
 from presentation.routes.tasks import router as tasks_router
 
 
+def _ensure_sidebar_order_column(sync_conn) -> None:
+    if sync_conn.dialect.name == "sqlite":
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_project_folders)").fetchall()
+        if rows and not any(row[1] == "sidebar_order" for row in rows):
+            sync_conn.exec_driver_sql("ALTER TABLE legal_hub_project_folders ADD COLUMN sidebar_order JSON")
+        return
+    sync_conn.exec_driver_sql(
+        "ALTER TABLE IF EXISTS legal_hub_project_folders ADD COLUMN IF NOT EXISTS sidebar_order JSON"
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_sidebar_order_column)
     yield
 
 
