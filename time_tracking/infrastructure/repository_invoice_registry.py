@@ -111,6 +111,14 @@ _SYSTEM_STATUS_LABELS = {
 }
 
 
+def _registry_partner_note(client_note: str, *, limit: int = 600) -> str:
+    """Примечание для партнёра: текст client_note, с переносами строк."""
+    text = (client_note or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def _short_registry_details(internal_note: str, *, limit: int = 180) -> str:
     """Внутреннее примечание счёта, одной строкой. Текст работ из отчёта сюда не попадает."""
     text = " ".join((internal_note or "").split())
@@ -295,6 +303,7 @@ class InvoiceRegistryRepository:
             except (TypeError, ValueError):
                 balance = 0
             details = _short_registry_details(inv.internal_note or "")
+            partner_note = _registry_partner_note(inv.client_note or "")
             partner = registry_sheet_partner(
                 workers_by_invoice.get(inv.id, []),
                 int(inv.created_by_auth_user_id or 0),
@@ -310,6 +319,7 @@ class InvoiceRegistryRepository:
                 "billedTo": client_name or "",
                 "currency": (inv.currency or "").strip().upper(),
                 "amount": _money_cell(total),
+                "partnerNote": partner_note,
                 "details": details,
                 "partner": partner,
                 "issueDate": inv.issue_date.isoformat() if inv.issue_date else "",
