@@ -1491,6 +1491,7 @@ async def patch_invoice_draft(
     due_date: date | None = None,
     invoice_number: str | None = None,
     client_note: str | None = None,
+    client_note_provided: bool = False,
     internal_note: str | None = None,
     tax_percent: Decimal | None = None,
     tax2_percent: Decimal | None = None,
@@ -1503,8 +1504,23 @@ async def patch_invoice_draft(
     extra_fixed_fee_description: str | None = None,
     extra_fixed_fee_specified: bool = False,
 ) -> InvoiceModel:
-    _require_not_canceled(inv)
     repo = InvoiceRepository(session)
+    only_partner_note = (
+        client_note_provided
+        and issue_date is None
+        and due_date is None
+        and invoice_number is None
+        and internal_note is None
+        and tax_percent is None
+        and tax2_percent is None
+        and discount_percent is None
+        and project_id is None
+        and replace_lines is None
+        and not extra_fixed_fee_specified
+        and not document_overrides_provided
+    )
+    if not only_partner_note:
+        _require_not_canceled(inv)
 
     draft_only_touch = any(
         x is not None
@@ -1512,7 +1528,6 @@ async def patch_invoice_draft(
             issue_date,
             due_date,
             invoice_number,
-            client_note,
             internal_note,
             tax_percent,
             tax2_percent,
@@ -1521,7 +1536,7 @@ async def patch_invoice_draft(
             replace_lines,
         )
     )
-    if draft_only_touch or extra_fixed_fee_specified:
+    if not only_partner_note and (draft_only_touch or extra_fixed_fee_specified):
         _require_draft(inv)
 
     if invoice_number is not None:
@@ -1536,8 +1551,8 @@ async def patch_invoice_draft(
         inv.issue_date = issue_date
     if due_date:
         inv.due_date = due_date
-    if client_note is not None:
-        inv.client_note = client_note
+    if client_note_provided:
+        inv.client_note = (client_note or "").strip() or None
     if internal_note is not None:
         inv.internal_note = internal_note
     if tax_percent is not None:

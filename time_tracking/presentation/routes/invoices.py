@@ -378,6 +378,7 @@ async def patch_invoice_route(
         due_date=body.due_date,
         invoice_number=body.invoice_number,
         client_note=body.client_note,
+        client_note_provided="client_note" in body.model_fields_set,
         internal_note=body.internal_note,
         tax_percent=body.tax_percent,
         tax2_percent=body.tax2_percent,
