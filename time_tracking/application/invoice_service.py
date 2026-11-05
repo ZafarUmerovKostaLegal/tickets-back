@@ -2433,6 +2433,8 @@ async def list_unbilled_expenses(
                 "expenseDate": r.get("expense_date"),
                 "description": r.get("description"),
                 "equivalentAmount": float(r.get("equivalent_amount", 0)),
+                "amountUzs": float(r.get("amount_uzs", 0) or 0),
+                "exchangeRate": float(r.get("exchange_rate", 0) or 0),
                 "status": r.get("status"),
             }
         )
