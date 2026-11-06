@@ -92,6 +92,7 @@ async def test_board_settings_are_stored_per_user():
                     {"type": "client", "name": "North"},
                     {"type": "folder", "id": "fld-1"},
                 ],
+                "archivedClients": ["Kosta Legal"],
             })
             assert folders.status_code == 200, folders.text
 
@@ -118,6 +119,7 @@ async def test_board_settings_are_stored_per_user():
                 {"type": "client", "name": "North"},
                 {"type": "folder", "id": "fld-1"},
             ]
+            assert body["folders"]["archivedClients"] == ["Kosta Legal"]
             assert body["filters"] == [{
                 "scope": "mine",
                 "onlyLate": True,

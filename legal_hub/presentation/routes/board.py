@@ -57,6 +57,7 @@ class FoldersIn(BaseModel):
     hideLocked: bool = False
     folders: list[FolderIn] = Field(default_factory=list)
     sidebarOrder: list[SidebarTokenIn] = Field(default_factory=list)
+    archivedClients: list[str] = Field(default_factory=list)
 
 
 class FilterIn(BaseModel):
@@ -95,6 +96,7 @@ def _folders_out(row: LegalHubProjectFoldersModel | None) -> dict:
         "hideLocked": row.hide_locked,
         "folders": row.folders or [],
         "sidebarOrder": row.sidebar_order or [],
+        "archivedClients": row.archived_clients or [],
     })
 
 
@@ -166,6 +168,7 @@ async def put_folders(
     row.hide_locked = saved["hideLocked"]
     row.folders = saved["folders"]
     row.sidebar_order = saved["sidebarOrder"]
+    row.archived_clients = saved["archivedClients"]
     row.updated_at = _now()
     await session.commit()
     return saved

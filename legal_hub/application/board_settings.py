@@ -71,7 +71,7 @@ def normalize_columns(raw: object) -> dict:
 
 
 def default_folders() -> dict:
-    return {"hideLocked": False, "folders": [], "sidebarOrder": []}
+    return {"hideLocked": False, "folders": [], "sidebarOrder": [], "archivedClients": []}
 
 
 def _clean_names(raw: object) -> list[str]:
@@ -148,6 +148,7 @@ def normalize_folders(raw: object) -> dict:
         "hideLocked": body.get("hideLocked") is True,
         "folders": folders,
         "sidebarOrder": _sidebar_order(body.get("sidebarOrder")),
+        "archivedClients": _clean_names(body.get("archivedClients")),
     }
 
 

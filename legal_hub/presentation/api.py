@@ -10,22 +10,28 @@ from presentation.routes.board import router as board_router
 from presentation.routes.tasks import router as tasks_router
 
 
-def _ensure_sidebar_order_column(sync_conn) -> None:
+def _ensure_folder_columns(sync_conn) -> None:
+    columns = ("sidebar_order", "archived_clients")
     if sync_conn.dialect.name == "sqlite":
         rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_project_folders)").fetchall()
-        if rows and not any(row[1] == "sidebar_order" for row in rows):
-            sync_conn.exec_driver_sql("ALTER TABLE legal_hub_project_folders ADD COLUMN sidebar_order JSON")
+        present = {row[1] for row in rows}
+        if not rows:
+            return
+        for name in columns:
+            if name not in present:
+                sync_conn.exec_driver_sql(f"ALTER TABLE legal_hub_project_folders ADD COLUMN {name} JSON")
         return
-    sync_conn.exec_driver_sql(
-        "ALTER TABLE IF EXISTS legal_hub_project_folders ADD COLUMN IF NOT EXISTS sidebar_order JSON"
-    )
+    for name in columns:
+        sync_conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS legal_hub_project_folders ADD COLUMN IF NOT EXISTS {name} JSON"
+        )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_ensure_sidebar_order_column)
+        await conn.run_sync(_ensure_folder_columns)
     yield
 
 
