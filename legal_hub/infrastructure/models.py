@@ -27,6 +27,7 @@ class LegalHubTaskModel(Base):
     approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     board_column: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     important: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     assignee_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     assignee_code: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -55,6 +56,28 @@ class LegalHubTaskFileModel(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    check_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    comment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class LegalHubTaskCheckModel(Base):
+    __tablename__ = "legal_hub_task_checks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+    done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTaskCheckNoteModel(Base):
+    __tablename__ = "legal_hub_task_check_notes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    check_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

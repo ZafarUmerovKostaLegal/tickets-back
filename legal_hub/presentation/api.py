@@ -21,6 +21,7 @@ def _ensure_task_columns(sync_conn) -> None:
         "approval": f"BOOLEAN DEFAULT {boolean}",
         "board_column": "VARCHAR(40) DEFAULT ''",
         "important": f"BOOLEAN DEFAULT {boolean}",
+        "archived": f"BOOLEAN DEFAULT {boolean}",
         "assignee_name": "VARCHAR(200) DEFAULT ''",
         "assignee_code": "VARCHAR(16) DEFAULT ''",
     }
@@ -36,6 +37,26 @@ def _ensure_task_columns(sync_conn) -> None:
     for name, ddl in columns.items():
         sync_conn.exec_driver_sql(
             f"ALTER TABLE IF EXISTS legal_hub_tasks ADD COLUMN IF NOT EXISTS {name} {ddl}"
+        )
+
+
+def _ensure_file_columns(sync_conn) -> None:
+    columns = {
+        "check_id": "VARCHAR(36)",
+        "comment_id": "VARCHAR(36)",
+    }
+    if sync_conn.dialect.name == "sqlite":
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_task_files)").fetchall()
+        present = {row[1] for row in rows}
+        if not rows:
+            return
+        for name, ddl in columns.items():
+            if name not in present:
+                sync_conn.exec_driver_sql(f"ALTER TABLE legal_hub_task_files ADD COLUMN {name} {ddl}")
+        return
+    for name, ddl in columns.items():
+        sync_conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS legal_hub_task_files ADD COLUMN IF NOT EXISTS {name} {ddl}"
         )
 
 
@@ -62,6 +83,7 @@ async def lifespan(_: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_task_columns)
         await conn.run_sync(_ensure_folder_columns)
+        await conn.run_sync(_ensure_file_columns)
     yield
 
 

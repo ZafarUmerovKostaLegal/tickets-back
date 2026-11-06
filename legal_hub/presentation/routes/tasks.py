@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -16,6 +16,8 @@ from application.views import TASK_STATUSES, TASK_VIEWS, task_in_view
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.models import (
+    LegalHubTaskCheckModel,
+    LegalHubTaskCheckNoteModel,
     LegalHubTaskCommentModel,
     LegalHubTaskEventModel,
     LegalHubTaskFileModel,
@@ -68,6 +70,7 @@ class TaskPatch(BaseModel):
     reviewOn: date | None = None
     boardColumn: str | None = Field(default=None, max_length=40)
     approval: bool | None = None
+    archived: bool | None = None
     clearReviewer: bool = False
     clearDueOn: bool = False
     clearInternalOn: bool = False
@@ -95,6 +98,20 @@ class CommentIn(BaseModel):
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
+
+
+class CheckIn(BaseModel):
+    label: str = Field(min_length=1, max_length=500)
+
+    @field_validator("label")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+
+class CheckPatch(BaseModel):
+    done: bool | None = None
+    label: str | None = Field(default=None, max_length=500)
 
 
 def _user_id(user: dict) -> int:
@@ -145,6 +162,7 @@ def _payload(row: LegalHubTaskModel) -> dict:
         "approval": bool(row.approval),
         "boardColumn": row.board_column or "",
         "important": bool(row.important),
+        "archived": bool(row.archived),
         "assigneeName": row.assignee_name or "",
         "assigneeCode": row.assignee_code or "",
         "dueOn": row.due_on.isoformat() if row.due_on else None,
@@ -291,7 +309,29 @@ async def _detail(session: AsyncSession, row: LegalHubTaskModel) -> dict:
         .where(LegalHubTaskEventModel.task_id == row.id)
         .order_by(LegalHubTaskEventModel.created_at.asc())
     ))
+    checks = list(await session.scalars(
+        select(LegalHubTaskCheckModel)
+        .where(LegalHubTaskCheckModel.task_id == row.id)
+        .order_by(LegalHubTaskCheckModel.position.asc(), LegalHubTaskCheckModel.created_at.asc())
+    ))
+    notes = list(await session.scalars(
+        select(LegalHubTaskCheckNoteModel)
+        .where(LegalHubTaskCheckNoteModel.check_id.in_([item.id for item in checks] or [""]))
+        .order_by(LegalHubTaskCheckNoteModel.created_at.asc())
+    )) if checks else []
     payload = _payload(row)
+
+    def _file(item: LegalHubTaskFileModel) -> dict:
+        return {
+            "id": item.id,
+            "name": item.name,
+            "kind": _file_kind(item.name),
+            "size": _file_size(item.size_bytes),
+            "createdAt": item.created_at.isoformat(),
+            "checkId": item.check_id,
+            "commentId": item.comment_id,
+        }
+
     payload["comments"] = [
         {
             "id": item.id,
@@ -299,18 +339,20 @@ async def _detail(session: AsyncSession, row: LegalHubTaskModel) -> dict:
             "author": item.author_name,
             "text": item.text,
             "createdAt": item.created_at.isoformat(),
+            "files": [_file(item_file) for item_file in files if item_file.comment_id == item.id],
         }
         for item in comments
     ]
-    payload["files"] = [
+    payload["files"] = [_file(item) for item in files]
+    payload["checks"] = [
         {
             "id": item.id,
-            "name": item.name,
-            "kind": _file_kind(item.name),
-            "size": _file_size(item.size_bytes),
-            "createdAt": item.created_at.isoformat(),
+            "label": item.label,
+            "done": bool(item.done),
+            "notes": [{"id": note.id, "text": note.text} for note in notes if note.check_id == item.id],
+            "files": [{"id": item_file.id, "name": item_file.name} for item_file in files if item_file.check_id == item.id],
         }
-        for item in files
+        for item in checks
     ]
     payload["history"] = [
         {
@@ -376,6 +418,8 @@ async def patch_task(
         row.board_column = data["boardColumn"]
     if "approval" in data and data["approval"] is not None:
         row.approval = bool(data["approval"])
+    if "archived" in data and data["archived"] is not None:
+        row.archived = bool(data["archived"])
     if body.clearInternalOn:
         row.internal_on = None
     elif "internalOn" in data:
@@ -500,17 +544,31 @@ async def add_comment(
             due_on=None,
             kind="comment",
         )
-    return await _detail(session, row)
+    detail = await _detail(session, row)
+    detail["createdId"] = comment.id
+    return detail
 
 
 @router.post("/tasks/{task_id}/files", status_code=201)
 async def add_files(
     task_id: str,
     files: list[UploadFile] = File(...),
+    check_id: str | None = Form(default=None),
+    comment_id: str | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
     row = await _task_or_404(session, task_id)
+    linked_check = (check_id or "").strip() or None
+    linked_comment = (comment_id or "").strip() or None
+    if linked_check is not None:
+        check = await session.get(LegalHubTaskCheckModel, linked_check)
+        if check is None or check.task_id != row.id:
+            raise HTTPException(status_code=400, detail="Пункт чеклиста не найден")
+    if linked_comment is not None:
+        comment = await session.get(LegalHubTaskCommentModel, linked_comment)
+        if comment is None or comment.task_id != row.id:
+            raise HTTPException(status_code=400, detail="Комментарий не найден")
     now = datetime.now(timezone.utc)
     stored = 0
     for upload in files:
@@ -529,6 +587,8 @@ async def add_files(
             content=content,
             created_by_user_id=_user_id(user),
             created_at=now,
+            check_id=linked_check,
+            comment_id=linked_comment,
         ))
         session.add(LegalHubTaskEventModel(
             id=str(uuid4()),
@@ -576,3 +636,95 @@ async def delete_file(
     await session.delete(item)
     await session.commit()
     return {"ok": True}
+
+
+async def _check_or_404(session: AsyncSession, task_id: str, check_id: str) -> LegalHubTaskCheckModel:
+    item = await session.get(LegalHubTaskCheckModel, check_id)
+    if item is None or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Пункт чеклиста не найден")
+    return item
+
+
+@router.post("/tasks/{task_id}/checks", status_code=201)
+async def add_check(
+    task_id: str,
+    body: CheckIn,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    if not body.label:
+        raise HTTPException(status_code=400, detail="Напишите пункт")
+    row = await _task_or_404(session, task_id)
+    existing = list(await session.scalars(
+        select(LegalHubTaskCheckModel.id).where(LegalHubTaskCheckModel.task_id == row.id)
+    ))
+    now = datetime.now(timezone.utc)
+    session.add(LegalHubTaskCheckModel(
+        id=str(uuid4()),
+        task_id=row.id,
+        label=body.label,
+        done=False,
+        position=len(existing),
+        created_at=now,
+    ))
+    row.updated_at = now
+    await session.commit()
+    return await _detail(session, row)
+
+
+@router.patch("/tasks/{task_id}/checks/{check_id}")
+async def patch_check(
+    task_id: str,
+    check_id: str,
+    body: CheckPatch,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    item = await _check_or_404(session, task_id, check_id)
+    if body.done is not None:
+        item.done = body.done
+    if body.label is not None and body.label.strip():
+        item.label = body.label.strip()
+    await session.commit()
+    row = await _task_or_404(session, task_id)
+    return await _detail(session, row)
+
+
+@router.post("/tasks/{task_id}/checks/{check_id}/notes", status_code=201)
+async def add_check_note(
+    task_id: str,
+    check_id: str,
+    body: CommentIn,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    if not body.text:
+        raise HTTPException(status_code=400, detail="Напишите комментарий")
+    await _check_or_404(session, task_id, check_id)
+    session.add(LegalHubTaskCheckNoteModel(
+        id=str(uuid4()),
+        check_id=check_id,
+        text=body.text,
+        created_at=datetime.now(timezone.utc),
+    ))
+    await session.commit()
+    row = await _task_or_404(session, task_id)
+    return await _detail(session, row)
+
+
+@router.delete("/tasks/{task_id}/checks/{check_id}/notes/{note_id}")
+async def delete_check_note(
+    task_id: str,
+    check_id: str,
+    note_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    await _check_or_404(session, task_id, check_id)
+    note = await session.get(LegalHubTaskCheckNoteModel, note_id)
+    if note is None or note.check_id != check_id:
+        raise HTTPException(status_code=404, detail="Комментарий не найден")
+    await session.delete(note)
+    await session.commit()
+    row = await _task_or_404(session, task_id)
+    return await _detail(session, row)
