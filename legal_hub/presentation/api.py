@@ -10,6 +10,34 @@ from presentation.routes.board import router as board_router
 from presentation.routes.tasks import router as tasks_router
 
 
+def _ensure_task_columns(sync_conn) -> None:
+    boolean = "0" if sync_conn.dialect.name == "sqlite" else "FALSE"
+    columns = {
+        "project_id": "VARCHAR(80) DEFAULT ''",
+        "priority": "VARCHAR(20) DEFAULT 'normal'",
+        "internal_on": "DATE",
+        "instructions": "TEXT DEFAULT ''",
+        "approval": f"BOOLEAN DEFAULT {boolean}",
+        "board_column": "VARCHAR(40) DEFAULT ''",
+        "important": f"BOOLEAN DEFAULT {boolean}",
+        "assignee_name": "VARCHAR(200) DEFAULT ''",
+        "assignee_code": "VARCHAR(16) DEFAULT ''",
+    }
+    if sync_conn.dialect.name == "sqlite":
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_tasks)").fetchall()
+        present = {row[1] for row in rows}
+        if not rows:
+            return
+        for name, ddl in columns.items():
+            if name not in present:
+                sync_conn.exec_driver_sql(f"ALTER TABLE legal_hub_tasks ADD COLUMN {name} {ddl}")
+        return
+    for name, ddl in columns.items():
+        sync_conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS legal_hub_tasks ADD COLUMN IF NOT EXISTS {name} {ddl}"
+        )
+
+
 def _ensure_folder_columns(sync_conn) -> None:
     columns = ("sidebar_order", "archived_clients")
     if sync_conn.dialect.name == "sqlite":
@@ -31,6 +59,7 @@ def _ensure_folder_columns(sync_conn) -> None:
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_task_columns)
         await conn.run_sync(_ensure_folder_columns)
     yield
 

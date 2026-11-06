@@ -7,6 +7,12 @@ TASK_STATUSES = frozenset({
     "in_review",
     "changes_required",
     "reviewing",
+    "todo",
+    "progress",
+    "wait",
+    "changes",
+    "associate",
+    "partner",
 })
 
 TASK_VIEWS = frozenset({"mine", "review", "team"})

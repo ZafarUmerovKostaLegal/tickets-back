@@ -42,7 +42,7 @@ async def get_current_user(
     if not isinstance(data, dict) or data.get("id") is None:
         raise HTTPException(status_code=401, detail="Invalid user response")
     try:
-        data = {**data, "id": int(data["id"])}
+        data = {**data, "id": int(data["id"]), "authorization": auth}
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=401, detail="Invalid user id in auth response") from exc
     return data

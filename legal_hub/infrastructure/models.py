@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.database import Base
@@ -19,9 +19,53 @@ class LegalHubTaskModel(Base):
     reviewer_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     project_label: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    project_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    internal_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    board_column: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    important: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    assignee_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    assignee_code: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTaskCommentModel(Base):
+    __tablename__ = "legal_hub_task_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    author_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    author_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTaskFileModel(Base):
+    __tablename__ = "legal_hub_task_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTaskEventModel(Base):
+    __tablename__ = "legal_hub_task_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    text: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class LegalHubBoardColumnsModel(Base):

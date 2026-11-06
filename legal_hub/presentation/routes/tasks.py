@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime, timezone
+from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.task_mail import notify_assignee
 from application.views import TASK_STATUSES, TASK_VIEWS, task_in_view
+from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.models import LegalHubTaskModel
+from infrastructure.models import (
+    LegalHubTaskCommentModel,
+    LegalHubTaskEventModel,
+    LegalHubTaskFileModel,
+    LegalHubTaskModel,
+)
 from presentation.deps import require_user
 
 router = APIRouter(tags=["legal-hub"])
@@ -25,6 +34,14 @@ class TaskWrite(BaseModel):
     reviewerUserId: int | None = None
     projectLabel: str = Field(default="", max_length=300)
     dueOn: date | None = None
+    projectId: str = Field(default="", max_length=80)
+    priority: str = "normal"
+    internalOn: date | None = None
+    instructions: str = Field(default="", max_length=8000)
+    approval: bool = False
+    boardColumn: str = Field(default="", max_length=40)
+    assigneeName: str = Field(default="", max_length=200)
+    assigneeCode: str = Field(default="", max_length=16)
 
     @field_validator("status")
     @classmethod
@@ -33,7 +50,7 @@ class TaskWrite(BaseModel):
             raise ValueError("Неизвестный статус задачи")
         return value
 
-    @field_validator("title", "description", "projectLabel")
+    @field_validator("title", "description", "projectLabel", "projectId", "instructions", "boardColumn", "assigneeName", "assigneeCode", "priority")
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
@@ -63,6 +80,15 @@ class TaskPatch(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class CommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+    @field_validator("text")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+
 def _user_id(user: dict) -> int:
     return int(user["id"])
 
@@ -75,6 +101,24 @@ def _positive_user(value: int | None, label: str) -> int | None:
     return value
 
 
+def _display(user: dict) -> str:
+    for key in ("display_name", "name", "email"):
+        value = user.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(user.get("id", ""))
+
+
+def _file_kind(name: str) -> str:
+    return "pdf" if name.lower().endswith(".pdf") else "docx"
+
+
+def _file_size(size: int) -> str:
+    if size < 1024 * 1024:
+        return f"{max(1, round(size / 1024))} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
 def _payload(row: LegalHubTaskModel) -> dict:
     return {
         "id": row.id,
@@ -85,6 +129,15 @@ def _payload(row: LegalHubTaskModel) -> dict:
         "reviewerUserId": row.reviewer_user_id,
         "createdByUserId": row.created_by_user_id,
         "projectLabel": row.project_label,
+        "projectId": row.project_id or "",
+        "priority": row.priority or "normal",
+        "internalOn": row.internal_on.isoformat() if row.internal_on else None,
+        "instructions": row.instructions or "",
+        "approval": bool(row.approval),
+        "boardColumn": row.board_column or "",
+        "important": bool(row.important),
+        "assigneeName": row.assignee_name or "",
+        "assigneeCode": row.assignee_code or "",
         "dueOn": row.due_on.isoformat() if row.due_on else None,
         "createdAt": row.created_at.isoformat(),
         "updatedAt": row.updated_at.isoformat(),
@@ -177,14 +230,90 @@ async def create_task(
         reviewer_user_id=reviewer,
         created_by_user_id=uid,
         project_label=body.projectLabel,
+        project_id=body.projectId,
+        priority=body.priority or "normal",
+        internal_on=body.internalOn,
+        instructions=body.instructions or body.description,
+        approval=body.approval,
+        board_column=body.boardColumn,
+        assignee_name=body.assigneeName,
+        assignee_code=body.assigneeCode,
         due_on=body.dueOn,
         created_at=now,
         updated_at=now,
     )
     session.add(row)
+    session.add(LegalHubTaskEventModel(
+        id=str(uuid4()),
+        task_id=row.id,
+        kind="created",
+        actor_name=_display(user),
+        text=body.title,
+        created_at=now,
+    ))
     await session.commit()
     await session.refresh(row)
+    await notify_assignee(
+        get_settings(),
+        authorization=str(user.get("authorization") or ""),
+        assignee_user_id=assignee,
+        actor=user,
+        title=row.title,
+        project=row.project_label,
+        due_on=row.due_on.isoformat() if row.due_on else None,
+        kind="assigned",
+    )
     return _payload(row)
+
+
+async def _detail(session: AsyncSession, row: LegalHubTaskModel) -> dict:
+    comments = list(await session.scalars(
+        select(LegalHubTaskCommentModel)
+        .where(LegalHubTaskCommentModel.task_id == row.id)
+        .order_by(LegalHubTaskCommentModel.created_at.asc())
+    ))
+    files = list(await session.scalars(
+        select(LegalHubTaskFileModel)
+        .where(LegalHubTaskFileModel.task_id == row.id)
+        .order_by(LegalHubTaskFileModel.created_at.asc())
+    ))
+    events = list(await session.scalars(
+        select(LegalHubTaskEventModel)
+        .where(LegalHubTaskEventModel.task_id == row.id)
+        .order_by(LegalHubTaskEventModel.created_at.asc())
+    ))
+    payload = _payload(row)
+    payload["comments"] = [
+        {
+            "id": item.id,
+            "authorUserId": item.author_user_id,
+            "author": item.author_name,
+            "text": item.text,
+            "createdAt": item.created_at.isoformat(),
+        }
+        for item in comments
+    ]
+    payload["files"] = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "kind": _file_kind(item.name),
+            "size": _file_size(item.size_bytes),
+            "createdAt": item.created_at.isoformat(),
+        }
+        for item in files
+    ]
+    payload["history"] = [
+        {
+            "id": item.id,
+            "kind": item.kind,
+            "actor": item.actor_name,
+            "text": item.text,
+            "createdAt": item.created_at.isoformat(),
+        }
+        for item in events
+    ]
+    return payload
 
 
 @router.get("/tasks/{task_id}")
@@ -196,7 +325,7 @@ async def get_task(
     row = await session.get(LegalHubTaskModel, task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    return _payload(row)
+    return await _detail(session, row)
 
 
 @router.patch("/tasks/{task_id}")
@@ -237,3 +366,134 @@ async def patch_task(
     await session.commit()
     await session.refresh(row)
     return _payload(row)
+
+
+MAX_FILE_BYTES = 15 * 1024 * 1024
+
+
+async def _task_or_404(session: AsyncSession, task_id: str) -> LegalHubTaskModel:
+    row = await session.get(LegalHubTaskModel, task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    return row
+
+
+@router.post("/tasks/{task_id}/comments", status_code=201)
+async def add_comment(
+    task_id: str,
+    body: CommentIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    if not body.text:
+        raise HTTPException(status_code=400, detail="Напишите сообщение")
+    row = await _task_or_404(session, task_id)
+    now = datetime.now(timezone.utc)
+    comment = LegalHubTaskCommentModel(
+        id=str(uuid4()),
+        task_id=row.id,
+        author_user_id=_user_id(user),
+        author_name=_display(user),
+        text=body.text,
+        created_at=now,
+    )
+    session.add(comment)
+    session.add(LegalHubTaskEventModel(
+        id=str(uuid4()),
+        task_id=row.id,
+        kind="comment",
+        actor_name=_display(user),
+        text=body.text[:180],
+        created_at=now,
+    ))
+    row.updated_at = now
+    await session.commit()
+    recipients = {row.assignee_user_id, row.created_by_user_id}
+    recipients.discard(_user_id(user))
+    for recipient in recipients:
+        await notify_assignee(
+            get_settings(),
+            authorization=str(user.get("authorization") or ""),
+            assignee_user_id=recipient,
+            actor=user,
+            title=row.title,
+            project=row.project_label,
+            due_on=None,
+            kind="comment",
+        )
+    return await _detail(session, row)
+
+
+@router.post("/tasks/{task_id}/files", status_code=201)
+async def add_files(
+    task_id: str,
+    files: list[UploadFile] = File(...),
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    row = await _task_or_404(session, task_id)
+    now = datetime.now(timezone.utc)
+    stored = 0
+    for upload in files:
+        content = await upload.read()
+        if not content:
+            continue
+        if len(content) > MAX_FILE_BYTES:
+            raise HTTPException(status_code=400, detail="Файл больше 15 МБ")
+        name = (upload.filename or "file").strip()[:300] or "file"
+        session.add(LegalHubTaskFileModel(
+            id=str(uuid4()),
+            task_id=row.id,
+            name=name,
+            content_type=(upload.content_type or "application/octet-stream")[:120],
+            size_bytes=len(content),
+            content=content,
+            created_by_user_id=_user_id(user),
+            created_at=now,
+        ))
+        session.add(LegalHubTaskEventModel(
+            id=str(uuid4()),
+            task_id=row.id,
+            kind="file",
+            actor_name=_display(user),
+            text=name,
+            created_at=now,
+        ))
+        stored += 1
+    if stored == 0:
+        raise HTTPException(status_code=400, detail="Выберите файл")
+    row.updated_at = now
+    await session.commit()
+    return await _detail(session, row)
+
+
+@router.get("/tasks/{task_id}/files/{file_id}")
+async def download_file(
+    task_id: str,
+    file_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    item = await session.get(LegalHubTaskFileModel, file_id)
+    if item is None or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return Response(
+        content=item.content,
+        media_type=item.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(item.name)}"},
+    )
+
+
+@router.delete("/tasks/{task_id}/files/{file_id}")
+async def delete_file(
+    task_id: str,
+    file_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_user),
+):
+    item = await session.get(LegalHubTaskFileModel, file_id)
+    if item is None or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    await session.delete(item)
+    await session.commit()
+    return {"ok": True}
