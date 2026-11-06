@@ -64,8 +64,16 @@ class TaskPatch(BaseModel):
     reviewerUserId: int | None = None
     projectLabel: str | None = Field(default=None, max_length=300)
     dueOn: date | None = None
+    internalOn: date | None = None
+    reviewOn: date | None = None
+    boardColumn: str | None = Field(default=None, max_length=40)
+    approval: bool | None = None
     clearReviewer: bool = False
     clearDueOn: bool = False
+    clearInternalOn: bool = False
+    clearReviewOn: bool = False
+    notifyDates: bool = False
+    notifyReview: bool = False
 
     @field_validator("status")
     @classmethod
@@ -132,6 +140,7 @@ def _payload(row: LegalHubTaskModel) -> dict:
         "projectId": row.project_id or "",
         "priority": row.priority or "normal",
         "internalOn": row.internal_on.isoformat() if row.internal_on else None,
+        "reviewOn": row.review_on.isoformat() if row.review_on else None,
         "instructions": row.instructions or "",
         "approval": bool(row.approval),
         "boardColumn": row.board_column or "",
@@ -333,12 +342,17 @@ async def patch_task(
     task_id: str,
     body: TaskPatch,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
     row = await session.get(LegalHubTaskModel, task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")
     data = body.model_dump(exclude_unset=True)
+    before = (
+        row.internal_on.isoformat() if row.internal_on else None,
+        row.review_on.isoformat() if row.review_on else None,
+        row.due_on.isoformat() if row.due_on else None,
+    )
     if "title" in data:
         if not data["title"]:
             raise HTTPException(status_code=400, detail="Укажите название задачи")
@@ -358,13 +372,78 @@ async def patch_task(
         row.reviewer_user_id = _positive_user(data["reviewerUserId"], "проверяющий")
     if "projectLabel" in data:
         row.project_label = data["projectLabel"]
+    if "boardColumn" in data and data["boardColumn"] is not None:
+        row.board_column = data["boardColumn"]
+    if "approval" in data and data["approval"] is not None:
+        row.approval = bool(data["approval"])
+    if body.clearInternalOn:
+        row.internal_on = None
+    elif "internalOn" in data:
+        row.internal_on = data["internalOn"]
+    if body.clearReviewOn:
+        row.review_on = None
+    elif "reviewOn" in data:
+        row.review_on = data["reviewOn"]
     if body.clearDueOn:
         row.due_on = None
     elif "dueOn" in data:
         row.due_on = data["dueOn"]
-    row.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if body.notifyReview:
+        file_count = len(list(await session.scalars(
+            select(LegalHubTaskFileModel.id).where(LegalHubTaskFileModel.task_id == row.id)
+        )))
+        if file_count == 0:
+            raise HTTPException(status_code=400, detail="Добавьте файл, чтобы отправить на проверку")
+        if row.reviewer_user_id is None:
+            raise HTTPException(status_code=400, detail="Назначьте проверяющего")
+        session.add(LegalHubTaskEventModel(
+            id=str(uuid4()),
+            task_id=row.id,
+            kind="review",
+            actor_name=_display(user),
+            text=row.title,
+            created_at=now,
+        ))
+    after = (
+        row.internal_on.isoformat() if row.internal_on else None,
+        row.review_on.isoformat() if row.review_on else None,
+        row.due_on.isoformat() if row.due_on else None,
+    )
+    row.updated_at = now
     await session.commit()
     await session.refresh(row)
+    if body.notifyReview and row.reviewer_user_id is not None:
+        await notify_assignee(
+            get_settings(),
+            authorization=str(user.get("authorization") or ""),
+            assignee_user_id=row.reviewer_user_id,
+            actor=user,
+            title=row.title,
+            project=row.project_label,
+            due_on=row.due_on.isoformat() if row.due_on else None,
+            kind="review",
+        )
+    if body.notifyDates and before != after:
+        summary = "\n".join(part for part in (
+            f"Внутренний срок: {after[0]}" if after[0] else "",
+            f"Срок проверки: {after[1]}" if after[1] else "",
+            f"Срок клиента: {after[2]}" if after[2] else "",
+        ) if part)
+        recipients = {row.assignee_user_id, row.reviewer_user_id or 0}
+        recipients.discard(_user_id(user))
+        recipients.discard(0)
+        for recipient in recipients:
+            await notify_assignee(
+                get_settings(),
+                authorization=str(user.get("authorization") or ""),
+                assignee_user_id=recipient,
+                actor=user,
+                title=row.title,
+                project=row.project_label,
+                due_on=summary or None,
+                kind="dates",
+            )
     return _payload(row)
 
 

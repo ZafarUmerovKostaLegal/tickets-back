@@ -22,6 +22,7 @@ class LegalHubTaskModel(Base):
     project_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
     internal_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    review_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
     approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     board_column: Mapped[str] = mapped_column(String(40), nullable=False, default="")

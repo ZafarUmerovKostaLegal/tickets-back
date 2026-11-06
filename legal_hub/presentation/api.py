@@ -16,6 +16,7 @@ def _ensure_task_columns(sync_conn) -> None:
         "project_id": "VARCHAR(80) DEFAULT ''",
         "priority": "VARCHAR(20) DEFAULT 'normal'",
         "internal_on": "DATE",
+        "review_on": "DATE",
         "instructions": "TEXT DEFAULT ''",
         "approval": f"BOOLEAN DEFAULT {boolean}",
         "board_column": "VARCHAR(40) DEFAULT ''",
