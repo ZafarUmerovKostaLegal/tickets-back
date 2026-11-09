@@ -29,9 +29,9 @@ class Settings(BaseSettings):
         description="Comma-separated extra redirect URIs allowed on exchange.",
     )
     auth_outlook_redirect_uri: str = Field(
-        default="https://localhost:3001/auth/callback.html",
+        default="https://tickets.kostalegal.com/outlook-addin/auth/callback.html",
         validation_alias=AliasChoices("AUTH_OUTLOOK_REDIRECT_URI", "OUTLOOK_ADDIN_REDIRECT_URI"),
-        description="Outlook add-in OAuth redirect (SPA / Office dialog callback).",
+        description="Outlook add-in OAuth redirect on Hub domain (/outlook-addin/).",
     )
     outlook_access_expire_minutes: int = Field(
         default=10,
