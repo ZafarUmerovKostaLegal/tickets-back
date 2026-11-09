@@ -20,6 +20,7 @@ _DEFAULT_SERVICE_URLS: dict[str, str] = {
     "correspondence_service_url": "http://correspondence:1249",
     "hr_service_url": "http://hr:1250",
     "legal_hub_service_url": "http://legal_hub:1254",
+    "file_manager_service_url": "http://file_manager:1255",
     "kosta_daily_service_url": "http://kosta_daily:1251",
     "file_guard_service_url": "http://file_guard:1253",
     "smart_home_service_url": "",
@@ -51,6 +52,7 @@ class Settings(BaseSettings):
     correspondence_service_url: str = ""
     hr_service_url: str = ""
     legal_hub_service_url: str = ""
+    file_manager_service_url: str = ""
     kosta_daily_service_url: str = ""
     file_guard_service_url: str = ""
     smart_home_service_url: str = ""

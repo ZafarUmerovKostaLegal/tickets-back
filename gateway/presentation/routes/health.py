@@ -404,6 +404,42 @@ async def health_legal_hub():
     return JSONResponse(content={"status": "ok", "legal_hub": "reachable", "legal_hub_service_url": base})
 
 
+@router.get("/file-manager", summary="Проверка File Manager с gateway")
+async def health_file_manager():
+    base = (get_settings().file_manager_service_url or "").rstrip("/")
+    if not base:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "FILE_MANAGER_SERVICE_URL not configured",
+                "hint": "Задайте FILE_MANAGER_SERVICE_URL, например http://file_manager:1255",
+            },
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            r = await client.get(f"{base}/health")
+    except httpx.RequestError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "File Manager unreachable from gateway",
+                "file_manager_service_url": base,
+                "upstream_error": type(e).__name__,
+                "upstream_message": str(e)[:500],
+            },
+        )
+    if r.status_code != 200:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "File Manager health failed",
+                "file_manager_service_url": base,
+                "upstream_status": r.status_code,
+            },
+        )
+    return JSONResponse(content={"status": "ok", "file_manager": "reachable", "file_manager_service_url": base})
+
+
 @router.get("/kosta-daily", summary="Проверка Kosta Daily с gateway")
 async def health_kosta_daily():
     base = (get_settings().kosta_daily_service_url or "").rstrip("/")

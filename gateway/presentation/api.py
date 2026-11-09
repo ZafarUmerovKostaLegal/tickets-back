@@ -32,6 +32,7 @@ from presentation.routes import (
     correspondence_routes,
     hr_routes,
     legal_hub_routes,
+    file_manager_routes,
     kosta_daily_routes,
     chat_ws,
     call_schedule_routes,
@@ -154,6 +155,7 @@ app.include_router(contacts_routes.router)
 app.include_router(correspondence_routes.router)
 app.include_router(hr_routes.router)
 app.include_router(legal_hub_routes.router)
+app.include_router(file_manager_routes.router)
 app.include_router(kosta_daily_routes.router)
 app.include_router(call_schedule_routes.router)
 app.include_router(smart_home_routes.router)

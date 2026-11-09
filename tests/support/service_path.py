@@ -19,6 +19,7 @@ _SERVICE_DIR_NAMES = (
     "telegram_bot",
     "hr",
     "legal_hub",
+    "file_manager",
 )
 
 
