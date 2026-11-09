@@ -71,7 +71,27 @@ def normalize_columns(raw: object) -> dict:
 
 
 def default_folders() -> dict:
-    return {"hideLocked": False, "folders": [], "sidebarOrder": [], "archivedClients": []}
+    return {
+        "hideLocked": False,
+        "folders": [],
+        "sidebarOrder": [],
+        "archivedClients": [],
+        "archivedProjects": [],
+    }
+
+
+def _clean_ids(raw: object, limit: int = 64) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        cleaned = _clean_id(item, limit)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        ids.append(cleaned)
+    return ids
 
 
 def _clean_names(raw: object) -> list[str]:
@@ -149,6 +169,7 @@ def normalize_folders(raw: object) -> dict:
         "folders": folders,
         "sidebarOrder": _sidebar_order(body.get("sidebarOrder")),
         "archivedClients": _clean_names(body.get("archivedClients")),
+        "archivedProjects": _clean_ids(body.get("archivedProjects")),
     }
 
 

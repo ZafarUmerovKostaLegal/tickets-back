@@ -120,6 +120,7 @@ async def test_board_settings_are_stored_per_user():
                 {"type": "folder", "id": "fld-1"},
             ]
             assert body["folders"]["archivedClients"] == ["Kosta Legal"]
+            assert body["folders"]["archivedProjects"] == []
             assert body["filters"] == [{
                 "scope": "mine",
                 "onlyLate": True,

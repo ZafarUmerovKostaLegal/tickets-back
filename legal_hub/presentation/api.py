@@ -62,7 +62,7 @@ def _ensure_file_columns(sync_conn) -> None:
 
 
 def _ensure_folder_columns(sync_conn) -> None:
-    columns = ("sidebar_order", "archived_clients")
+    columns = ("sidebar_order", "archived_clients", "archived_projects")
     if sync_conn.dialect.name == "sqlite":
         rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_project_folders)").fetchall()
         present = {row[1] for row in rows}

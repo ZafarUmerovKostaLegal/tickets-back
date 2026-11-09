@@ -442,8 +442,6 @@ def _validate_expense_date(
     today = date.today()
     if expense_date > today:
         raise HTTPException(status_code=400, detail="Дата расхода не может быть в будущем")
-    # A new client expense is always today. An already saved one (revision,
-    # admin edit) keeps its original date — otherwise Send is rejected.
     if allow_historical_client:
         return
     if (expense_type or "").strip() == "client_expense" and expense_date != today:

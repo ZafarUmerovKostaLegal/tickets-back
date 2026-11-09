@@ -133,6 +133,7 @@ class LegalHubProjectFoldersModel(Base):
     folders: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     sidebar_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
     archived_clients: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    archived_projects: Mapped[list | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
