@@ -48,6 +48,8 @@ def _pair_response(pair) -> OutlookTokenResponse:
 async def outlook_login_url(
     redirect_uri: str | None = None,
     state: str | None = None,
+    prompt: str | None = None,
+    login_hint: str | None = None,
 ):
     """Return Azure authorize URL for the add-in (public client + PKCE on client)."""
     from urllib.parse import urlencode
@@ -64,7 +66,7 @@ async def outlook_login_url(
     }
     if ruri not in allowed:
         raise HTTPException(status_code=400, detail="redirect_uri not allow-listed")
-    params = {
+    params: dict[str, str] = {
         "client_id": settings.azure_client_id,
         "response_type": "code",
         "redirect_uri": ruri,
@@ -72,6 +74,12 @@ async def outlook_login_url(
         "scope": "openid profile email offline_access User.Read",
         "state": state or "outlook",
     }
+    prompt_n = (prompt or "").strip()
+    if prompt_n:
+        params["prompt"] = prompt_n
+    hint = (login_hint or "").strip()
+    if hint:
+        params["login_hint"] = hint
     base = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/authorize"
     return {"authorizeUrl": f"{base}?{urlencode(params)}", "redirectUri": ruri}
 
