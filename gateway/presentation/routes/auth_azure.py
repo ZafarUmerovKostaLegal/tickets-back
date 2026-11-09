@@ -66,6 +66,55 @@ async def azure_exchange(body: AzureExchangeBody):
     return r.json()
 
 
+class AzureBootstrapBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    access_token: str = Field(..., alias="accessToken")
+    id_token: Optional[str] = Field(None, alias="idToken")
+
+
+@router.post(
+    "/bootstrap",
+    summary="Hub JWT из Azure access token (SPA / Outlook add-in)",
+    description=(
+        "Для SPA redirect URI код Azure нужно обменять в браузере (AADSTS9002327). "
+        "Затем передайте accessToken сюда — auth выдаст Hub JWT + session cookie."
+    ),
+)
+async def azure_bootstrap(body: AzureBootstrapBody, request: Request):
+    settings = get_settings()
+    payload: dict = {"access_token": body.access_token}
+    if body.id_token and str(body.id_token).strip():
+        payload["id_token"] = str(body.id_token).strip()
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                f"{settings.auth_service_url.rstrip('/')}/auth/bootstrap",
+                json=payload,
+                headers=headers,
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail="Auth service unavailable") from e
+    if r.status_code >= 400:
+        detail = r.text or "Auth bootstrap failed"
+        try:
+            detail = r.json().get("detail", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    # Forward Set-Cookie from auth so Outlook WebView stores Hub session
+    resp = Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type") or "application/json",
+    )
+    for key, value in r.headers.multi_items():
+        if key.lower() == "set-cookie":
+            resp.headers.append("set-cookie", value)
+    return resp
+
+
 def _clear_oauth_cookies(resp: RedirectResponse) -> None:
     resp.delete_cookie("oauth_state_nonce", path="/")
 

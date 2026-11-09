@@ -85,7 +85,12 @@ async def outlook_login_url(
     if hint:
         params["login_hint"] = hint
     base = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/authorize"
-    return {"authorizeUrl": f"{base}?{urlencode(params)}", "redirectUri": ruri}
+    return {
+        "authorizeUrl": f"{base}?{urlencode(params)}",
+        "redirectUri": ruri,
+        "clientId": settings.azure_client_id,
+        "tenantId": settings.azure_tenant_id,
+    }
 
 
 @router.post("/exchange", response_model=OutlookTokenResponse)

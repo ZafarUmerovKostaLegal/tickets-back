@@ -178,6 +178,33 @@ def acquire_token_by_code(
     return result
 
 
+async def fetch_graph_me(access_token: str) -> dict[str, Any]:
+    """Validate an Azure SPA access token via Microsoft Graph /me."""
+    token = (access_token or "").strip()
+    if not token:
+        raise AzureTokenExchangeError("access_token required")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(
+                "https://graph.microsoft.com/v1.0/me"
+                "?$select=id,displayName,mail,userPrincipalName",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AzureTokenExchangeError("Microsoft Graph unreachable") from exc
+    if r.status_code >= 400:
+        raise AzureTokenExchangeError(
+            f"Microsoft Graph rejected token (HTTP {r.status_code})"
+        )
+    try:
+        data = r.json()
+    except Exception as exc:
+        raise AzureTokenExchangeError("Microsoft Graph response invalid") from exc
+    if not isinstance(data, dict):
+        raise AzureTokenExchangeError("Microsoft Graph response invalid")
+    return data
+
+
 async def fetch_graph_profile_photo_download_url(access_token: str) -> Optional[str]:
 
     if not (access_token or "").strip():

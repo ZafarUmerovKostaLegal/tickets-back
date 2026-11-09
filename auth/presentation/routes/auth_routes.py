@@ -14,9 +14,12 @@ from infrastructure.repositories import UserRepository, RoleRepository
 from infrastructure.jwt_service import JWTService
 from infrastructure.azure_ad import (
     AzureTokenExchangeError,
+    _claims_from_id_token,
+    acquire_token_by_code,
+    fetch_graph_me,
+    fetch_graph_profile_photo_download_url,
     get_login_url,
     get_logout_url,
-    acquire_token_by_code,
     resolve_profile_picture_from_tokens,
 )
 from infrastructure.oauth_state_jwt import create_oauth_state_token, parse_oauth_state_token
@@ -228,6 +231,53 @@ async def exchange(
     await session.commit()
     _apply_session_cookie(response, access_token)
     return TokenResponse(access_token=access_token)
+
+
+@router.post("/bootstrap", response_model=TokenResponse)
+async def bootstrap_from_azure_token(
+    body: dict,
+    response: Response,
+    uc: AzureLoginUseCase = Depends(get_login_use_case),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Issue Hub JWT from an Azure access token already redeemed in the browser.
+    Required for SPA redirect URIs (AADSTS9002327 forbids server-side code redeem).
+    """
+    access = (body.get("access_token") or body.get("accessToken") or "").strip()
+    id_token = (body.get("id_token") or body.get("idToken") or "").strip()
+    if not access:
+        raise HTTPException(status_code=400, detail="access_token required")
+    try:
+        me = await fetch_graph_me(access)
+    except AzureTokenExchangeError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    claims = _claims_from_id_token(id_token) or {}
+    azure_oid = (
+        str(claims.get("oid") or claims.get("sub") or me.get("id") or "").strip()
+    )
+    email = (
+        str(
+            claims.get("preferred_username")
+            or claims.get("email")
+            or me.get("mail")
+            or me.get("userPrincipalName")
+            or ""
+        ).strip()
+    )
+    display_name = (
+        str(claims.get("name") or me.get("displayName") or email).strip() or None
+    )
+    if not azure_oid or not email:
+        raise HTTPException(status_code=400, detail="Missing user claims from Graph")
+    picture = await fetch_graph_profile_photo_download_url(access)
+    user, hub_token = await uc.execute(
+        azure_oid, email, display_name, picture, Role.EMPLOYEE.value
+    )
+    await session.commit()
+    _apply_session_cookie(response, hub_token)
+    return TokenResponse(access_token=hub_token)
 
 
 @router.post("/logout", status_code=204)
