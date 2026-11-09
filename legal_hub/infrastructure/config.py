@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     auth_service_url: str = "http://auth:1236"
     auth_session_cookie_name: str = "kl_access_token"
     database_url: str = "sqlite+aiosqlite:///./data/legal_hub.db"
+    time_tracking_service_url: str = Field(
+        default="http://time_tracking:1241",
+        validation_alias=AliasChoices("TIME_TRACKING_SERVICE_URL", "time_tracking_service_url"),
+    )
     public_app_url: str = Field(default="https://tickets.kostalegal.com", validation_alias="LEGAL_HUB_PUBLIC_APP_URL")
     smtp_host: str = Field(default="", validation_alias=AliasChoices("LEGAL_HUB_SMTP_HOST", "EXPENSE_SMTP_HOST", "SMTP_HOST"))
     smtp_port: int = Field(default=587, validation_alias=AliasChoices("LEGAL_HUB_SMTP_PORT", "EXPENSE_SMTP_PORT", "SMTP_PORT"))

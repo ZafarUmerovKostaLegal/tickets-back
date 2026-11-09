@@ -19,6 +19,7 @@ from presentation.routes import (
     ops,
     ops_databases,
     auth_azure,
+    outlook_auth_proxy,
     users,
     positions,
     tickets,
@@ -140,6 +141,7 @@ app.include_router(ops_databases.router)
 app.include_router(health.router)
 app.include_router(desktop_backgrounds_public.router)
 app.include_router(auth_azure.router)
+app.include_router(outlook_auth_proxy.router)
 app.include_router(users.router)
 app.include_router(positions.router)
 app.include_router(time_tracking_users_hourly_alias.router)

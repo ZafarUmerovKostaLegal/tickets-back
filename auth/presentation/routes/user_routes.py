@@ -68,18 +68,28 @@ def get_token_service() -> TokenServicePort:
 async def get_current_user(
     request: Request,
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_outlook_device_id: Optional[str] = Header(None, alias="X-Outlook-Device-Id"),
     user_repo: UserRepositoryPort = Depends(get_user_repo),
     token_service: TokenServicePort = Depends(get_token_service),
 ) -> User:
     token = access_token_from_request(request, authorization)
     uc = GetCurrentUserUseCase(user_repo, token_service)
-    user = await uc.execute(token)
+    user = await uc.execute(token, device_id=x_outlook_device_id)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    payload = token_service.decode_token(token) or {}
+    request.state.auth_token_typ = payload.get("typ")
+    request.state.auth_token_scope = payload.get("scope")
     return user
 
 
-def _user_to_response(user: User, *, omit_permissions: bool = False) -> UserResponse:
+def _user_to_response(
+    user: User,
+    *,
+    omit_permissions: bool = False,
+    token_typ: Optional[str] = None,
+    token_scope: Optional[str] = None,
+) -> UserResponse:
     perms = None if omit_permissions else build_ui_permissions(
         user.role, user.time_tracking_role, user.position
     )
@@ -98,6 +108,8 @@ def _user_to_response(user: User, *, omit_permissions: bool = False) -> UserResp
         time_tracking_role=user.time_tracking_role,
         desktop_background=user.desktop_background,
         initials=user.initials,
+        token_typ=token_typ,
+        token_scope=token_scope,
     )
 
 
@@ -245,8 +257,12 @@ async def list_users(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return _user_to_response(current_user)
+async def get_me(request: Request, current_user: User = Depends(get_current_user)):
+    return _user_to_response(
+        current_user,
+        token_typ=getattr(request.state, "auth_token_typ", None),
+        token_scope=getattr(request.state, "auth_token_scope", None),
+    )
 
 
 @router.get("/public", response_model=UserPublicListResponse)

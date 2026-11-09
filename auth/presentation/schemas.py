@@ -19,6 +19,8 @@ class UserResponse(BaseModel):
     time_tracking_role: Optional[str] = None
     desktop_background: Optional[str] = None
     initials: Optional[str] = Field(None, max_length=8, description="Инициалы (3–8 букв)")
+    token_typ: Optional[str] = Field(None, description="outlook_fm when Outlook add-in token")
+    token_scope: Optional[str] = None
 
 
 class UserPublicResponse(BaseModel):
@@ -122,6 +124,30 @@ class ProfileUpdateRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class OutlookTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    scope: str = "fm.outlook.upload"
+
+
+class OutlookExchangeBody(BaseModel):
+    code: str
+    redirect_uri: Optional[str] = Field(None, alias="redirectUri")
+    code_verifier: Optional[str] = Field(None, alias="codeVerifier")
+    device_id: str = Field(..., alias="deviceId", min_length=8, max_length=128)
+
+    model_config = {"populate_by_name": True}
+
+
+class OutlookRefreshBody(BaseModel):
+    refresh_token: str = Field(..., alias="refreshToken", min_length=20)
+    device_id: str = Field(..., alias="deviceId", min_length=8, max_length=128)
+
+    model_config = {"populate_by_name": True}
 
 
 class HealthResponse(BaseModel):

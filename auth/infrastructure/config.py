@@ -28,10 +28,28 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTH_REDIRECT_URIS_EXTRA"),
         description="Comma-separated extra redirect URIs allowed on exchange.",
     )
+    auth_outlook_redirect_uri: str = Field(
+        default="https://localhost:3001/auth/callback.html",
+        validation_alias=AliasChoices("AUTH_OUTLOOK_REDIRECT_URI", "OUTLOOK_ADDIN_REDIRECT_URI"),
+        description="Outlook add-in OAuth redirect (SPA / Office dialog callback).",
+    )
+    outlook_access_expire_minutes: int = Field(
+        default=10,
+        ge=1,
+        le=60,
+        validation_alias=AliasChoices("OUTLOOK_ACCESS_EXPIRE_MINUTES"),
+    )
+    outlook_refresh_expire_days: int = Field(
+        default=30,
+        ge=1,
+        le=90,
+        validation_alias=AliasChoices("OUTLOOK_REFRESH_EXPIRE_DAYS"),
+    )
 
     @field_validator(
         "auth_redirect_uri",
         "auth_mobile_redirect_uri",
+        "auth_outlook_redirect_uri",
         mode="before",
     )
     @classmethod

@@ -26,6 +26,7 @@ def allowed_redirect_uris(settings=None) -> set[str]:
     for raw in (
         getattr(settings, "auth_redirect_uri", None),
         getattr(settings, "auth_mobile_redirect_uri", None),
+        getattr(settings, "auth_outlook_redirect_uri", None),
     ):
         u = normalize_redirect_uri(raw)
         if u:

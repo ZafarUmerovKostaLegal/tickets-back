@@ -51,10 +51,17 @@ class GetCurrentUserUseCase:
         self._user_repo = user_repo
         self._token_service = token_service
 
-    async def execute(self, access_token: str) -> Optional[User]:
+    async def execute(
+        self,
+        access_token: str,
+        *,
+        device_id: str | None = None,
+    ) -> Optional[User]:
         payload = self._token_service.decode_token(access_token)
         if not payload:
             return None
+        if payload.get("typ") == "outlook_fm":
+            return await self._user_from_outlook(payload, device_id)
         user_id = payload.get("sub")
         if not user_id:
             return None
@@ -63,6 +70,29 @@ class GetCurrentUserUseCase:
             return None
         active_jtis = await self._user_repo.list_active_session_jtis(user.id)
         if not self._session_matches(payload, user, active_jtis):
+            return None
+        return user
+
+    async def _user_from_outlook(self, payload: dict, device_id: str | None) -> Optional[User]:
+        from infrastructure.jwt_service import OUTLOOK_TOKEN_AUD, OUTLOOK_TOKEN_SCOPE
+
+        if payload.get("aud") != OUTLOOK_TOKEN_AUD:
+            return None
+        if payload.get("scope") != OUTLOOK_TOKEN_SCOPE:
+            return None
+        token_did = str(payload.get("did") or "").strip()
+        req_did = (device_id or "").strip()
+        if not token_did or not req_did or token_did != req_did:
+            return None
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return None
+        user = await self._user_repo.get_by_id(uid)
+        if not user or user.is_blocked or user.is_archived:
             return None
         return user
 

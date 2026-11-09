@@ -9,7 +9,7 @@ from backend_common.sql_injection_guard import SqlInjectionGuardMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.database import engine, Base
 from infrastructure.config import get_settings, validate_production_secrets
-from presentation.routes import auth_routes, user_routes, role_routes, health, internal_routes
+from presentation.routes import auth_routes, user_routes, role_routes, health, internal_routes, outlook_auth_routes
 from presentation.startup import ensure_auth_schema, seed_default_roles
 
 _log = logging.getLogger("auth.startup")
@@ -74,6 +74,7 @@ app.add_middleware(
 )
 app.add_middleware(SqlInjectionGuardMiddleware)
 app.include_router(auth_routes.router)
+app.include_router(outlook_auth_routes.router)
 app.include_router(user_routes.router)
 app.include_router(role_routes.router)
 app.include_router(health.router)
