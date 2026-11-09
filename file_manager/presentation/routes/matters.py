@@ -95,14 +95,34 @@ async def list_clients(
             "documents": int(counts.get(matter.id, 0)),
             "favorite": ("matter", matter.id) in favorites,
         })
-    out = sorted(clients.values(), key=lambda c: c["name"].lower())
+    # Managers see every client from time-tracking, including archived ones with no accessible matters.
+    if viewer.manager:
+        for client in dirx.clients.values():
+            clients.setdefault(client.id, {
+                "id": client.id,
+                "name": client.name,
+                "archived": client.archived,
+                "favorite": ("client", client.id) in favorites,
+                "matters": [],
+            })
+            clients[client.id]["archived"] = client.archived
+    out = sorted(clients.values(), key=lambda c: (c["archived"], c["name"].lower()))
     for client in out:
         client["matters"].sort(key=lambda m: (m["closed"], m["name"].lower()))
     requestable.sort(key=lambda r: (r["clientName"].lower(), r["matterName"].lower()))
+    closed_matters = sum(1 for matter in dirx.matters.values() if matter_closed(dirx, matter))
     return {
         "viewer": {"userId": viewer.user_id, "name": viewer.name, "canManage": viewer.manager},
         "clients": out,
         "requestable": requestable,
+        "stats": {
+            "clients": len(dirx.clients),
+            "matters": len(dirx.matters),
+            "archivedClients": sum(1 for client in dirx.clients.values() if client.archived),
+            "closedMatters": closed_matters,
+            "visibleClients": len(out),
+            "visibleMatters": sum(len(client["matters"]) for client in out),
+        },
     }
 
 

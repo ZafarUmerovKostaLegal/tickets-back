@@ -14,6 +14,7 @@ _log = logging.getLogger(__name__)
 
 _DIRECTORY_TTL = 60.0
 _ACCESS_TTL = 30.0
+_DIRECTORY_TIMEOUT = 60.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,8 @@ class Matter:
     name: str
     code: str
     archived: bool
+    end_date: str | None = None
+    paused: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,7 +62,13 @@ def _items(payload: object) -> list[dict]:
 
 
 def _flag(row: dict, *keys: str) -> bool:
-    return any(bool(row.get(key)) for key in keys)
+    for key in keys:
+        value = row.get(key)
+        if value is True or value == 1:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "y"}:
+            return True
+    return False
 
 
 def _text(row: dict, *keys: str) -> str:
@@ -70,12 +79,23 @@ def _text(row: dict, *keys: str) -> str:
     return ""
 
 
-async def _get(path: str, authorization: str) -> object:
+def _date(row: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+            return text[:10]
+    return None
+
+
+async def _get(path: str, authorization: str, *, timeout: float = 15.0) -> object:
     base = _base()
     if not base:
         raise DirectoryUnavailable("TIME_TRACKING_SERVICE_URL is not configured")
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(f"{base}{path}", headers={"Authorization": authorization})
     except httpx.RequestError as exc:
         raise DirectoryUnavailable(str(exc)) from exc
@@ -85,12 +105,17 @@ async def _get(path: str, authorization: str) -> object:
 
 
 async def load_directory(authorization: str, *, force: bool = False) -> Directory:
+    """Full TT directory: all clients + all projects (active and inactive)."""
     global _directory_cache
     now = time.monotonic()
     if not force and _directory_cache and now - _directory_cache[0] < _DIRECTORY_TTL:
         return _directory_cache[1]
-    clients_raw = await _get("/clients?includeArchived=true", authorization)
-    projects_raw = await _get("/projects?includeArchived=true&includeBudgetMetrics=false", authorization)
+    clients_raw = await _get("/clients?includeArchived=true", authorization, timeout=_DIRECTORY_TIMEOUT)
+    projects_raw = await _get(
+        "/projects?includeArchived=true&includeBudgetMetrics=false",
+        authorization,
+        timeout=_DIRECTORY_TIMEOUT,
+    )
     clients: dict[str, Client] = {}
     for row in _items(clients_raw):
         cid = _text(row, "id")
@@ -109,9 +134,15 @@ async def load_directory(authorization: str, *, force: bool = False) -> Director
             name=_text(row, "name") or mid,
             code=_text(row, "code"),
             archived=_flag(row, "is_archived", "isArchived"),
+            end_date=_date(row, "end_date", "endDate"),
+            paused=_flag(row, "is_paused", "isPaused"),
         )
+        # Keep orphan projects visible even if the client row was missing from /clients.
+        if cid not in clients:
+            clients[cid] = Client(id=cid, name=cid, archived=False)
     directory = Directory(clients=clients, matters=matters)
     _directory_cache = (now, directory)
+    _log.info("tt directory loaded clients=%s matters=%s", len(clients), len(matters))
     return directory
 
 

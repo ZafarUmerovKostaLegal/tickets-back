@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -54,8 +54,13 @@ async def directory(viewer: Viewer, *, force: bool = False) -> Directory:
 
 
 def matter_closed(dirx: Directory, matter: Matter) -> bool:
+    """Same rules as time-tracking: archived, paused, or end date in the past."""
     client = dirx.clients.get(matter.client_id)
-    return matter.archived or bool(client and client.archived)
+    if matter.archived or bool(client and client.archived) or matter.paused:
+        return True
+    if matter.end_date and matter.end_date < date.today().isoformat():
+        return True
+    return False
 
 
 def audit(
