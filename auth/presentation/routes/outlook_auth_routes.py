@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.outlook_tokens import OutlookTokenService
 from application.ports import UserRepositoryPort
 from application.use_cases import GetCurrentUserUseCase
-from infrastructure.azure_ad import acquire_token_by_code, resolve_profile_picture_from_tokens
+from infrastructure.azure_ad import (
+    AzureTokenExchangeError,
+    acquire_token_by_code,
+    resolve_profile_picture_from_tokens,
+)
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.jwt_service import JWTService
@@ -92,11 +96,14 @@ async def outlook_exchange(
 ):
     settings = get_settings()
     redirect = (body.redirect_uri or settings.auth_outlook_redirect_uri or "").strip()
-    azure = acquire_token_by_code(
-        body.code,
-        redirect_uri=redirect,
-        code_verifier=body.code_verifier,
-    )
+    try:
+        azure = acquire_token_by_code(
+            body.code,
+            redirect_uri=redirect,
+            code_verifier=body.code_verifier,
+        )
+    except AzureTokenExchangeError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     if not azure or "id_token_claims" not in azure:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     claims = azure["id_token_claims"]

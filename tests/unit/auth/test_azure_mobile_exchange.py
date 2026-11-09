@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+
 from infrastructure.azure_ad import (
+    AzureTokenExchangeError,
     allowed_redirect_uris,
     normalize_redirect_uri,
     resolve_exchange_redirect_uri,
@@ -78,7 +81,8 @@ def test_acquire_token_rejects_unknown_redirect(monkeypatch):
         azure_client_secret="sec",
     )
     monkeypatch.setattr(azure_ad, "get_settings", lambda: settings)
-    assert (
+    with pytest.raises(azure_ad.AzureTokenExchangeError) as ei:
         azure_ad.acquire_token_by_code("c", redirect_uri="https://evil/", code_verifier="v")
-        is None
-    )
+    assert "allow-listed" in ei.value.detail
+
+

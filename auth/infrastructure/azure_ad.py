@@ -97,41 +97,52 @@ def _claims_from_id_token(id_token: str | None) -> dict[str, Any] | None:
     return claims if isinstance(claims, dict) else None
 
 
+class AzureTokenExchangeError(Exception):
+    """Azure token endpoint / allow-list failure with a client-safe message."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
+
+
 def _acquire_token_pkce_public(
     code: str,
     redirect_uri: str,
     code_verifier: str,
     settings,
-) -> Optional[dict]:
-    """Native/public client exchange (Android MSAL) — no client_secret."""
+) -> dict:
+    """SPA / public client exchange (Outlook add-in PKCE) — no client_secret."""
     token_url = (
         f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/token"
     )
-    scope = " ".join([*AZURE_LOGIN_SCOPES, "openid", "profile", "offline_access"])
     data = {
         "client_id": settings.azure_client_id,
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
         "code_verifier": code_verifier,
-        "scope": scope,
     }
     try:
         with httpx.Client(timeout=30.0) as client:
             r = client.post(token_url, data=data)
-    except httpx.HTTPError:
-        return None
-    if r.status_code >= 400:
-        return None
+    except httpx.HTTPError as exc:
+        raise AzureTokenExchangeError("Azure token endpoint unreachable") from exc
     try:
         payload = r.json()
-    except Exception:
-        return None
-    if not isinstance(payload, dict) or payload.get("error"):
-        return None
+    except Exception as exc:
+        raise AzureTokenExchangeError(f"Azure token response invalid (HTTP {r.status_code})") from exc
+    if not isinstance(payload, dict):
+        raise AzureTokenExchangeError("Azure token response invalid")
+    if r.status_code >= 400 or payload.get("error"):
+        desc = (
+            payload.get("error_description")
+            or payload.get("error")
+            or f"HTTP {r.status_code}"
+        )
+        raise AzureTokenExchangeError(str(desc))
     claims = _claims_from_id_token(payload.get("id_token"))
     if not claims:
-        return None
+        raise AzureTokenExchangeError("Azure id_token missing or invalid")
     out = dict(payload)
     out["id_token_claims"] = claims
     return out
@@ -146,7 +157,10 @@ def acquire_token_by_code(
     settings = get_settings()
     ruri = resolve_exchange_redirect_uri(redirect_uri, settings=settings)
     if not ruri:
-        return None
+        raise AzureTokenExchangeError(
+            "redirect_uri not allow-listed on auth service "
+            "(set AUTH_OUTLOOK_REDIRECT_URI to the add-in callback)"
+        )
 
     verifier = (code_verifier or "").strip()
     if verifier:
@@ -159,7 +173,8 @@ def acquire_token_by_code(
         redirect_uri=ruri,
     )
     if "error" in result:
-        return None
+        desc = result.get("error_description") or result.get("error") or "token exchange failed"
+        raise AzureTokenExchangeError(str(desc))
     return result
 
 

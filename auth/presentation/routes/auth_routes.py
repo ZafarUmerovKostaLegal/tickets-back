@@ -13,6 +13,7 @@ from infrastructure.database import get_session
 from infrastructure.repositories import UserRepository, RoleRepository
 from infrastructure.jwt_service import JWTService
 from infrastructure.azure_ad import (
+    AzureTokenExchangeError,
     get_login_url,
     get_logout_url,
     acquire_token_by_code,
@@ -158,7 +159,12 @@ async def callback(
             _clear_oauth_cookies(resp)
             return resp
 
-    tokens = acquire_token_by_code(code)
+    try:
+        tokens = acquire_token_by_code(code)
+    except AzureTokenExchangeError:
+        resp = _error_redirect(settings, "auth_failed")
+        _clear_oauth_cookies(resp)
+        return resp
     if not tokens or "id_token_claims" not in tokens:
         resp = _error_redirect(settings, "auth_failed")
         _clear_oauth_cookies(resp)
@@ -201,11 +207,14 @@ async def exchange(
         raise HTTPException(status_code=400, detail="code required")
     redirect_uri = body.get("redirect_uri") or body.get("redirectUri")
     code_verifier = body.get("code_verifier") or body.get("codeVerifier")
-    tokens = acquire_token_by_code(
-        code,
-        redirect_uri=str(redirect_uri).strip() if redirect_uri else None,
-        code_verifier=str(code_verifier).strip() if code_verifier else None,
-    )
+    try:
+        tokens = acquire_token_by_code(
+            code,
+            redirect_uri=str(redirect_uri).strip() if redirect_uri else None,
+            code_verifier=str(code_verifier).strip() if code_verifier else None,
+        )
+    except AzureTokenExchangeError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     if not tokens or "id_token_claims" not in tokens:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     claims = tokens["id_token_claims"]
