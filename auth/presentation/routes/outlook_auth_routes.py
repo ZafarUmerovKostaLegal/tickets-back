@@ -75,7 +75,8 @@ async def outlook_login_url(
         "response_type": "code",
         "redirect_uri": ruri,
         "response_mode": "query",
-        "scope": "openid profile email offline_access User.Read",
+        # Mail.Read — full conversation export from Outlook add-in via Microsoft Graph
+        "scope": "openid profile email offline_access User.Read Mail.Read",
         "state": state or "outlook",
     }
     prompt_n = (prompt or "").strip()
