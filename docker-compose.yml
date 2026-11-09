@@ -521,6 +521,9 @@ services:
       - AUTH_REDIRECT_URI=${AUTH_REDIRECT_URI:-${AZURE_REDIRECT_URI:-${GATEWAY_BASE_URL:-http://localhost:1234}/api/v1/auth/azure/callback}}
       - AUTH_MOBILE_REDIRECT_URI=${AUTH_MOBILE_REDIRECT_URI:-}
       - AUTH_REDIRECT_URIS_EXTRA=${AUTH_REDIRECT_URIS_EXTRA:-}
+      - AUTH_OUTLOOK_REDIRECT_URI=${AUTH_OUTLOOK_REDIRECT_URI:-https://tickets.kostalegal.com/outlook-addin/auth/callback.html}
+      - OUTLOOK_ACCESS_EXPIRE_MINUTES=${OUTLOOK_ACCESS_EXPIRE_MINUTES:-10}
+      - OUTLOOK_REFRESH_EXPIRE_DAYS=${OUTLOOK_REFRESH_EXPIRE_DAYS:-30}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env or stack env (openssl rand -hex 32; same on gateway and auth)}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-1440}
