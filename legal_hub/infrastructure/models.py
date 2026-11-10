@@ -58,6 +58,20 @@ class LegalHubDriveFileModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class LegalHubDriveAclModel(Base):
+    """Folder ACL for File Manager → Disk (backend storage, not UNC). Root uses folder_id='__root__'."""
+
+    __tablename__ = "legal_hub_drive_acl"
+
+    folder_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    level: Mapped[str] = mapped_column(String(20), nullable=False, default="read")
+    note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class DmsMatterModel(Base):
     """Matter workspace (Clients → Matters come from time tracking)."""
 
