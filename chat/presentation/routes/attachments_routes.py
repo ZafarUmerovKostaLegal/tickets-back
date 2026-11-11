@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-import urllib.parse
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend_common.media_response import media_file_response
 from infrastructure.database import get_session
 from infrastructure.file_storage import resolve_storage_path
 from infrastructure.repositories import ChatRepository
 from presentation.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/attachments", tags=["chat-attachments"])
-
-_INLINE_MIME_PREFIXES = ("image/", "video/", "audio/", "application/pdf")
-
-
-def _content_disposition(file_name: str, content_type: str) -> str:
-    inline = any(content_type.startswith(p) for p in _INLINE_MIME_PREFIXES)
-    kind = "inline" if inline else "attachment"
-    quoted = urllib.parse.quote(file_name or "file")
-    return f"{kind}; filename*=UTF-8''{quoted}"
 
 
 @router.get("/{attachment_id}/file")
@@ -40,8 +30,8 @@ async def download_attachment(
     path = resolve_storage_path(att.storage_key)
     if path is None:
         raise HTTPException(status_code=404, detail="File missing")
-    return FileResponse(
+    return media_file_response(
         path,
-        media_type=att.content_type or "application/octet-stream",
-        headers={"Content-Disposition": _content_disposition(att.file_name, att.content_type or "")},
+        download_name=att.file_name,
+        declared_media_type=att.content_type,
     )

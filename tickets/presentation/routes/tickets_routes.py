@@ -66,6 +66,21 @@ async def list_priorities():
     return [PriorityItem(value=p.value, label=p.value) for p in Priority]
 
 
+@router.get("/by-attachment/{filename}", response_model=TicketResponse)
+async def get_ticket_by_attachment(
+    filename: str,
+    ticket_repo: TicketRepositoryPort = Depends(get_ticket_repo),
+):
+    """Internal/gateway lookup: map stored attachment filename → ticket (for media ACL)."""
+    safe = (filename or "").replace("\\", "/").split("/")[-1].strip()
+    if not safe or safe in {".", ".."}:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    ticket = await ticket_repo.get_by_attachment_path(safe)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return _ticket_to_response(ticket)
+
+
 @router.post("", response_model=TicketResponse)
 async def create_ticket(
     theme: str = Form(...),

@@ -70,22 +70,26 @@ class AzureBootstrapBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     access_token: str = Field(..., alias="accessToken")
-    id_token: Optional[str] = Field(None, alias="idToken")
+    id_token: str = Field(..., alias="idToken")
 
 
 @router.post(
     "/bootstrap",
-    summary="Hub JWT из Azure access token (SPA / Outlook add-in)",
+    summary="Hub JWT из Azure access + id token (SPA / Outlook add-in)",
     description=(
         "Для SPA redirect URI код Azure нужно обменять в браузере (AADSTS9002327). "
-        "Затем передайте accessToken сюда — auth выдаст Hub JWT + session cookie."
+        "Передайте accessToken и idToken — auth проверяет подпись/aud/tid/iss id_token "
+        "и выдаёт Hub JWT + session cookie."
     ),
 )
 async def azure_bootstrap(body: AzureBootstrapBody, request: Request):
     settings = get_settings()
-    payload: dict = {"access_token": body.access_token}
-    if body.id_token and str(body.id_token).strip():
-        payload["id_token"] = str(body.id_token).strip()
+    payload: dict = {
+        "access_token": body.access_token,
+        "id_token": str(body.id_token).strip(),
+    }
+    if not payload["id_token"]:
+        raise HTTPException(status_code=400, detail="id_token required")
     headers: dict[str, str] = {"Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

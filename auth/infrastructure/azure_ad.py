@@ -1,13 +1,28 @@
+from __future__ import annotations
+
+import threading
 from typing import Any, Optional
 
 import httpx
 import jwt
 import msal
+from jwt import PyJWKClient
 
 from infrastructure.config import get_settings
 
 
 AZURE_LOGIN_SCOPES = ["email", "User.Read"]
+
+# Microsoft Graph audiences commonly seen on User.Read access tokens.
+_GRAPH_AUDIENCES = frozenset(
+    {
+        "https://graph.microsoft.com",
+        "00000003-0000-0000-c000-000000000000",
+    }
+)
+
+_jwks_lock = threading.Lock()
+_jwks_clients: dict[str, PyJWKClient] = {}
 
 
 def normalize_redirect_uri(value: object) -> str:
@@ -84,25 +99,167 @@ def get_logout_url(post_logout_redirect_uri: str) -> str:
     return f"{base}?post_logout_redirect_uri={quote(post_logout_redirect_uri)}"
 
 
-def _claims_from_id_token(id_token: str | None) -> dict[str, Any] | None:
-    if not id_token or not str(id_token).strip():
-        return None
-    try:
-        claims = jwt.decode(
-            str(id_token).strip(),
-            options={"verify_signature": False, "verify_aud": False},
-        )
-    except Exception:
-        return None
-    return claims if isinstance(claims, dict) else None
-
-
 class AzureTokenExchangeError(Exception):
     """Azure token endpoint / allow-list failure with a client-safe message."""
 
     def __init__(self, detail: str):
         self.detail = detail
         super().__init__(detail)
+
+
+def azure_issuer_values(tenant_id: str) -> tuple[str, ...]:
+    tid = (tenant_id or "").strip()
+    if not tid:
+        return ()
+    return (
+        f"https://login.microsoftonline.com/{tid}/v2.0",
+        f"https://sts.windows.net/{tid}/",
+    )
+
+
+def _get_jwks_client(tenant_id: str) -> PyJWKClient:
+    tid = (tenant_id or "").strip()
+    if not tid:
+        raise AzureTokenExchangeError("Azure tenant is not configured")
+    with _jwks_lock:
+        client = _jwks_clients.get(tid)
+        if client is None:
+            client = PyJWKClient(
+                f"https://login.microsoftonline.com/{tid}/discovery/v2.0/keys",
+                cache_keys=True,
+                lifespan=3600,
+            )
+            _jwks_clients[tid] = client
+        return client
+
+
+def _normalize_audiences(raw: Any) -> set[str]:
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        v = raw.strip()
+        return {v} if v else set()
+    if isinstance(raw, (list, tuple, set)):
+        out: set[str] = set()
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                out.add(item.strip())
+        return out
+    return set()
+
+
+def _assert_tenant_and_issuer(claims: dict[str, Any], *, tenant_id: str) -> None:
+    tid = str(claims.get("tid") or "").strip()
+    if not tid or tid.lower() != tenant_id.strip().lower():
+        raise AzureTokenExchangeError("Azure token tenant mismatch")
+    issuers = set(azure_issuer_values(tenant_id))
+    iss = str(claims.get("iss") or "").strip()
+    if iss not in issuers:
+        raise AzureTokenExchangeError("Azure token issuer mismatch")
+
+
+def _assert_token_app(claims: dict[str, Any], *, client_id: str) -> None:
+    """When azp/appid present, it must be our application."""
+    app = str(claims.get("azp") or claims.get("appid") or "").strip()
+    if app and app != client_id:
+        raise AzureTokenExchangeError("Azure token application mismatch")
+
+
+def verify_azure_id_token(id_token: str | None, *, settings=None) -> dict[str, Any]:
+    """
+    Cryptographically verify Azure AD id_token (sig, aud, iss, tid, exp).
+    Never use unverified JWT claims for identity.
+    """
+    settings = settings or get_settings()
+    token = (id_token or "").strip()
+    if not token:
+        raise AzureTokenExchangeError("id_token required")
+    tenant_id = (settings.azure_tenant_id or "").strip()
+    client_id = (settings.azure_client_id or "").strip()
+    if not tenant_id or not client_id:
+        raise AzureTokenExchangeError("Azure AD is not configured")
+
+    try:
+        signing_key = _get_jwks_client(tenant_id).get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=client_id,
+            issuer=list(azure_issuer_values(tenant_id)),
+            options={
+                "require": ["exp", "iat", "iss", "aud"],
+                "verify_aud": True,
+                "verify_iss": True,
+                "verify_exp": True,
+            },
+        )
+    except AzureTokenExchangeError:
+        raise
+    except Exception as exc:
+        raise AzureTokenExchangeError("Azure id_token invalid") from exc
+
+    if not isinstance(claims, dict):
+        raise AzureTokenExchangeError("Azure id_token invalid")
+    _assert_tenant_and_issuer(claims, tenant_id=tenant_id)
+    _assert_token_app(claims, client_id=client_id)
+    return claims
+
+
+def verify_azure_access_token(access_token: str | None, *, settings=None) -> dict[str, Any]:
+    """
+    Verify Azure access token signature + tenant/issuer.
+    Audience may be Graph or our API/client id (SPA bootstrap uses Graph).
+    """
+    settings = settings or get_settings()
+    token = (access_token or "").strip()
+    if not token:
+        raise AzureTokenExchangeError("access_token required")
+    tenant_id = (settings.azure_tenant_id or "").strip()
+    client_id = (settings.azure_client_id or "").strip()
+    if not tenant_id or not client_id:
+        raise AzureTokenExchangeError("Azure AD is not configured")
+
+    try:
+        signing_key = _get_jwks_client(tenant_id).get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer=list(azure_issuer_values(tenant_id)),
+            options={
+                "require": ["exp", "iat", "iss"],
+                "verify_aud": False,
+                "verify_iss": True,
+                "verify_exp": True,
+            },
+        )
+    except AzureTokenExchangeError:
+        raise
+    except Exception as exc:
+        raise AzureTokenExchangeError("Azure access_token invalid") from exc
+
+    if not isinstance(claims, dict):
+        raise AzureTokenExchangeError("Azure access_token invalid")
+    _assert_tenant_and_issuer(claims, tenant_id=tenant_id)
+    _assert_token_app(claims, client_id=client_id)
+
+    allowed_aud = set(_GRAPH_AUDIENCES) | {
+        client_id,
+        f"api://{client_id}",
+    }
+    auds = _normalize_audiences(claims.get("aud"))
+    if not auds or auds.isdisjoint(allowed_aud):
+        raise AzureTokenExchangeError("Azure access_token audience mismatch")
+    return claims
+
+
+def _claims_from_id_token(id_token: str | None) -> dict[str, Any] | None:
+    """Backward-compatible helper — always verifies signature and tenant claims."""
+    try:
+        return verify_azure_id_token(id_token)
+    except AzureTokenExchangeError:
+        return None
 
 
 def _acquire_token_pkce_public(
@@ -140,9 +297,7 @@ def _acquire_token_pkce_public(
             or f"HTTP {r.status_code}"
         )
         raise AzureTokenExchangeError(str(desc))
-    claims = _claims_from_id_token(payload.get("id_token"))
-    if not claims:
-        raise AzureTokenExchangeError("Azure id_token missing or invalid")
+    claims = verify_azure_id_token(payload.get("id_token"), settings=settings)
     out = dict(payload)
     out["id_token_claims"] = claims
     return out
@@ -175,7 +330,13 @@ def acquire_token_by_code(
     if "error" in result:
         desc = result.get("error_description") or result.get("error") or "token exchange failed"
         raise AzureTokenExchangeError(str(desc))
-    return result
+    # Re-verify id_token locally (sig/aud/tid/iss) even when MSAL decoded claims.
+    raw_id = result.get("id_token")
+    if not raw_id:
+        raise AzureTokenExchangeError("Azure id_token missing or invalid")
+    out = dict(result)
+    out["id_token_claims"] = verify_azure_id_token(raw_id, settings=settings)
+    return out
 
 
 async def fetch_graph_me(access_token: str) -> dict[str, Any]:

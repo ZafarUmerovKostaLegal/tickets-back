@@ -14,7 +14,6 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
 import httpx
 from infrastructure.auth_upstream import verify_access_token_plain, verify_bearer_and_get_user
 from infrastructure.config import get_settings
@@ -158,22 +157,25 @@ async def get_tickets_ws_url():
 
 
 @router.get("/attachments/{filename}")
-async def get_ticket_attachment(filename: str):
-    import mimetypes
-
+async def get_ticket_attachment(
+    filename: str,
+    current_user: dict = Depends(get_current_user),
+):
+    from application.media_access import assert_ticket_attachment_readable
     from backend_common.media_path import safe_media_path
+    from backend_common.media_response import media_file_response
+
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    await assert_ticket_attachment_readable(safe_name, current_user)
 
     settings = get_settings()
-    safe_name = Path(filename).name
     path = safe_media_path(settings.media_path, f"tickets/{safe_name}")
     if path is None or not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment not found")
-    media_type, _ = mimetypes.guess_type(path.name)
-    return FileResponse(
-        path,
-        media_type=media_type or "application/octet-stream",
-        filename=path.name,
-    )
+    return media_file_response(path)
 
 
 def _same_user_id(a, b) -> bool:

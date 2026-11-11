@@ -71,6 +71,16 @@ class TicketRepository(TicketRepositoryPort):
         row = result.scalars().one_or_none()
         return self._to_entity(row) if row else None
 
+    async def get_by_attachment_path(self, attachment_path: str) -> Optional[Ticket]:
+        name = (attachment_path or "").replace("\\", "/").split("/")[-1].strip()
+        if not name:
+            return None
+        result = await self._session.execute(
+            select(TicketModel).where(TicketModel.attachment_path == name)
+        )
+        row = result.scalars().one_or_none()
+        return self._to_entity(row) if row else None
+
     async def get_by_internal_id(self, ticket_id: int) -> Optional[Ticket]:
         result = await self._session.execute(select(TicketModel).where(TicketModel.id == ticket_id))
         row = result.scalars().one_or_none()

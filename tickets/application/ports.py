@@ -49,6 +49,10 @@ class TicketRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    async def get_by_attachment_path(self, attachment_path: str) -> Optional[Ticket]:
+        pass
+
+    @abstractmethod
     async def get_all(self, filters: TicketFilters) -> Sequence[Ticket]:
         pass
 

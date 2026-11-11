@@ -3,9 +3,19 @@ from typing import Optional, Sequence
 
 from domain.entities import User
 from domain.roles import Role
+from application.errors import UserAccessDenied
 from application.ports import UserRepositoryPort, TokenServicePort, RoleRepositoryPort
 from application.session_policy import session_jti_is_valid
 from infrastructure.config import get_settings
+
+
+def assert_user_can_authenticate(user: User) -> None:
+    if user.is_blocked or user.is_archived:
+        raise UserAccessDenied("blocked_or_archived")
+
+
+def user_is_active(user: Optional[User]) -> bool:
+    return bool(user) and not user.is_blocked and not user.is_archived
 
 
 class AzureLoginUseCase:
@@ -36,6 +46,7 @@ class AzureLoginUseCase:
                 updated = await self._user_repo.update_profile(user.id, dn, pic, None)
                 if updated is not None:
                     user = updated
+        assert_user_can_authenticate(user)
         jti = str(uuid.uuid4())
         await self._user_repo.register_session_jti(
             user.id,
@@ -66,7 +77,7 @@ class GetCurrentUserUseCase:
         if not user_id:
             return None
         user = await self._user_repo.get_by_id(int(user_id))
-        if not user:
+        if not user_is_active(user):
             return None
         active_jtis = await self._user_repo.list_active_session_jtis(user.id)
         if not self._session_matches(payload, user, active_jtis):
@@ -92,7 +103,7 @@ class GetCurrentUserUseCase:
         except (TypeError, ValueError):
             return None
         user = await self._user_repo.get_by_id(uid)
-        if not user or user.is_blocked or user.is_archived:
+        if not user_is_active(user):
             return None
         return user
 
@@ -194,7 +205,11 @@ class BlockUserUseCase:
         self._user_repo = user_repo
 
     async def execute(self, user_id: int, is_blocked: bool) -> Optional[User]:
-        return await self._user_repo.set_blocked(user_id, is_blocked)
+        user = await self._user_repo.set_blocked(user_id, is_blocked)
+        if user is not None and is_blocked:
+            # Immediately revoke all Hub sessions (JWT may still be unexpired).
+            await self._user_repo.clear_all_session_jtis(user_id)
+        return user
 
 
 class ArchiveUserUseCase:
@@ -202,7 +217,10 @@ class ArchiveUserUseCase:
         self._user_repo = user_repo
 
     async def execute(self, user_id: int, is_archived: bool) -> Optional[User]:
-        return await self._user_repo.set_archived(user_id, is_archived)
+        user = await self._user_repo.set_archived(user_id, is_archived)
+        if user is not None and is_archived:
+            await self._user_repo.clear_all_session_jtis(user_id)
+        return user
 
 
 class SetTimeTrackingRoleUseCase:

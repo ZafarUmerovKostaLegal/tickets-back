@@ -205,7 +205,6 @@ def get_attendance_from_device(
             except Exception as e:
                 return {"records": all_records, "error": f"Ошибка разбора ответа: {e}", "camera_ip": host}
 
-            # Keep only punches tied to a person (skip door open/close noise without employeeNo).
             records = [r for r in records if (r.get("person_id") or "").strip() not in ("", "-")]
             all_records.extend(records)
             if status_str != "MORE" or num == 0:

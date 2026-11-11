@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 
 from backend_common.media_path import safe_media_path
+from backend_common.media_response import blocked_upload_extension
 from infrastructure.config import get_settings
 
 
@@ -32,13 +33,18 @@ def save_chat_file(
     if len(content) > _max_bytes():
         mb = _max_bytes() // (1024 * 1024)
         raise ValueError(f"File size exceeds {mb}MB")
+    blocked = blocked_upload_extension(original_filename)
+    if blocked:
+        raise ValueError(f"File type not allowed: {blocked}")
     rel_dir = Path("chat_attachments") / str(room_id) / str(message_id)
     media_base = _media_base()
     target_dir = safe_media_path(media_base, rel_dir)
     if target_dir is None:
         raise ValueError("Invalid path")
     target_dir.mkdir(parents=True, exist_ok=True)
-    ext = Path(original_filename or "").suffix[:32]
+    ext = (Path(original_filename or "").suffix or "").lower()[:32]
+    if blocked_upload_extension(f"x{ext}"):
+        ext = ""
     unique = f"{uuid.uuid4().hex}{ext}"
     path = target_dir / unique
     path.write_bytes(content)

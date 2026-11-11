@@ -2,9 +2,10 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
 
+from application.media_access import assert_media_readable
 from backend_common.media_path import safe_media_path
+from backend_common.media_response import media_file_response
 from infrastructure.auth_upstream import verify_bearer_and_get_user
 from infrastructure.config import get_settings
 
@@ -40,7 +41,7 @@ async def get_desktop_background_media(user_id: int, filename: str):
         raise HTTPException(status_code=400, detail="Invalid media path")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(target)
+    return media_file_response(target)
 
 
 @router.get("/todo_board_backgrounds/{owner_user_id}/{board_id}/{filename}")
@@ -58,11 +59,13 @@ async def get_todo_board_background_media(owner_user_id: int, board_id: int, fil
         raise HTTPException(status_code=400, detail="Invalid media path")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(target)
+    return media_file_response(target)
 
 
 @router.get("/{subpath:path}")
-async def get_media(subpath: str, _: dict = Depends(get_current_user)):
+async def get_media(subpath: str, current_user: dict = Depends(get_current_user)):
+    await assert_media_readable(subpath, current_user)
+
     settings = get_settings()
     target_path = safe_media_path(settings.media_path, subpath)
     if target_path is None:
@@ -71,5 +74,4 @@ async def get_media(subpath: str, _: dict = Depends(get_current_user)):
     if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
 
-    return FileResponse(target_path)
-
+    return media_file_response(target_path)
