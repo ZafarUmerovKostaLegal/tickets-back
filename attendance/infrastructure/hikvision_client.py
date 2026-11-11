@@ -153,7 +153,8 @@ def get_attendance_from_device(
 
     with httpx.Client(timeout=timeout, auth=auth) as client:
         while len(all_records) < max_records:
-            page_size = min(10, max_records - len(all_records))
+            # Device accepts up to ~30 per page; larger pages cut round-trips a lot.
+            page_size = min(30, max_records - len(all_records))
             body_json = {
                 "AcsEventCond": {
                     "searchID": "1",
@@ -204,6 +205,8 @@ def get_attendance_from_device(
             except Exception as e:
                 return {"records": all_records, "error": f"Ошибка разбора ответа: {e}", "camera_ip": host}
 
+            # Keep only punches tied to a person (skip door open/close noise without employeeNo).
+            records = [r for r in records if (r.get("person_id") or "").strip() not in ("", "-")]
             all_records.extend(records)
             if status_str != "MORE" or num == 0:
                 break
