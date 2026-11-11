@@ -21,12 +21,14 @@ from application.attendance_range_builder import (
     build_daily_report_items,
     build_hikvision_roster,
     build_range_roster_from_mappings,
+    camera_ips_with_records,
     enrich_roster_from_events,
     fetch_attendance_events_for_range,
     fetch_attendance_range_items,
     index_first_events_by_day,
     iter_dates_inclusive,
     lookup_first_event,
+    merge_camera_event_devices,
     merge_people_into_roster,
 )
 
@@ -780,6 +782,8 @@ async def get_daily_attendance_report(
     if stored_r.status_code < 400:
         events_devices = stored_r.json() or []
     stored_count = sum(len(dev.get("records") or []) for dev in events_devices)
+    stored_ips = camera_ips_with_records(events_devices)
+    missing_cameras = [ip for ip in allowed if ip not in stored_ips]
 
     mappings = mappings_r.json() or []
     roster_probe = build_range_roster_from_mappings(mappings)
@@ -789,7 +793,13 @@ async def get_daily_attendance_report(
         lookup_first_event(probe_day, emp, (row or {}).get("camera_name"))
         for emp, row in roster_probe.items()
     )
-    need_live = stored_count == 0 or (bool(roster_probe) and not stored_matches_roster)
+    # Pull live when DB empty, roster unmatched, or not all door terminals are in DB
+    # (e.g. only AC-IN ingested → arrivals look hours late).
+    need_live = (
+        stored_count == 0
+        or bool(missing_cameras)
+        or (bool(roster_probe) and not stored_matches_roster)
+    )
 
     if need_live:
         attendance_params = {
@@ -813,8 +823,14 @@ async def get_daily_attendance_report(
             live_devices = events_r.json() or []
             live_count = sum(len(dev.get("records") or []) for dev in live_devices)
             if live_count or stored_count == 0:
-                events_devices = live_devices
-                events_source = "live"
+                events_devices = merge_camera_event_devices(events_devices, live_devices)
+                live_ips = camera_ips_with_records(live_devices)
+                if stored_count == 0:
+                    events_source = "live"
+                elif live_ips and stored_ips and live_ips != stored_ips:
+                    events_source = "mixed"
+                else:
+                    events_source = "live"
 
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
     workday = workday_r.json() or {}
@@ -976,13 +992,15 @@ async def get_period_attendance_report(
 
     events_devices = stored_r.json() or []
     app_users_by_id = {u.get("id"): u for u in app_users if u.get("id") is not None}
+    stored_ips = camera_ips_with_records(events_devices)
+    missing_cameras = [ip for ip in allowed if ip not in stored_ips]
     period_index = index_first_events_by_day(events_devices, start=start, end=end)
     period_has_punch = any(
         lookup_first_event(period_index.get(day.isoformat(), {}), emp, (row or {}).get("camera_name"))
         for day in days
         for emp, row in roster_by_employee_no.items()
     )
-    if roster_by_employee_no and not period_has_punch:
+    if (roster_by_employee_no and not period_has_punch) or missing_cameras:
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 live_devices = await fetch_attendance_events_for_range(
@@ -990,7 +1008,7 @@ async def get_period_attendance_report(
                 )
             live_count = sum(len(dev.get("records") or []) for dev in live_devices)
             if live_count:
-                events_devices = live_devices
+                events_devices = merge_camera_event_devices(events_devices, live_devices)
         except (httpx.RequestError, HTTPException):
             pass
     enrich_roster_from_events(roster_by_employee_no, events_devices)

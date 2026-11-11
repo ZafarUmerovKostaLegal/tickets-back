@@ -385,6 +385,41 @@ def _merge_attendance_device_batches(by_ip: dict, batch: list) -> dict:
     return by_ip
 
 
+def camera_ips_with_records(devices: list) -> set[str]:
+    out: set[str] = set()
+    for dev in devices or []:
+        ip = (dev.get("camera_ip") or "").strip()
+        if ip and (dev.get("records") or []):
+            out.add(ip)
+    return out
+
+
+def merge_camera_event_devices(stored: list, live: list) -> list:
+    """Per-camera merge: successful live replaces that IP; failed live keeps stored."""
+    by_ip: dict[str, dict] = {}
+    for dev in stored or []:
+        ip = (dev.get("camera_ip") or "").strip()
+        if not ip:
+            continue
+        by_ip[ip] = {
+            "camera_ip": ip,
+            "records": list(dev.get("records") or []),
+            "error": dev.get("error"),
+        }
+    for dev in live or []:
+        ip = (dev.get("camera_ip") or "").strip()
+        if not ip:
+            continue
+        records = list(dev.get("records") or [])
+        err = (dev.get("error") or "").strip() or None
+        if records or not err:
+            entry = {"camera_ip": ip, "records": records}
+            if err:
+                entry["error"] = err
+            by_ip[ip] = entry
+    return list(by_ip.values())
+
+
 async def fetch_attendance_events_for_range(
     client: httpx.AsyncClient,
     base: str,
