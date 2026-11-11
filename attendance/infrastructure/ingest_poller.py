@@ -28,11 +28,15 @@ def ingest_status() -> dict:
     return dict(_state)
 
 
+_OFFICE_TZ = timezone(timedelta(hours=5))
+
+
 async def _poll_once() -> None:
     settings = get_settings()
     lookback = max(5, int(settings.attendance_ingest_lookback_minutes))
-    end = date.today()
-    start = (datetime.now(timezone.utc) - timedelta(minutes=lookback)).date()
+    now_office = datetime.now(_OFFICE_TZ)
+    end = now_office.date()
+    start = (now_office - timedelta(minutes=lookback)).date()
     if start > end:
         start = end
     result = await ingest_date_range(

@@ -57,6 +57,11 @@ def _parse_event_dt(raw: Optional[str]) -> Optional[datetime]:
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+    # Hikvision sometimes returns milliseconds with comma: 2026-11-16T10:05:33,000
+    if "," in s and "." not in s.split("T", 1)[-1]:
+        s = s.replace(",", ".", 1)
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:
@@ -174,16 +179,28 @@ def build_hikvision_roster(hikvision_users_devices: list) -> dict[str, dict]:
     return roster_by_employee_no
 
 
+def _id_key_variants(employee_no: str) -> list[str]:
+    emp = (employee_no or "").strip()
+    if not emp or emp == "-":
+        return []
+    keys = [emp]
+    if emp.isdigit():
+        stripped = emp.lstrip("0") or "0"
+        if stripped not in keys:
+            keys.append(stripped)
+        for width in (2, 3, 4, 5, 6):
+            padded = stripped.zfill(width)
+            if padded not in keys:
+                keys.append(padded)
+    return keys
+
+
 def _person_index_keys(rec: dict) -> list[str]:
-    """Keys a punch can be found by: camera id, id without leading zeros, and name."""
+    """Keys a punch can be found by: camera id variants and name."""
     keys: list[str] = []
-    pid = (rec.get("person_id") or "").strip()
-    if pid and pid != "-":
-        keys.append(pid)
-        if pid.isdigit():
-            stripped = pid.lstrip("0") or "0"
-            if stripped not in keys:
-                keys.append(stripped)
+    for key in _id_key_variants(rec.get("person_id") or ""):
+        if key not in keys:
+            keys.append(key)
     name = (rec.get("name") or "").strip().lower()
     if name and name != "-":
         name_key = f"name:{name}"
@@ -196,20 +213,21 @@ def lookup_first_event(
     first_events_for_day: dict[str, dict],
     employee_no: str,
     camera_name: Optional[str] = None,
+    alt_names: Optional[list[str]] = None,
 ) -> Optional[dict]:
-    emp = (employee_no or "").strip()
-    if emp:
-        hit = first_events_for_day.get(emp)
+    for key in _id_key_variants(employee_no):
+        hit = first_events_for_day.get(key)
         if hit:
             return hit
-        if emp.isdigit():
-            stripped = emp.lstrip("0") or "0"
-            hit = first_events_for_day.get(stripped)
-            if hit:
-                return hit
-    name = (camera_name or "").strip().lower()
-    if name and name != "-":
-        return first_events_for_day.get(f"name:{name}")
+    names: list[str] = []
+    for raw in [camera_name, *(alt_names or [])]:
+        name = (raw or "").strip().lower()
+        if name and name != "-" and name not in names:
+            names.append(name)
+    for name in names:
+        hit = first_events_for_day.get(f"name:{name}")
+        if hit:
+            return hit
     return None
 
 
@@ -220,9 +238,15 @@ def compute_employee_day_status(
     workday: dict,
     first_events_for_day: dict[str, dict],
     camera_name: Optional[str] = None,
+    alt_names: Optional[list[str]] = None,
 ) -> tuple[str, Optional[str]]:
     late_border = _late_border_dt(report_day, workday)
-    first = lookup_first_event(first_events_for_day, employee_no, camera_name)
+    first = lookup_first_event(
+        first_events_for_day,
+        employee_no,
+        camera_name,
+        alt_names=alt_names,
+    )
     if not first:
         return "absent", None
     first_dt = first["dt"]
@@ -276,14 +300,25 @@ def build_daily_report_items(
             or camera_name
             or f"Hikvision #{employee_no}"
         )
+        alt_names = [
+            (app_user or {}).get("display_name"),
+            (app_user or {}).get("email"),
+            camera_name,
+        ]
         status, first_time = compute_employee_day_status(
             report_day,
             employee_no,
             workday=workday,
             first_events_for_day=first_events_for_day,
             camera_name=camera_name,
+            alt_names=[n for n in alt_names if n],
         )
-        first = lookup_first_event(first_events_for_day, employee_no, camera_name)
+        first = lookup_first_event(
+            first_events_for_day,
+            employee_no,
+            camera_name,
+            alt_names=[n for n in alt_names if n],
+        )
         last_dt = (first or {}).get("last_dt")
         first_dt = (first or {}).get("dt")
         last_time = None
@@ -479,6 +514,13 @@ def build_range_report_items(
                 workday=workday,
                 first_events_for_day=first_by_emp,
                 camera_name=user.get("camera_name"),
+                alt_names=[
+                    n for n in (
+                        app_user.get("display_name"),
+                        app_user.get("email"),
+                        user.get("camera_name"),
+                    ) if n
+                ],
             )
             if status not in {"late", "absent"}:
                 continue

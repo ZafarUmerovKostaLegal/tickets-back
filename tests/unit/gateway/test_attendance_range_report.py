@@ -76,8 +76,33 @@ def test_index_first_events_by_day_keeps_earliest_event():
         end=date(2026, 1, 2),
     )
 
-    assert indexed["2026-01-01"]["A10"]["dt"] == datetime.fromisoformat("2026-01-01T09:05:00")
-    assert indexed["2026-01-02"]["A10"]["dt"] == datetime.fromisoformat("2026-01-02T09:05:00")
+    assert indexed["2026-01-01"]["A10"]["dt"] == datetime.fromisoformat("2026-01-01T09:05:00+05:00")
+    assert indexed["2026-01-02"]["A10"]["dt"] == datetime.fromisoformat("2026-01-02T09:05:00+05:00")
+
+
+def test_lookup_matches_leading_zero_ids_and_names():
+    events_devices = [
+        {
+            "camera_ip": "10.0.0.1",
+            "records": [
+                {"person_id": "0012", "name": "Alina Abdullaeva", "time": "2026-01-01 09:12:00"},
+            ],
+        }
+    ]
+    indexed = builder.index_first_events_by_day(
+        events_devices,
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 1),
+    )
+    day = indexed["2026-01-01"]
+    assert builder.lookup_first_event(day, "12") is not None
+    assert builder.lookup_first_event(day, "0012") is not None
+    assert builder.lookup_first_event(day, "999", camera_name="Alina Abdullaeva") is not None
+    assert builder.lookup_first_event(
+        day,
+        "999",
+        alt_names=["Alina Abdullaeva"],
+    ) is not None
 
 
 def test_build_range_roster_from_mappings():
@@ -168,7 +193,7 @@ def test_daily_and_range_markers_match_for_same_day():
     }
 
     assert daily_markers == range_markers
-    assert daily_markers == {(10, "late", "2026-01-01T09:17:00"), (11, "absent", None)}
+    assert daily_markers == {(10, "late", "2026-01-01T09:17:00+05:00"), (11, "absent", None)}
 
 
 def test_month_chunks_inclusive():

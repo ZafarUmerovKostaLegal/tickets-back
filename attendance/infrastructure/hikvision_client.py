@@ -1,7 +1,11 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
+
+# Office timezone (Uzbekistan). Camera event windows must use this, not UTC midnight.
+_OFFICE_TZ = timezone(timedelta(hours=5))
+_OFFICE_OFFSET = "+05:00"
 
 
 def _norm(s: Any, default: str = "-") -> str:
@@ -123,13 +127,18 @@ def get_attendance_from_device(
             "camera_ip": host or "-",
         }
 
-    today = date.today()
+    today = datetime.now(_OFFICE_TZ).date()
     date_from = date_from or today
     date_to = date_to or date_from
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
     max_records = max(1, min(10000, max_records))
 
-    start_time = f"{date_from.isoformat()}T00:00:00+00:00"
-    end_time = f"{date_to.isoformat()}T23:59:59+00:00"
+    # Pad ±1 day so devices that treat timestamps as UTC/local still return office-day punches.
+    query_from = date_from - timedelta(days=1)
+    query_to = date_to + timedelta(days=1)
+    start_time = f"{query_from.isoformat()}T00:00:00{_OFFICE_OFFSET}"
+    end_time = f"{query_to.isoformat()}T23:59:59{_OFFICE_OFFSET}"
 
     base_url = f"http://{host}:{port}"
     path = "/ISAPI/AccessControl/AcsEvent"
@@ -202,7 +211,31 @@ def get_attendance_from_device(
             if position >= total:
                 break
 
-    return {"records": all_records, "error": None, "camera_ip": host}
+    kept: list[dict] = []
+    for rec in all_records:
+        raw_time = rec.get("time")
+        if not raw_time:
+            kept.append(rec)
+            continue
+        s = str(raw_time).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        if " " in s and "T" not in s:
+            s = s.replace(" ", "T", 1)
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            kept.append(rec)
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_OFFICE_TZ)
+        else:
+            dt = dt.astimezone(_OFFICE_TZ)
+        day = dt.date()
+        if date_from <= day <= date_to:
+            kept.append(rec)
+
+    return {"records": kept, "error": None, "camera_ip": host}
 
 
 def get_attendance_from_devices(

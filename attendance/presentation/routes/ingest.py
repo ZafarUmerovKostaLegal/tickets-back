@@ -86,7 +86,9 @@ async def trigger_backfill(
     year: Optional[int] = Query(None, description="Shortcut: full calendar year (e.g. 2026)"),
 ):
     """Start background backfill of camera events into attendance_camera_events."""
-    today = date.today()
+    from datetime import datetime, timedelta, timezone
+
+    today = datetime.now(timezone(timedelta(hours=5))).date()
     if year is not None:
         start = date(year, 1, 1)
         end = date(year, 12, 31)
