@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.import_transaction_csv import import_transaction_csv_bytes
 from infrastructure.camera_events_repo import (
     camera_events_time_bounds,
     count_camera_events,
@@ -113,4 +114,44 @@ async def trigger_backfill(
         "date_from": start.isoformat(),
         "date_to": end.isoformat(),
         "message": "Backfill started in background. Poll GET /hikvision/ingest/status",
+    }
+
+
+@router.post("/import-csv")
+async def import_transaction_csv(
+    file: UploadFile = File(...),
+    camera_ip: Optional[str] = Query(None, description="Optional camera IP to store under"),
+):
+    """Import Hikvision Transaction CSV (First Name,Date,Week,Time) into attendance_camera_events."""
+    filename = (file.filename or "upload.csv").strip() or "upload.csv"
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are accepted")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > 40 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="CSV too large (max 40 MB)")
+    try:
+        result = await import_transaction_csv_bytes(
+            data,
+            filename=filename,
+            camera_ip=(camera_ip or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"CSV import failed: {exc}") from exc
+
+    return {
+        "ok": True,
+        "filename": result.path,
+        "camera_ip": result.camera_ip,
+        "rows_read": result.rows_read,
+        "rows_mapped": result.rows_mapped,
+        "rows_unmapped": result.rows_unmapped,
+        "upserted": result.upserted,
+        "date_min": result.date_min,
+        "date_max": result.date_max,
+        "unmapped_names": result.unmapped_names,
+        "name_map": result.name_map,
     }

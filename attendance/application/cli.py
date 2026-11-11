@@ -3,6 +3,7 @@
 Examples:
   python -m application.cli backfill --from 2026-01-01 --to 2026-12-31
   python -m application.cli backfill --year 2026
+  python -m application.cli import-csv path/to/Transaction.csv
   python -m application.cli status
 """
 
@@ -11,9 +12,31 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from datetime import date
+from pathlib import Path
 
+# Load tickets-back/.env before importing infrastructure (DATABASE_URL etc.).
+_BACK_ROOT = Path(__file__).resolve().parents[2]
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_BACK_ROOT / ".env")
+    load_dotenv(_BACK_ROOT / ".env.local", override=True)
+except ImportError:
+    pass
+
+# Prefer ATTENDANCE_DATABASE_URL; rewrite docker hostname for host-side CLI.
+if not os.environ.get("DATABASE_URL"):
+    att = (os.environ.get("ATTENDANCE_DATABASE_URL") or "").strip()
+    if att:
+        os.environ["DATABASE_URL"] = att
+_db = os.environ.get("DATABASE_URL") or ""
+if "attendance_db" in _db and os.environ.get("ATTENDANCE_DB_HOST_OVERRIDE"):
+    os.environ["DATABASE_URL"] = _db.replace("attendance_db", os.environ["ATTENDANCE_DB_HOST_OVERRIDE"])
+
+from application.import_transaction_csv import import_transaction_csv
 from application.ingest_camera_events import ingest_date_range
 from infrastructure.camera_events_repo import camera_events_time_bounds, count_camera_events
 from infrastructure.database import async_session_factory, engine, Base
@@ -72,6 +95,28 @@ async def cmd_status() -> int:
     return 0
 
 
+async def cmd_import_csv(path: Path, camera_ip: str | None) -> int:
+    await _ensure_schema()
+    if not path.is_file():
+        print(f"File not found: {path}", file=sys.stderr)
+        return 1
+    result = await import_transaction_csv(path, camera_ip=camera_ip)
+    print(
+        f"CSV import done: read={result.rows_read} mapped={result.rows_mapped} "
+        f"unmapped={result.rows_unmapped} upserted={result.upserted} "
+        f"camera_ip={result.camera_ip} range={result.date_min}..{result.date_max}",
+        flush=True,
+    )
+    if result.unmapped_names:
+        print("Unmapped names:", flush=True)
+        for name, count in sorted(result.unmapped_names.items(), key=lambda x: -x[1]):
+            print(f"  {name}: {count}", flush=True)
+    print("Name map:", flush=True)
+    for name, emp in sorted(result.name_map.items()):
+        print(f"  {name} -> {emp}", flush=True)
+    return 0 if result.upserted > 0 or result.rows_mapped == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Attendance camera events ingest CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -82,12 +127,19 @@ def main(argv: list[str] | None = None) -> int:
     p_backfill.add_argument("--year", type=int, default=None, help="Shortcut: full calendar year")
     p_backfill.add_argument("--max-records", type=int, default=10000, help="Max records per device per day")
 
+    p_csv = sub.add_parser("import-csv", help="Import Hikvision Transaction CSV into camera_events")
+    p_csv.add_argument("path", help="Path to Transaction_*.csv")
+    p_csv.add_argument("--camera-ip", default=None, help="Store under this camera IP (default: first host)")
+
     sub.add_parser("status", help="Show DB event counts / time bounds")
 
     args = parser.parse_args(argv)
 
     if args.command == "status":
         return asyncio.run(cmd_status())
+
+    if args.command == "import-csv":
+        return asyncio.run(cmd_import_csv(Path(args.path), args.camera_ip))
 
     if args.command == "backfill":
         if args.year:

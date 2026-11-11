@@ -2,7 +2,7 @@
 
 import asyncio
 import time as time_module
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -123,10 +123,15 @@ def _allowed_camera_ips() -> list[str]:
     return [h.strip() for h in allowed.split(",") if h.strip()]
 
 
+def _office_today() -> date:
+    """Office calendar day (UTC+5) — used to decide historical vs live fill."""
+    return datetime.now(timezone(timedelta(hours=5))).date()
+
+
 def _parse_iso_date(value: Optional[str]) -> date:
     if value and value.strip():
         return date.fromisoformat(value.strip())
-    return date.today()
+    return _office_today()
 
 
 def _parse_required_iso_date(value: str, *, field_name: str) -> date:
@@ -569,6 +574,42 @@ async def trigger_camera_ingest_backfill(
     return r.json()
 
 
+@router.post("/hikvision/ingest/import-csv")
+async def import_camera_transaction_csv(
+    file: UploadFile = File(...),
+    camera_ip: Optional[str] = Query(None),
+    _: dict = Depends(get_current_user),
+):
+    """Proxy: load historical Transaction CSV into attendance_camera_events."""
+    settings = get_settings()
+    base = (settings.attendance_service_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="Attendance service not configured")
+    params = {}
+    if (camera_ip or "").strip():
+        params["camera_ip"] = camera_ip.strip()
+    content = await file.read()
+    files = {
+        "file": (
+            file.filename or "upload.csv",
+            content,
+            file.content_type or "text/csv",
+        )
+    }
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            r = await client.post(
+                f"{base}/hikvision/ingest/import-csv",
+                params=params,
+                files=files,
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Attendance service unavailable")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text or "CSV import failed")
+    return r.json()
+
+
 @router.get("/explanations")
 async def list_attendance_explanations(
     day: Optional[str] = Query(None),
@@ -793,13 +834,18 @@ async def get_daily_attendance_report(
         lookup_first_event(probe_day, emp, (row or {}).get("camera_name"))
         for emp, row in roster_probe.items()
     )
-    # Pull live when DB empty, roster unmatched, or not all door terminals are in DB
-    # (e.g. only AC-IN ingested → arrivals look hours late).
-    need_live = (
-        stored_count == 0
-        or bool(missing_cameras)
-        or (bool(roster_probe) and not stored_matches_roster)
-    )
+    # Live fill:
+    # - today/future: also refill when a door terminal is missing from DB
+    # - past days: trust DB (CSV/history); cameras often lack old logs and live calls break the UI
+    is_historical = report_day < _office_today()
+    if is_historical:
+        need_live = stored_count == 0 or (bool(roster_probe) and not stored_matches_roster)
+    else:
+        need_live = (
+            stored_count == 0
+            or bool(missing_cameras)
+            or (bool(roster_probe) and not stored_matches_roster)
+        )
 
     if need_live:
         attendance_params = {
@@ -909,8 +955,8 @@ async def get_period_attendance_report(
         days = iter_dates_inclusive(start, end)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if len(days) > 93:
-        raise HTTPException(status_code=400, detail="Period too long (max 93 days)")
+    if len(days) > 366:
+        raise HTTPException(status_code=400, detail="Period too long (max 366 days)")
 
     settings = get_settings()
     base = (settings.attendance_service_url or "").rstrip("/")
@@ -1000,7 +1046,13 @@ async def get_period_attendance_report(
         for day in days
         for emp, row in roster_by_employee_no.items()
     )
-    if (roster_by_employee_no and not period_has_punch) or missing_cameras:
+    is_historical = end < _office_today()
+    stored_event_count = sum(len(dev.get("records") or []) for dev in events_devices)
+    if is_historical:
+        need_live = stored_event_count == 0 or (bool(roster_by_employee_no) and not period_has_punch)
+    else:
+        need_live = (bool(roster_by_employee_no) and not period_has_punch) or bool(missing_cameras)
+    if need_live:
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 live_devices = await fetch_attendance_events_for_range(
