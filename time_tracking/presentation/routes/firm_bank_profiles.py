@@ -21,7 +21,10 @@ class FirmBankProfileBody(BaseModel):
     id: Optional[str] = None
     title: str = ""
     is_default: bool = Field(False, alias="isDefault")
+    recipient_name: str = Field("", alias="recipientName")
+    legal_address: str = Field("", alias="legalAddress")
     tin: str = ""
+    oked: str = ""
     bank_name: str = Field("", alias="bankName")
     bank_address: str = Field("", alias="bankAddress")
     account_currency: str = Field("EUR", alias="accountCurrency")
@@ -30,6 +33,7 @@ class FirmBankProfileBody(BaseModel):
     swift: str = ""
     correspondent_bank: str = Field("", alias="correspondentBank")
     correspondent_account: str = Field("", alias="correspondentAccount")
+    correspondent_bik: str = Field("", alias="correspondentBik")
     sort_order: Optional[int] = Field(None, alias="sortOrder")
 
 
@@ -38,7 +42,10 @@ def _row_out(row: Any) -> dict[str, Any]:
         "id": row.id,
         "title": row.title or "",
         "isDefault": bool(row.is_default),
+        "recipientName": getattr(row, "recipient_name", None) or "",
+        "legalAddress": getattr(row, "legal_address", None) or "",
         "tin": row.tin or "",
+        "oked": getattr(row, "oked", None) or "",
         "bankName": row.bank_name or "",
         "bankAddress": row.bank_address or "",
         "accountCurrency": (row.account_currency or "EUR").upper(),
@@ -47,6 +54,7 @@ def _row_out(row: Any) -> dict[str, Any]:
         "swift": row.swift or "",
         "correspondentBank": row.correspondent_bank or "",
         "correspondentAccount": row.correspondent_account or "",
+        "correspondentBik": getattr(row, "correspondent_bik", None) or "",
         "sortOrder": int(row.sort_order or 0),
         "createdByAuthUserId": int(row.created_by_auth_user_id or 0),
         "createdAt": row.created_at.isoformat() if row.created_at else None,

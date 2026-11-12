@@ -1119,7 +1119,10 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
                 id VARCHAR(36) PRIMARY KEY,
                 title VARCHAR(255) NOT NULL DEFAULT '',
                 is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                recipient_name TEXT NOT NULL DEFAULT '',
+                legal_address TEXT NOT NULL DEFAULT '',
                 tin TEXT NOT NULL DEFAULT '',
+                oked TEXT NOT NULL DEFAULT '',
                 bank_name TEXT NOT NULL DEFAULT '',
                 bank_address TEXT NOT NULL DEFAULT '',
                 account_currency VARCHAR(16) NOT NULL DEFAULT 'EUR',
@@ -1128,6 +1131,7 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
                 swift TEXT NOT NULL DEFAULT '',
                 correspondent_bank TEXT NOT NULL DEFAULT '',
                 correspondent_account TEXT NOT NULL DEFAULT '',
+                correspondent_bik TEXT NOT NULL DEFAULT '',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_by_auth_user_id INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL,
@@ -1136,6 +1140,20 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
             """
         )
     )
+    for col in (
+        "recipient_name",
+        "legal_address",
+        "oked",
+        "correspondent_bik",
+    ):
+        await conn.execute(
+            text(
+                f"""
+                ALTER TABLE time_tracking_firm_bank_profiles
+                ADD COLUMN IF NOT EXISTS {col} TEXT NOT NULL DEFAULT ''
+                """
+            )
+        )
     await conn.execute(
         text(
             """
