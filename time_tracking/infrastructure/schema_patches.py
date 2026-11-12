@@ -1119,10 +1119,7 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
                 id VARCHAR(36) PRIMARY KEY,
                 title VARCHAR(255) NOT NULL DEFAULT '',
                 is_default BOOLEAN NOT NULL DEFAULT FALSE,
-                recipient_name TEXT NOT NULL DEFAULT '',
-                legal_address TEXT NOT NULL DEFAULT '',
                 tin TEXT NOT NULL DEFAULT '',
-                oked TEXT NOT NULL DEFAULT '',
                 bank_name TEXT NOT NULL DEFAULT '',
                 bank_address TEXT NOT NULL DEFAULT '',
                 account_currency VARCHAR(16) NOT NULL DEFAULT 'EUR',
@@ -1131,7 +1128,6 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
                 swift TEXT NOT NULL DEFAULT '',
                 correspondent_bank TEXT NOT NULL DEFAULT '',
                 correspondent_account TEXT NOT NULL DEFAULT '',
-                correspondent_bik TEXT NOT NULL DEFAULT '',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_by_auth_user_id INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL,
@@ -1140,20 +1136,6 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
             """
         )
     )
-    for col in (
-        "recipient_name",
-        "legal_address",
-        "oked",
-        "correspondent_bik",
-    ):
-        await conn.execute(
-            text(
-                f"""
-                ALTER TABLE time_tracking_firm_bank_profiles
-                ADD COLUMN IF NOT EXISTS {col} TEXT NOT NULL DEFAULT ''
-                """
-            )
-        )
     await conn.execute(
         text(
             """
@@ -1169,6 +1151,20 @@ async def apply_firm_bank_profiles_schema_patch(conn: AsyncConnection) -> None:
                 ON time_tracking_firm_bank_profiles (account_currency)
             """
         )
+    )
+
+
+async def apply_firm_bank_profiles_extended_patch(conn: AsyncConnection) -> None:
+    """Extended RUB requisites: recipient, legal address, OKED, correspondent BIK."""
+    await add_columns_if_missing(
+        conn,
+        "time_tracking_firm_bank_profiles",
+        (
+            "recipient_name TEXT NOT NULL DEFAULT ''",
+            "legal_address TEXT NOT NULL DEFAULT ''",
+            "oked TEXT NOT NULL DEFAULT ''",
+            "correspondent_bik TEXT NOT NULL DEFAULT ''",
+        ),
     )
 
 
@@ -1514,6 +1510,7 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("project_scoped_billable_rates", apply_project_scoped_billable_rates_open_interval_patch),
     ("time_tracking_teams", apply_time_tracking_teams_schema_patch),
     ("firm_bank_profiles", apply_firm_bank_profiles_schema_patch),
+    ("firm_bank_profiles_extended", apply_firm_bank_profiles_extended_patch),
     ("report_performance_indexes", apply_report_performance_indexes_patch),
     ("time_entry_archives", apply_time_entry_archives_patch),
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
