@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class InvoiceLineCreateSpec(BaseModel):
@@ -19,6 +19,30 @@ class InvoiceLineCreateSpec(BaseModel):
     line_total: Optional[Decimal] = Field(None, alias="lineTotal")
     time_entry_id: Optional[str] = Field(None, alias="timeEntryId")
     expense_request_id: Optional[str] = Field(None, alias="expenseRequestId")
+
+
+class BilledServiceLineSpec(BaseModel):
+    """One client-facing legal-page row when billing a custom total."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    description: str = Field(..., min_length=1, max_length=2000)
+    amount: Decimal = Field(..., gt=0)
+
+    @field_validator("description", mode="after")
+    @classmethod
+    def _strip_description(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("description is required")
+        return s
+
+    @field_validator("amount", mode="after")
+    @classmethod
+    def _validate_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
 
 
 class InvoiceCreateBody(BaseModel):
@@ -82,7 +106,17 @@ class InvoiceCreateBody(BaseModel):
         None,
         alias="serviceDescription",
         max_length=2000,
-        description="Описание услуги на юридической странице счёта (при billedAmount)",
+        description="Описание услуги на юридической странице счёта (при billedAmount, одна строка)",
+    )
+    billed_service_lines: Optional[list[BilledServiceLineSpec]] = Field(
+        None,
+        alias="billedServiceLines",
+        max_length=20,
+        description=(
+            "Несколько пунктов на юридической странице (описание + сумма). "
+            "Сумма пунктов должна совпадать с billedAmount (±0.01). "
+            "Если не передано — используется одна строка из serviceDescription."
+        ),
     )
     extra_fixed_fee_amount: Optional[Decimal] = Field(
         None,
@@ -133,6 +167,20 @@ class InvoiceCreateBody(BaseModel):
         if v <= 0:
             raise ValueError("billedAmount must be greater than 0")
         return v
+
+    @model_validator(mode="after")
+    def _validate_billed_service_lines(self) -> "InvoiceCreateBody":
+        lines = self.billed_service_lines
+        if not lines:
+            return self
+        if self.billed_amount is None:
+            raise ValueError("billedAmount is required when billedServiceLines is set")
+        if len(lines) < 1:
+            raise ValueError("billedServiceLines must contain at least one item")
+        total = sum((ln.amount for ln in lines), Decimal(0))
+        if abs(total - self.billed_amount) > Decimal("0.01"):
+            raise ValueError("billedServiceLines amounts must sum to billedAmount")
+        return self
 
 
 class PartnerInvoicePreviewQuery(BaseModel):

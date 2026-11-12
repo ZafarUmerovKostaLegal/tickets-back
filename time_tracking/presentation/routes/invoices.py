@@ -308,6 +308,11 @@ async def create_invoice_route(
         partner_confirmation_request_id=body.partner_confirmation_request_id,
         billed_amount=body.billed_amount,
         service_description=body.service_description,
+        billed_service_lines=(
+            [(ln.description, ln.amount) for ln in body.billed_service_lines]
+            if body.billed_service_lines
+            else None
+        ),
         defer_partner_confirmation=bool(body.defer_partner_confirmation),
         extra_fixed_fee_amount=body.extra_fixed_fee_amount,
         extra_fixed_fee_description=body.extra_fixed_fee_description,

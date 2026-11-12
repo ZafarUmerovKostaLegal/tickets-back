@@ -458,15 +458,33 @@ def build_billed_amount_document_overrides(
     *,
     billed_amount: Decimal,
     currency: str,
-    service_description: str | None,
+    service_description: str | None = None,
+    service_lines: list[tuple[str, Decimal]] | None = None,
     fx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Legal-page-only pack + service line + total matching billed amount."""
+    """Legal-page-only pack + service line(s) + total matching billed amount."""
     total_fmt = format_invoice_total_display(billed_amount, currency)
-    desc = (service_description or "").strip()
+    rows: list[tuple[str, Decimal]] = []
+    if service_lines:
+        for desc_raw, amt in service_lines:
+            desc = (desc_raw or "").strip()
+            if not desc:
+                continue
+            rows.append((desc[:2000], _money4(amt)))
+    if not rows:
+        desc = (service_description or "").strip()
+        if desc:
+            rows.append((desc[:2000], _money4(billed_amount)))
     legal: dict[str, Any] = {}
-    if desc:
-        legal["serviceDescriptionLine"] = desc[:2000]
+    if rows:
+        legal["serviceDescriptionLine"] = rows[0][0]
+        legal["serviceLines"] = [
+            {
+                "description": d,
+                "amountFormatted": format_invoice_total_display(a, currency),
+            }
+            for d, a in rows
+        ]
     if fx:
         for key in (
             "fxAltAmountFormatted",
@@ -497,8 +515,9 @@ async def _apply_billed_amount_override(
     service_description: str | None,
     sort_order: int,
     fx_book: FxRateBook | None = None,
+    service_lines: list[tuple[str, Decimal]] | None = None,
 ) -> int:
-    """Zero money on linkage lines; add one manual billed line; set document overrides."""
+    """Zero money on linkage lines; add manual billed line(s); set document overrides."""
     await session.flush()
     await session.refresh(inv, ["line_items"])
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
@@ -510,8 +529,18 @@ async def _apply_billed_amount_override(
         ln.unit_amount = Decimal(0)
         ln.line_total = Decimal(0)
 
-    desc = (service_description or "").strip() or "Legal services"
     billed = _money4(billed_amount)
+    rows: list[tuple[str, Decimal]] = []
+    if service_lines:
+        for desc_raw, amt in service_lines:
+            desc = (desc_raw or "").strip()
+            if not desc:
+                continue
+            rows.append((desc[:2000], _money4(amt)))
+    if not rows:
+        desc = (service_description or "").strip() or "Legal services"
+        rows.append((desc[:2000], billed))
+
     book = fx_book or await load_fx_rate_book(session)
     issue = inv.issue_date if isinstance(inv.issue_date, date) else None
     fx = resolve_billed_amount_fx_display(
@@ -520,36 +549,40 @@ async def _apply_billed_amount_override(
         currency=inv_ccy,
         issue_date=issue,
     )
-    line_kwargs: dict[str, Any] = {}
-    if fx.get("lineSourceCurrency") and fx.get("lineSourceAmount") is not None:
-        line_kwargs["source_currency"] = str(fx["lineSourceCurrency"])
-        line_kwargs["source_amount"] = _money4(Decimal(str(fx["lineSourceAmount"])))
-        if fx.get("lineFxRate") is not None:
-            line_kwargs["fx_rate"] = Decimal(str(fx["lineFxRate"]))
-    repo.add_line(
-        InvoiceLineItemModel(
-            id=str(uuid.uuid4()),
-            invoice_id=inv.id,
-            sort_order=sort_order,
-            line_kind="manual",
-            description=desc[:2000],
-            quantity=Decimal(1),
-            unit_amount=billed,
-            line_total=billed,
-            time_entry_id=None,
-            expense_request_id=None,
-            **line_kwargs,
+    for idx, (desc, line_amt) in enumerate(rows):
+        line_kwargs: dict[str, Any] = {}
+        # Put FX alternate on the first presentation line only.
+        if idx == 0 and fx.get("lineSourceCurrency") and fx.get("lineSourceAmount") is not None:
+            line_kwargs["source_currency"] = str(fx["lineSourceCurrency"])
+            line_kwargs["source_amount"] = _money4(Decimal(str(fx["lineSourceAmount"])))
+            if fx.get("lineFxRate") is not None:
+                line_kwargs["fx_rate"] = Decimal(str(fx["lineFxRate"]))
+        repo.add_line(
+            InvoiceLineItemModel(
+                id=str(uuid.uuid4()),
+                invoice_id=inv.id,
+                sort_order=sort_order,
+                line_kind="manual",
+                description=desc,
+                quantity=Decimal(1),
+                unit_amount=line_amt,
+                line_total=line_amt,
+                time_entry_id=None,
+                expense_request_id=None,
+                **line_kwargs,
+            )
         )
-    )
+        sort_order += 1
     inv.document_overrides_json = _serialize_document_overrides(
         build_billed_amount_document_overrides(
             billed_amount=billed,
             currency=inv_ccy,
-            service_description=desc,
+            service_description=rows[0][0],
+            service_lines=rows,
             fx=fx or None,
         )
     )
-    return sort_order + 1
+    return sort_order
 
 
 _DEFERRED_PARTNER_STATUSES = frozenset({"fully_confirmed", "pending_partners"})
@@ -653,6 +686,7 @@ async def create_invoice(
     partner_confirmation_request_id: str | None = None,
     billed_amount: Decimal | None = None,
     service_description: str | None = None,
+    billed_service_lines: list[tuple[str, Decimal]] | None = None,
     defer_partner_confirmation: bool = False,
     extra_fixed_fee_amount: Decimal | None = None,
     extra_fixed_fee_description: str | None = None,
@@ -1020,6 +1054,7 @@ async def create_invoice(
             service_description=service_description,
             sort_order=sort_order,
             fx_book=fx_book,
+            service_lines=billed_service_lines,
         )
 
     await session.flush()

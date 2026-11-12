@@ -975,14 +975,6 @@ services:
       notifications:
         condition: service_started
 
-  telegram_bot:
-    build:
-      context: .
-      dockerfile: telegram_bot/Dockerfile
-    restart: unless-stopped
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-
 volumes:
   media_storage:
   backup_storage:

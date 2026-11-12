@@ -30,6 +30,32 @@ def test_build_billed_amount_document_overrides_legal_page_only():
     assert ovr["includedPageKeys"] == ["invoice"]
     assert ovr["cover"]["totalFormatted"] == "USD 360.00"
     assert ovr["legal"]["serviceDescriptionLine"] == "Legal services rendered in July 2026"
+    assert ovr["legal"]["serviceLines"] == [
+        {
+            "description": "Legal services rendered in July 2026",
+            "amountFormatted": "USD 360.00",
+        }
+    ]
+
+
+def test_build_billed_amount_document_overrides_multi_lines():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_service import build_billed_amount_document_overrides
+
+    ovr = build_billed_amount_document_overrides(
+        billed_amount=Decimal("20000"),
+        currency="USD",
+        service_lines=[
+            ("Stage 3", Decimal("8000")),
+            ("Stage 4", Decimal("12000")),
+        ],
+    )
+    assert ovr["cover"]["totalFormatted"] == "USD 20,000.00"
+    assert ovr["legal"]["serviceDescriptionLine"] == "Stage 3"
+    assert ovr["legal"]["serviceLines"] == [
+        {"description": "Stage 3", "amountFormatted": "USD 8,000.00"},
+        {"description": "Stage 4", "amountFormatted": "USD 12,000.00"},
+    ]
 
 
 def test_build_billed_amount_document_overrides_without_description():
@@ -111,6 +137,50 @@ def test_invoice_create_body_accepts_billed_amount_without_lines():
     assert body.time_entry_ids is None
     assert body.expense_ids is None
     assert body.partner_billing_period_from is None
+
+
+def test_invoice_create_body_accepts_billed_service_lines():
+    ensure_service_in_path("time_tracking")
+    from presentation.schemas_invoices import InvoiceCreateBody
+
+    body = InvoiceCreateBody.model_validate(
+        {
+            "clientId": "c1",
+            "projectId": "p1",
+            "issueDate": "2026-08-05",
+            "dueDate": "2026-09-20",
+            "billedAmount": "20000",
+            "billedServiceLines": [
+                {"description": "Stage 3", "amount": "8000"},
+                {"description": "Stage 4", "amount": "12000"},
+            ],
+        }
+    )
+    assert body.billed_amount == Decimal("20000")
+    assert len(body.billed_service_lines or []) == 2
+    assert body.billed_service_lines[0].description == "Stage 3"
+
+
+def test_invoice_create_body_rejects_billed_service_lines_sum_mismatch():
+    ensure_service_in_path("time_tracking")
+    from presentation.schemas_invoices import InvoiceCreateBody
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        InvoiceCreateBody.model_validate(
+            {
+                "clientId": "c1",
+                "projectId": "p1",
+                "issueDate": "2026-08-05",
+                "dueDate": "2026-09-20",
+                "billedAmount": "20000",
+                "billedServiceLines": [
+                    {"description": "Stage 3", "amount": "8000"},
+                    {"description": "Stage 4", "amount": "10000"},
+                ],
+            }
+        )
 
 
 def test_invoice_create_body_rejects_non_positive_billed_amount():

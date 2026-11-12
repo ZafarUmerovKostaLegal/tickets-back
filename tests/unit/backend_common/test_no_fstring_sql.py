@@ -27,7 +27,6 @@ _SCAN_DIRS = (
     "backup",
     "contacts",
     "call_schedule",
-    "telegram_bot",
 )
 _SKIP_PARTS = ("/tests/", "\\tests\\", "/.venv/", "\\__pycache__\\")
 _PATTERNS = (
