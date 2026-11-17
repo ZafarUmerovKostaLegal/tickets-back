@@ -7,7 +7,7 @@ from typing import Literal, Optional, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ReportVisibility = Literal["managers_only", "all_assigned"]
-ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable", "hour_package"]
+ProjectType = Literal["time_and_materials", "fixed_fee", "non_billable", "hour_package", "no_budget"]
 ProjectCurrency = Literal["USD", "UZS", "EUR", "RUB", "GBP"]
 RecordsLanguage = Literal["RU", "ENG"]
 

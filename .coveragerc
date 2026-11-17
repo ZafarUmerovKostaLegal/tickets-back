@@ -25,7 +25,6 @@ omit =
     time_tracking/application/entry_archive_service.py
     time_tracking/application/access_control.py
     time_tracking/application/integrity_audit.py
-    time_tracking/application/demo_seed_budget.py
     time_tracking/application/client_expense_category_defaults.py
     time_tracking/application/project_access_notifications.py
     time_tracking/application/project_access_rates.py

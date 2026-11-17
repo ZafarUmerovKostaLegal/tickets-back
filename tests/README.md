@@ -100,7 +100,6 @@ python scripts/collect_project_metrics.py
 
 - **TT reports package**: `time_tracking/application/reports/partner_scope.py`
 
-- Legacy import `application.partner_pending_list_scope` re-exports from `reports`
 
 
 

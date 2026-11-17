@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import uuid
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def _meta(**overrides: object) -> str:
         "clientEventId": uuid.uuid4().hex,
         "host": "PC-1",
         "windowsUser": r"KOSTA\ivan",
-        "occurredAt": "2026-10-26T12:00:00+00:00",
+        "occurredAt": datetime.now(timezone.utc).isoformat(),
         "process": "Telegram.exe",
         "fileName": "a.pdf",
         "filePath": r"C:\Users\ivan\Desktop\a.pdf",
@@ -298,6 +299,9 @@ async def test_only_journal_user_can_set_send_limit(api):
 @pytest.mark.asyncio
 async def test_daily_limit_is_megabytes_and_user_can_override(api):
     client, _, factory = api
+    settings = get_settings()
+    settings.max_upload_bytes = 4 * 1024 * 1024
+    settings.max_stored_bytes = 16 * 1024 * 1024
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "email": "aakhmadjonov@kostalegal.com"}
     shared = await client.put("/api/v1/file-guard/policies", json={"host": "*", "windowsUser": "*", "dailyLimitMb": 1})
     assert shared.status_code == 200

@@ -846,6 +846,10 @@ async def create_client_project(
             )
         budget_amount = package_fee
         body_budget_hours = package_hours
+    elif body.project_type == ProjectType.no_budget:
+        # "Без бюджета": hourly billing without any money / hours limit.
+        budget_amount = None
+        body_budget_hours = None
     else:
         body_budget_hours = body.budget_hours
 
@@ -879,6 +883,9 @@ async def create_client_project(
         _budget_type_create = "no_budget"
     else:
         _budget_type_create = body.budget_type
+    is_no_budget = body.project_type == ProjectType.no_budget
+    if is_no_budget:
+        _budget_type_create = "no_budget"
     fixed_fee_stored = (
         budget_amount
         if body.project_type == ProjectType.fixed_fee and _positive_budget_amount(budget_amount)
@@ -899,13 +906,13 @@ async def create_client_project(
             project_billable_rate_amount=body.project_billable_rate_amount,
             budget_type=_budget_type_create,
             budget_amount=budget_amount,
-            progress_budget_amount=body.progress_budget_amount,
+            progress_budget_amount=None if is_no_budget else body.progress_budget_amount,
             budget_hours=body_budget_hours,
-            budget_resets_every_month=body.budget_resets_every_month,
-            budget_includes_expenses=body.budget_includes_expenses,
-            send_budget_alerts=body.send_budget_alerts,
-            budget_alert_threshold_percent=body.budget_alert_threshold_percent,
-            fixed_fee_amount=fixed_fee_stored,
+            budget_resets_every_month=False if is_no_budget else body.budget_resets_every_month,
+            budget_includes_expenses=False if is_no_budget else body.budget_includes_expenses,
+            send_budget_alerts=False if is_no_budget else body.send_budget_alerts,
+            budget_alert_threshold_percent=None if is_no_budget else body.budget_alert_threshold_percent,
+            fixed_fee_amount=None if is_no_budget else fixed_fee_stored,
             package_hours_per_month=package_hours if body.project_type == ProjectType.hour_package else None,
             package_fee_amount=package_fee if body.project_type == ProjectType.hour_package else None,
             extra_fixed_fee_amount=body.extra_fixed_fee_amount,
@@ -1115,7 +1122,20 @@ async def patch_client_project(
             else getattr(row, "package_fee_amount", None)
         )
         eff_pt = patch["project_type"] if "project_type" in patch else row.project_type
-        if eff_pt == "hour_package":
+        if eff_pt == "no_budget":
+            # "Без бюджета": drop every limit, even if the client sent leftovers.
+            patch["budget_hours"] = None
+            patch["budget_amount"] = None
+            patch["progress_budget_amount"] = None
+            patch["fixed_fee_amount"] = None
+            patch["package_hours_per_month"] = None
+            patch["package_fee_amount"] = None
+            patch["budget_resets_every_month"] = False
+            patch["budget_includes_expenses"] = False
+            patch["send_budget_alerts"] = False
+            patch["budget_alert_threshold_percent"] = None
+            nt = "no_budget"
+        elif eff_pt == "hour_package":
             if not _positive_budget_amount(m_ph):
                 m_ph = m_h
             if not _positive_budget_amount(m_pf):

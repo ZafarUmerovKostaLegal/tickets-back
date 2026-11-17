@@ -657,6 +657,8 @@ class ProjectType(str, Enum):
     fixed_fee = "fixed_fee"
     non_billable = "non_billable"
     hour_package = "hour_package"
+    # Billed hourly like T&M, but with no budget / limit tracking at all.
+    no_budget = "no_budget"
 
 
 class ProjectCurrency(str, Enum):

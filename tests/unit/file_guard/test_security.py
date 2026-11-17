@@ -1,6 +1,7 @@
 from application.policy import pick_daily_send_limit
 from application.security import agent_token_configured, agent_token_matches, safe_file_name
 from application.storage import resolve_stored_file
+from infrastructure.config import get_settings
 from infrastructure.models import FileGuardPolicyModel
 from presentation.deps import bearer_from_request, journal_login_allowed
 
@@ -56,8 +57,6 @@ def test_journal_accepts_session_cookie_when_header_is_missing():
 
 
 def test_journal_login_is_exact_local_part():
-    from infrastructure.config import get_settings
-
     settings = get_settings()
     previous = settings.journal_logins
     settings.journal_logins = "aakhmadjonov,zumerov"

@@ -19,6 +19,8 @@ _SERVICE_DIR_NAMES = (
     "hr",
     "legal_hub",
     "file_manager",
+    "file_guard",
+    "correspondence",
 )
 
 
