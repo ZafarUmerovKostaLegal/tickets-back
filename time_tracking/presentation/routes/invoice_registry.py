@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
+from infrastructure.repository_invoice_pdf_files import InvoicePdfFileRepository
 from infrastructure.repository_invoice_registry import InvoiceRegistryRepository
 from presentation.deps import require_bearer_user
 
@@ -295,6 +296,14 @@ async def get_invoice_registry_sheet(
         }
     if year_id == SYSTEM_YEAR:
         rows = await repo.list_system_invoice_rows_2026(q=q, authorization=authorization)
+        uploaded = await InvoicePdfFileRepository(session).current_meta_by_invoice(
+            [str(r.get("invoiceId") or "") for r in rows],
+        )
+        for r in rows:
+            pdf = uploaded.get(str(r.get("invoiceId") or ""))
+            # Only the current upload is exposed; replaced versions stay hidden in the DB.
+            r["pdfFileName"] = pdf.file_name if pdf else ""
+            r["pdfUploadedAt"] = pdf.uploaded_at.isoformat() if pdf and pdf.uploaded_at else ""
         return {
             "year": SYSTEM_YEAR,
             "sheetName": SHEET_NAMES[SYSTEM_YEAR],

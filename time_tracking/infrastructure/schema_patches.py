@@ -1470,6 +1470,19 @@ async def apply_invoice_registry_usd_patch(conn: AsyncConnection) -> None:
     )
 
 
+async def apply_invoice_pdf_files_patch(conn: AsyncConnection) -> None:
+    """Table comes from create_all; guarantee at most one current PDF per invoice."""
+    await conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_tt_inv_pdf_one_current
+            ON time_tracking_invoice_pdf_files (invoice_id)
+            WHERE is_current
+            """
+        )
+    )
+
+
 REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("team_workload", apply_team_workload_schema_patch),
     ("time_manager_clients", apply_time_manager_clients_schema_patch),
@@ -1516,5 +1529,6 @@ REGISTERED_SCHEMA_PATCHES: tuple[tuple[str, object], ...] = (
     ("time_entries_project_id_fk", apply_time_entries_project_id_fk_patch),
     ("time_entries_active_partial_indexes", apply_time_entries_active_partial_indexes_patch),
     ("invoice_registry_usd", apply_invoice_registry_usd_patch),
+    ("invoice_pdf_files", apply_invoice_pdf_files_patch),
 )
 

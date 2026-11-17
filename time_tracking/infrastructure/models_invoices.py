@@ -3,8 +3,8 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text, text
+from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from infrastructure.database import Base
 
@@ -174,3 +174,28 @@ class InvoiceAuditLogModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     invoice: Mapped["InvoiceModel"] = relationship("InvoiceModel", back_populates="audit_logs")
+
+
+class InvoicePdfFileModel(Base):
+    """Manually uploaded PDF that replaces the generated invoice PDF.
+
+    Exactly one row per invoice is ``is_current`` and served to the UI. Replaced versions stay
+    in the table (``is_current = false``, ``replaced_at`` set) for manual recovery via SQL.
+    No FK to invoices on purpose: deleting an invoice must not delete its file history.
+    """
+
+    __tablename__ = "time_tracking_invoice_pdf_files"
+    __table_args__ = (Index("ix_tt_inv_pdf_invoice_current", "invoice_id", "is_current"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    invoice_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False, default="application/pdf")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    uploaded_by_auth_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_file_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

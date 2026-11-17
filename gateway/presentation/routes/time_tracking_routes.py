@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile, status
 from starlette.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1873,6 +1873,58 @@ async def invoices_create(
 ):
     body = await request.json()
     return await _tt_json("POST", "/invoices", json=body, params=_invoice_actor_qs(user), timeout=60.0)
+
+
+# Uploaded invoice PDF (registry «2026 (система)»): replaces the generated PDF in the UI.
+# Replaced files stay in the time_tracking DB and are never exposed through these routes.
+_INVOICE_PDF_MAX_BYTES = 25 * 1024 * 1024
+
+
+@router.get("/invoices/{invoice_id}/pdf-file")
+async def invoices_pdf_file_meta(
+    invoice_id: str,
+    _: dict = Depends(require_view_role),
+):
+    return await _tt_json("GET", f"/invoices/{invoice_id}/pdf-file", timeout=30.0)
+
+
+@router.get("/invoices/{invoice_id}/pdf-file/content")
+async def invoices_pdf_file_content(
+    invoice_id: str,
+    request: Request,
+    _: dict = Depends(require_view_role),
+):
+    r = await _tt_request(
+        "GET",
+        f"/invoices/{invoice_id}/pdf-file/content",
+        params=dict(request.query_params),
+        timeout=60.0,
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    out_headers: dict[str, str] = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if cd := r.headers.get("content-disposition"):
+        out_headers["Content-Disposition"] = cd
+    return Response(content=r.content, status_code=r.status_code, media_type="application/pdf", headers=out_headers)
+
+
+@router.put("/invoices/{invoice_id}/pdf-file")
+async def invoices_pdf_file_replace(
+    invoice_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_view_role),
+):
+    content = await file.read(_INVOICE_PDF_MAX_BYTES + 1)
+    if len(content) > _INVOICE_PDF_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Файл больше 25 МБ")
+    params = {**_invoice_actor_qs(user), "fileName": (file.filename or "").strip()}
+    return await _tt_json(
+        "PUT",
+        f"/invoices/{invoice_id}/pdf-file",
+        params=params,
+        content=content,
+        headers={"Content-Type": "application/pdf"},
+        timeout=120.0,
+    )
 
 
 @router.get("/invoices/{invoice_id}/audit")
