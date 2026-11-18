@@ -136,3 +136,36 @@ def test_unverified_helper_no_longer_accepts_unsigned(monkeypatch):
         headers={"alg": "HS256"},
     )
     assert azure_ad._claims_from_id_token(forged) is None
+
+def _graph_token(*, tid=TENANT, azp=CLIENT, expired=False):
+    """Real Graph tokens have a `nonce` header; their signature only Graph can check."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "oid": OID,
+        "tid": tid,
+        "iss": f"https://sts.windows.net/{tid}/",
+        "aud": "00000003-0000-0000-c000-000000000000",
+        "iat": now - timedelta(hours=2),
+        "exp": now - timedelta(minutes=5) if expired else now + timedelta(hours=1),
+        "appid": azp,
+    }
+    return jwt.encode(payload, "graph-only-secret", algorithm="HS256", headers={"nonce": "abc"})
+
+
+def test_graph_access_token_is_accepted_without_local_signature_check():
+    claims = azure_ad.verify_azure_access_token(_graph_token(), settings=_settings())
+    assert claims["oid"] == OID
+    assert claims["_graph_unverified"] is True
+
+
+@pytest.mark.parametrize(
+    "kwargs, error",
+    [
+        ({"tid": "99999999-9999-9999-9999-999999999999"}, "tenant mismatch"),
+        ({"azp": "other-client"}, "application mismatch"),
+        ({"expired": True}, "invalid"),
+    ],
+)
+def test_graph_access_token_sanity_checks(kwargs, error):
+    with pytest.raises(AzureTokenExchangeError, match=error):
+        azure_ad.verify_azure_access_token(_graph_token(**kwargs), settings=_settings())

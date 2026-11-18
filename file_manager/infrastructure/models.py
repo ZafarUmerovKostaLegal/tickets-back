@@ -140,3 +140,24 @@ class SettingModel(Base):
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[dict | list] = mapped_column(JSON, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EmailFilingModel(Base):
+    """Where an Outlook message (or its attachment / whole thread) was filed — for "already filed" and suggestions."""
+
+    __tablename__ = "fm_email_filings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(500), nullable=False, default="", index=True)
+    conversation_id: Mapped[str] = mapped_column(String(300), nullable=False, default="", index=True)
+    from_email: Mapped[str] = mapped_column(String(320), nullable=False, default="", index=True)
+    from_domain: Mapped[str] = mapped_column(String(255), nullable=False, default="", index=True)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="email")
+    document_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    client_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    filed_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    filed_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    filed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

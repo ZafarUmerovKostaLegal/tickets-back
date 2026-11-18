@@ -280,6 +280,9 @@ async def bootstrap_from_azure_token(
     if access_oid and access_oid != azure_oid:
         raise HTTPException(status_code=401, detail="Azure token subject mismatch")
     graph_id = str(me.get("id") or "").strip()
+    # Graph tokens are proven by Graph accepting them: the profile must exist and match.
+    if access_claims.get("_graph_unverified") and not graph_id:
+        raise HTTPException(status_code=401, detail="Graph profile unavailable")
     if graph_id and graph_id != azure_oid:
         raise HTTPException(status_code=401, detail="Graph profile does not match id_token")
 

@@ -29,6 +29,7 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
+from presentation.routes.mail import new_email_filing
 
 router = APIRouter(tags=["file-manager"])
 
@@ -310,10 +311,18 @@ async def upload_documents(
     files: list[UploadFile] = File(...),
     folderId: str | None = Form(default=None),
     comment: str = Form(default=""),
+    mailMessageId: str = Form(default="", max_length=500),
+    mailConversationId: str = Form(default="", max_length=300),
+    mailFrom: str = Form(default="", max_length=320),
+    mailSubject: str = Form(default="", max_length=2000),
+    mailKind: str = Form(default="", max_length=16),
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    """Upload into a matter folder; a file with the same name becomes a new version."""
+    """Upload into a matter folder; a file with the same name becomes a new version.
+
+    `mail*` fields come from the Outlook add-in: they record where the message was filed.
+    """
     dirx, matter, _ = await require_matter(session, viewer, matter_id, "edit")
     folder = await folder_in_matter(session, matter.id, folderId)
     folder_id = folder.id if folder else None
@@ -382,6 +391,18 @@ async def upload_documents(
         saved.append(doc)
     if not saved:
         raise HTTPException(status_code=400, detail="Выберите файл")
+    if mailMessageId.strip() or mailConversationId.strip():
+        for doc in saved:
+            session.add(new_email_filing(
+                viewer,
+                doc,
+                message_id=mailMessageId,
+                conversation_id=mailConversationId,
+                from_email=mailFrom,
+                subject=mailSubject,
+                kind=mailKind,
+                stamp=stamp,
+            ))
     await session.commit()
     return {"documents": [doc_out(doc, dirx) for doc in saved]}
 

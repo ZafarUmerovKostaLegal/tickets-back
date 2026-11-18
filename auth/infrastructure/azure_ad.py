@@ -206,6 +206,39 @@ def verify_azure_id_token(id_token: str | None, *, settings=None) -> dict[str, A
     return claims
 
 
+def _is_graph_access_token(token: str) -> bool:
+    """Graph tokens carry a `nonce` header and are signed for Graph only: nobody else can verify them."""
+    try:
+        header = jwt.get_unverified_header(token)
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        return False
+    if not isinstance(claims, dict):
+        return False
+    return "nonce" in header or not _normalize_audiences(claims.get("aud")).isdisjoint(_GRAPH_AUDIENCES)
+
+
+def _graph_access_claims(token: str, *, tenant_id: str, client_id: str) -> dict[str, Any]:
+    """
+    Sanity checks for a Microsoft Graph access token (signature is checked by Graph itself).
+    Callers MUST prove the token by calling Graph and matching the user to a verified id_token.
+    """
+    try:
+        claims = jwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": True, "require": ["exp", "iss"]},
+        )
+    except Exception as exc:
+        raise AzureTokenExchangeError("Azure access_token invalid") from exc
+    if not isinstance(claims, dict):
+        raise AzureTokenExchangeError("Azure access_token invalid")
+    _assert_tenant_and_issuer(claims, tenant_id=tenant_id)
+    _assert_token_app(claims, client_id=client_id)
+    if _normalize_audiences(claims.get("aud")).isdisjoint(_GRAPH_AUDIENCES):
+        raise AzureTokenExchangeError("Azure access_token audience mismatch")
+    return {**claims, "_graph_unverified": True}
+
+
 def verify_azure_access_token(access_token: str | None, *, settings=None) -> dict[str, Any]:
     """
     Verify Azure access token signature + tenant/issuer.
@@ -219,6 +252,9 @@ def verify_azure_access_token(access_token: str | None, *, settings=None) -> dic
     client_id = (settings.azure_client_id or "").strip()
     if not tenant_id or not client_id:
         raise AzureTokenExchangeError("Azure AD is not configured")
+
+    if _is_graph_access_token(token):
+        return _graph_access_claims(token, tenant_id=tenant_id, client_id=client_id)
 
     try:
         signing_key = _get_jwks_client(tenant_id).get_signing_key_from_jwt(token)

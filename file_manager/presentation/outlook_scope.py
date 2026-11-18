@@ -10,6 +10,17 @@ _OUTLOOK_ALLOWED: list[tuple[str, re.Pattern[str]]] = [
     ("GET", re.compile(r"^/matters/[^/]+/browse/?$")),
     ("POST", re.compile(r"^/matters/[^/]+/folders/?$")),
     ("POST", re.compile(r"^/matters/[^/]+/documents/?$")),
+    # MacroView-style pane: search, favourites, recent, filing status and suggestions.
+    ("GET", re.compile(r"^/search/?$")),
+    ("GET", re.compile(r"^/recent/?$")),
+    ("GET", re.compile(r"^/favorites/?$")),
+    ("PUT", re.compile(r"^/favorites/?$")),
+    ("DELETE", re.compile(r"^/favorites/[^/]+/[^/]+/?$")),
+    ("POST", re.compile(r"^/mail/lookup/?$")),
+    ("GET", re.compile(r"^/mail/suggestions/?$")),
+    # Thread file update and attaching filed documents to a draft.
+    ("GET", re.compile(r"^/documents/[^/]+/content/?$")),
+    ("POST", re.compile(r"^/documents/[^/]+/(checkout|checkin)/?$")),
 ]
 
 

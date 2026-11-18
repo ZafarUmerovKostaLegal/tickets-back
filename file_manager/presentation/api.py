@@ -9,6 +9,7 @@ from infrastructure import models as _models  # noqa: F401
 from presentation.routes.admin import router as admin_router
 from presentation.routes.documents import router as documents_router
 from presentation.routes.library import router as library_router
+from presentation.routes.mail import router as mail_router
 from presentation.routes.matters import router as matters_router
 
 API_PREFIX = "/api/v1/files"
@@ -41,6 +42,7 @@ app.include_router(matters_router, prefix=API_PREFIX)
 app.include_router(documents_router, prefix=API_PREFIX)
 app.include_router(library_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
+app.include_router(mail_router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["health"])
