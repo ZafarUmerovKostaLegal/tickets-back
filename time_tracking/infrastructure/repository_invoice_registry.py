@@ -34,11 +34,22 @@ def _is_placeholder_initials(code: str) -> bool:
     return not key or key in _PLACEHOLDER_INITIALS or key.startswith("TEST")
 
 
-def _initials_for_users(user_ids: list[int], initials_by_user: dict[int, str | None]) -> str:
+def _initials_for_users(
+    user_ids: list[int],
+    initials_by_user: dict[int, str | None],
+    names_by_user: dict[int, tuple[str | None, str | None]] | None = None,
+) -> str:
+    """Initials of the given users in order, each once. Without stored initials they are built
+    from the display name (as everywhere else in the hub); test accounts are skipped."""
+    from application.user_initials import initials_from_display_name
+
     codes: list[str] = []
     seen: set[str] = set()
     for user_id in user_ids:
         raw = (initials_by_user.get(user_id) or "").strip()
+        if not raw and names_by_user and user_id in names_by_user:
+            name, email = names_by_user[user_id]
+            raw = initials_from_display_name(name, email)
         key = raw.upper()
         if _is_placeholder_initials(key) or key in seen:
             continue
@@ -47,69 +58,35 @@ def _initials_for_users(user_ids: list[int], initials_by_user: dict[int, str | N
     return ", ".join(codes)
 
 
-def _team_partner_ids(
-    worker_ids: list[int],
-    partner_by_worker: dict[int, int],
-    initials_by_user: dict[int, str | None],
-) -> list[int]:
-    """Team partners of the people who logged the invoice hours (a partner logging hours counts too)."""
-    partner_ids: list[int] = []
-    team_partners = set(partner_by_worker.values())
-    for worker_id in worker_ids:
-        partner_id = partner_by_worker.get(worker_id)
-        if partner_id is None and worker_id in initials_by_user and worker_id in team_partners:
-            partner_id = worker_id
-        if partner_id is not None and partner_id not in partner_ids:
-            partner_ids.append(partner_id)
-    return partner_ids
-
-
-def _registry_partner_codes(
-    worker_ids: list[int],
-    partner_by_worker: dict[int, int],
-    initials_by_user: dict[int, str | None],
-) -> str:
-    """Partner initials for the people who logged the invoice hours. Several partners stay listed."""
-    return _initials_for_users(_team_partner_ids(worker_ids, partner_by_worker, initials_by_user), initials_by_user)
+def invoice_partner_project_ids(invoice_project_id: str | None, related_project_ids: list[str]) -> list[str]:
+    """The invoice's own project; projects of its lines / partner report only when it has none."""
+    own = (invoice_project_id or "").strip()
+    if own:
+        return [own]
+    out: list[str] = []
+    for pid in related_project_ids:
+        pid = (pid or "").strip()
+        if pid and pid not in out:
+            out.append(pid)
+    return out
 
 
 def registry_sheet_partner(
-    worker_ids: list[int],
-    creator_id: int,
     project_ids: list[str],
     *,
-    partner_by_worker: dict[int, int],
     partners_by_project: dict[str, list[int]],
     initials_by_user: dict[int, str | None],
+    names_by_user: dict[int, tuple[str | None, str | None]] | None = None,
 ) -> str:
-    """Partners who took part in the invoiced project.
-
-    1. Project partners whose team members logged the invoice hours.
-    2. Otherwise all partners of the invoice / report projects.
-    3. Otherwise team partners of the people who logged the hours, then of the invoice author.
-    Test accounts (placeholder initials like TEST) are never returned.
-    """
-    project_partners: list[int] = []
+    """Partners of the invoiced project, strictly from the project: one partner gives one code,
+    several give all of them. Team leads, the invoice author and test accounts are not used."""
+    partner_ids: list[int] = []
     for project_id in project_ids:
         for user_id in partners_by_project.get(project_id, []):
             uid = int(user_id)
-            if uid not in project_partners:
-                project_partners.append(uid)
-
-    team_partners = _team_partner_ids(worker_ids, partner_by_worker, initials_by_user)
-    if project_partners:
-        involved = [uid for uid in project_partners if uid in team_partners or uid in worker_ids]
-        codes = _initials_for_users(involved, initials_by_user)
-        if codes:
-            return codes
-        codes = _initials_for_users(project_partners, initials_by_user)
-        if codes:
-            return codes
-
-    codes = _initials_for_users(team_partners, initials_by_user)
-    if not codes and creator_id > 0:
-        codes = _registry_partner_codes([creator_id], partner_by_worker, initials_by_user)
-    return codes
+            if uid not in partner_ids:
+                partner_ids.append(uid)
+    return _initials_for_users(partner_ids, initials_by_user, names_by_user)
 
 
 def _seq_sort_key(seq: str) -> tuple[int, str]:
@@ -245,12 +222,11 @@ class InvoiceRegistryRepository:
                 )
             )
         loaded = list((await self._s.execute(stmt)).all())
-        workers_by_invoice: dict[str, list[int]] = {}
         projects_by_invoice: dict[str, list[str]] = {}
         ids = [inv.id for inv, _name in loaded]
-        partner_by_worker: dict[int, int] = {}
         partners_by_project: dict[str, list[int]] = {}
         initials_by_user: dict[int, str | None] = {}
+        names_by_user: dict[int, tuple[str | None, str | None]] = {}
 
         def remember_project(invoice_id: str, project_id: str | None) -> None:
             pid = (project_id or "").strip()
@@ -262,51 +238,45 @@ class InvoiceRegistryRepository:
 
         if ids:
             from application.project_partner_users import list_partner_auth_user_ids_by_projects
-            from infrastructure.models import TimeEntryModel, TimeTrackingTeamMemberModel, TimeTrackingTeamModel
+            from infrastructure.models import TimeEntryModel, TimeTrackingUserModel
             from infrastructure.models_invoices import InvoiceLineItemModel
             from infrastructure.models_reports import ReportPartnerConfirmationRequestModel
             from infrastructure.repository_access import UserProjectAccessRepository
 
-            for inv, _name in loaded:
-                remember_project(inv.id, inv.project_id)
-            line_stmt = (
-                select(InvoiceLineItemModel.invoice_id, TimeEntryModel.auth_user_id, TimeEntryModel.project_id)
-                .outerjoin(TimeEntryModel, TimeEntryModel.id == InvoiceLineItemModel.time_entry_id)
-                .where(InvoiceLineItemModel.invoice_id.in_(ids))
-            )
-            for invoice_id, auth_user_id, project_id in (await self._s.execute(line_stmt)).all():
-                if auth_user_id is not None:
-                    workers_by_invoice.setdefault(invoice_id, []).append(int(auth_user_id))
-                remember_project(invoice_id, project_id)
-            conf_ids = [
-                str(inv.partner_confirmation_request_id).strip()
-                for inv, _name in loaded
-                if str(inv.partner_confirmation_request_id or "").strip()
-            ]
-            if conf_ids:
-                conf_rows = (
-                    await self._s.execute(
-                        select(
-                            ReportPartnerConfirmationRequestModel.id,
-                            ReportPartnerConfirmationRequestModel.project_id,
-                        ).where(ReportPartnerConfirmationRequestModel.id.in_(conf_ids))
-                    )
-                ).all()
-                conf_project = {str(request_id): project_id for request_id, project_id in conf_rows}
-                for inv, _name in loaded:
-                    request_id = str(inv.partner_confirmation_request_id or "").strip()
-                    if request_id:
-                        remember_project(inv.id, conf_project.get(request_id))
-            team_rows = (
-                await self._s.execute(
-                    select(TimeTrackingTeamMemberModel.auth_user_id, TimeTrackingTeamModel.partner_auth_user_id)
-                    .join(TimeTrackingTeamModel, TimeTrackingTeamModel.id == TimeTrackingTeamMemberModel.team_id)
-                    .where(TimeTrackingTeamModel.is_archived.is_(False))
+            # Projects of lines / partner report matter only for invoices without their own project.
+            orphans = {inv.id: inv for inv, _name in loaded if not (inv.project_id or "").strip()}
+            if orphans:
+                line_stmt = (
+                    select(InvoiceLineItemModel.invoice_id, TimeEntryModel.project_id)
+                    .join(TimeEntryModel, TimeEntryModel.id == InvoiceLineItemModel.time_entry_id)
+                    .where(InvoiceLineItemModel.invoice_id.in_(list(orphans)))
                 )
-            ).all()
-            for worker_id, partner_id in team_rows:
-                partner_by_worker.setdefault(int(worker_id), int(partner_id))
-            project_ids = [pid for group in projects_by_invoice.values() for pid in group]
+                for invoice_id, project_id in (await self._s.execute(line_stmt)).all():
+                    remember_project(invoice_id, project_id)
+                conf_ids = [
+                    str(inv.partner_confirmation_request_id).strip()
+                    for inv in orphans.values()
+                    if str(inv.partner_confirmation_request_id or "").strip()
+                ]
+                if conf_ids:
+                    conf_rows = (
+                        await self._s.execute(
+                            select(
+                                ReportPartnerConfirmationRequestModel.id,
+                                ReportPartnerConfirmationRequestModel.project_id,
+                            ).where(ReportPartnerConfirmationRequestModel.id.in_(conf_ids))
+                        )
+                    ).all()
+                    conf_project = {str(request_id): project_id for request_id, project_id in conf_rows}
+                    for inv in orphans.values():
+                        request_id = str(inv.partner_confirmation_request_id or "").strip()
+                        if request_id:
+                            remember_project(inv.id, conf_project.get(request_id))
+            for inv, _name in loaded:
+                projects_by_invoice[inv.id] = invoice_partner_project_ids(
+                    inv.project_id, projects_by_invoice.get(inv.id, [])
+                )
+            project_ids = sorted({pid for group in projects_by_invoice.values() for pid in group})
             if project_ids:
                 partners_by_project = await list_partner_auth_user_ids_by_projects(
                     self._s,
@@ -314,18 +284,19 @@ class InvoiceRegistryRepository:
                     project_ids,
                     authorization=authorization,
                 )
-            worker_ids = {uid for group in workers_by_invoice.values() for uid in group}
-            creator_ids = {
-                int(inv.created_by_auth_user_id)
-                for inv, _name in loaded
-                if int(inv.created_by_auth_user_id or 0) > 0
-            }
-            project_partner_ids = {uid for group in partners_by_project.values() for uid in group}
-            lookup_ids = set(partner_by_worker.values()) | worker_ids | creator_ids | project_partner_ids
-            if lookup_ids:
+            partner_ids = sorted({int(uid) for group in partners_by_project.values() for uid in group})
+            if partner_ids:
                 from application.user_initials import fetch_auth_initials_by_user_id
 
-                initials_by_user = await fetch_auth_initials_by_user_id(sorted(lookup_ids))
+                initials_by_user = await fetch_auth_initials_by_user_id(partner_ids)
+                name_rows = await self._s.execute(
+                    select(
+                        TimeTrackingUserModel.auth_user_id,
+                        TimeTrackingUserModel.display_name,
+                        TimeTrackingUserModel.email,
+                    ).where(TimeTrackingUserModel.auth_user_id.in_(partner_ids))
+                )
+                names_by_user = {int(uid): (name, email) for uid, name, email in name_rows.all()}
         out: list[dict[str, str]] = []
         for index, (inv, client_name) in enumerate(loaded, start=1):
             total = inv.total_amount
@@ -337,12 +308,10 @@ class InvoiceRegistryRepository:
             details = _short_registry_details(inv.internal_note or "")
             partner_note = _registry_partner_note(inv.client_note or "")
             partner = registry_sheet_partner(
-                workers_by_invoice.get(inv.id, []),
-                int(inv.created_by_auth_user_id or 0),
                 projects_by_invoice.get(inv.id, []),
-                partner_by_worker=partner_by_worker,
                 partners_by_project=partners_by_project,
                 initials_by_user=initials_by_user,
+                names_by_user=names_by_user,
             )
             out.append({
                 "id": f"sys-{inv.id}",
