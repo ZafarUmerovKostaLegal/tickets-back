@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import io
+import re
+import zipfile
+from collections import defaultdict
 from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import uuid4
@@ -7,8 +11,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from infrastructure.database import get_session
 from infrastructure.models import LegalHubDriveAclModel, LegalHubDriveFileModel, LegalHubDriveFolderModel
@@ -16,19 +21,42 @@ from presentation.deps import require_user
 
 router = APIRouter(tags=["legal-hub"])
 MAX_FILE_BYTES = 15 * 1024 * 1024
+MAX_BULK_BYTES = 300 * 1024 * 1024
+MAX_BATCH = 500
+SEARCH_LIMIT = 300
 ROOT_ACL_ID = "__root__"
 ACL_LEVELS = frozenset({"read", "edit", "manage", "deny"})
 LEVEL_RANK = {"deny": 0, "read": 1, "edit": 2, "manage": 3}
+_BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_SUFFIX = re.compile(r"^(.*?)(?: \((\d+)\))?$")
 
 
 class FolderIn(BaseModel):
-    name: str = Field(min_length=1, max_length=300)
+    name: str = Field(min_length=1, max_length=1000)
     parentId: str | None = None
 
     @field_validator("name")
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
+
+
+class ItemPatchIn(BaseModel):
+    name: str | None = Field(default=None, max_length=300)
+    hidden: bool | None = None
+
+
+class SelectionIn(BaseModel):
+    folderIds: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+    fileIds: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+
+
+class TransferIn(SelectionIn):
+    targetId: str | None = None
+
+
+class HideIn(SelectionIn):
+    hidden: bool
 
 
 class AclIn(BaseModel):
@@ -51,6 +79,14 @@ class AclIn(BaseModel):
         return value.strip()
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
 def _user_id(user: dict) -> int:
     return int(user["id"])
 
@@ -66,6 +102,10 @@ def _is_manager(user: dict) -> bool:
 
 def _acl_folder_id(folder_id: str | None) -> str:
     return (folder_id or "").strip() or ROOT_ACL_ID
+
+
+def _clean_id(value: str | None) -> str | None:
+    return (value or "").strip() or None
 
 
 def _acl_out(row: LegalHubDriveAclModel) -> dict:
@@ -84,12 +124,20 @@ def _file_kind(name: str) -> str:
     lowered = name.lower()
     if lowered.endswith(".pdf"):
         return "pdf"
-    if lowered.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+    if lowered.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic")):
         return "image"
-    if lowered.endswith((".doc", ".docx")):
+    if lowered.endswith((".doc", ".docx", ".rtf", ".odt")):
         return "doc"
-    if lowered.endswith((".xls", ".xlsx", ".csv")):
+    if lowered.endswith((".xls", ".xlsx", ".csv", ".ods")):
         return "sheet"
+    if lowered.endswith((".ppt", ".pptx", ".odp")):
+        return "slides"
+    if lowered.endswith((".msg", ".eml")):
+        return "email"
+    if lowered.endswith((".zip", ".rar", ".7z", ".tar", ".gz")):
+        return "archive"
+    if lowered.endswith((".txt", ".md", ".json", ".xml", ".log")):
+        return "text"
     return "file"
 
 
@@ -99,160 +147,440 @@ def _file_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-async def _folder_or_404(session: AsyncSession, folder_id: str | None) -> LegalHubDriveFolderModel | None:
-    if not folder_id:
-        return None
-    folder = await session.get(LegalHubDriveFolderModel, folder_id)
-    if folder is None:
-        raise HTTPException(status_code=404, detail="Папка не найдена")
-    return folder
+def clean_name(raw: str | None) -> str:
+    """Windows-style item name: no path separators or reserved characters, no trailing dots / spaces."""
+    name = (raw or "").strip().rstrip(". ").strip()
+    if not name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Укажите название")
+    if _BAD_NAME.search(name):
+        raise HTTPException(status_code=400, detail='Название не может содержать символы \\ / : * ? " < > |')
+    if len(name) > 300:
+        raise HTTPException(status_code=400, detail="Название длиннее 300 символов")
+    return name
 
 
-async def _crumbs(session: AsyncSession, folder_id: str | None) -> list[dict]:
-    crumbs: list[dict] = []
-    current = folder_id
-    seen: set[str] = set()
-    while current and current not in seen:
-        seen.add(current)
-        folder = await session.get(LegalHubDriveFolderModel, current)
-        if folder is None:
-            break
-        crumbs.append({"id": folder.id, "name": folder.name})
-        current = folder.parent_id
-    crumbs.reverse()
-    return crumbs
+def split_path(raw: str | None) -> list[str]:
+    """«A/B/C» or «A\\B\\C» → ['A', 'B', 'C'], each segment validated."""
+    parts = [part for part in re.split(r"[\\/]+", raw or "") if part.strip()]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Укажите название папки")
+    if len(parts) > 32:
+        raise HTTPException(status_code=400, detail="Слишком глубокая вложенность")
+    return [clean_name(part) for part in parts]
 
 
-async def _effective_level(session: AsyncSession, user: dict, folder_id: str | None) -> str:
-    if _is_manager(user):
-        return "manage"
-    uid = _user_id(user)
-    current = folder_id
-    seen: set[str] = set()
+def unique_name(name: str, taken: set[str], *, is_file: bool) -> str:
+    """Windows-like auto-rename: «Отчёт.pdf» → «Отчёт (2).pdf», «Папка» → «Папка (2)»."""
+    if name.casefold() not in taken:
+        return name
+    stem, ext = name, ""
+    if is_file and not name.startswith(".") and "." in name:
+        stem, ext = name.rsplit(".", 1)
+        ext = f".{ext}"
+    match = _SUFFIX.match(stem)
+    base = (match.group(1) if match else "") or stem
+    n = 2
     while True:
-        key = _acl_folder_id(current)
-        if key in seen:
-            break
-        seen.add(key)
-        row = await session.get(LegalHubDriveAclModel, (key, uid))
-        if row is not None:
-            return row.level if row.level in LEVEL_RANK else "deny"
-        if current is None:
-            break
-        folder = await session.get(LegalHubDriveFolderModel, current)
-        if folder is None:
-            break
-        current = folder.parent_id
-    # No ACL on the path → open for authenticated users (storage page, no UNC mount).
-    return "edit"
+        candidate = f"{base} ({n}){ext}"
+        if candidate.casefold() not in taken:
+            return candidate
+        n += 1
 
 
-async def _require_level(session: AsyncSession, user: dict, folder_id: str | None, need: str) -> str:
-    level = await _effective_level(session, user, folder_id)
-    if LEVEL_RANK.get(level, 0) < LEVEL_RANK.get(need, 99):
-        raise HTTPException(status_code=403, detail="Недостаточно прав для этой папки")
-    return level
+class DriveTree:
+    """All folders + the user's ACL rows in memory: permissions, paths and subtree walks without N+1 queries."""
+
+    def __init__(self, folders: list[LegalHubDriveFolderModel], acl: dict[str, str], *, manager: bool) -> None:
+        self.folders = {folder.id: folder for folder in folders}
+        self.children: dict[str | None, list[LegalHubDriveFolderModel]] = defaultdict(list)
+        for folder in folders:
+            parent = folder.parent_id if folder.parent_id in self.folders else None
+            self.children[parent].append(folder)
+        self.acl = acl
+        self.manager = manager
+        self._levels: dict[str | None, str] = {}
+
+    def level(self, folder_id: str | None) -> str:
+        """Nearest explicit ACL up the path wins; no ACL on the path → edit (shared storage)."""
+        if self.manager:
+            return "manage"
+        chain: list[str | None] = []
+        current = folder_id
+        seen: set[str] = set()
+        level = "edit"
+        while True:
+            if current in self._levels:
+                level = self._levels[current]
+                break
+            chain.append(current)
+            key = _acl_folder_id(current)
+            if key in self.acl:
+                level = self.acl[key] if self.acl[key] in LEVEL_RANK else "deny"
+                break
+            if current is None or current in seen:
+                break
+            seen.add(current)
+            folder = self.folders.get(current)
+            current = folder.parent_id if folder is not None and folder.parent_id in self.folders else None
+        for item in chain:
+            self._levels[item] = level
+        return level
+
+    def can(self, folder_id: str | None, need: str) -> bool:
+        return LEVEL_RANK.get(self.level(folder_id), 0) >= LEVEL_RANK[need]
+
+    def require(self, folder_id: str | None, need: str) -> None:
+        if not self.can(folder_id, need):
+            raise HTTPException(status_code=403, detail="Недостаточно прав для этой папки")
+
+    def get(self, folder_id: str | None) -> LegalHubDriveFolderModel | None:
+        return self.folders.get(folder_id) if folder_id else None
+
+    def ancestors(self, folder_id: str | None) -> list[LegalHubDriveFolderModel]:
+        """Folders from the root down to folder_id (inclusive)."""
+        out: list[LegalHubDriveFolderModel] = []
+        current = self.get(folder_id)
+        seen: set[str] = set()
+        while current is not None and current.id not in seen:
+            seen.add(current.id)
+            out.append(current)
+            current = self.get(current.parent_id)
+        out.reverse()
+        return out
+
+    def crumbs(self, folder_id: str | None) -> list[dict]:
+        return [{"id": folder.id, "name": folder.name} for folder in self.ancestors(folder_id)]
+
+    def is_within(self, folder_id: str | None, ancestor_id: str) -> bool:
+        return any(folder.id == ancestor_id for folder in self.ancestors(folder_id))
+
+    def walk(self, root_id: str | None, *, show_hidden: bool) -> list[LegalHubDriveFolderModel]:
+        """Readable folders under root (root excluded), pruning denied / hidden branches."""
+        out: list[LegalHubDriveFolderModel] = []
+        stack = list(self.children.get(root_id, []))
+        while stack:
+            folder = stack.pop()
+            if not self.can(folder.id, "read") or (folder.is_hidden and not show_hidden):
+                continue
+            out.append(folder)
+            stack.extend(self.children.get(folder.id, []))
+        return out
+
+
+async def load_tree(session: AsyncSession, user: dict) -> DriveTree:
+    folders = list(await session.scalars(select(LegalHubDriveFolderModel)))
+    acl_rows = (await session.execute(
+        select(LegalHubDriveAclModel.folder_id, LegalHubDriveAclModel.level)
+        .where(LegalHubDriveAclModel.user_id == _user_id(user))
+    )).all()
+    return DriveTree(folders, {folder_id: level for folder_id, level in acl_rows}, manager=_is_manager(user))
+
+
+def _folder_in(tree: DriveTree, folder_id: str | None) -> str | None:
+    folder_id = _clean_id(folder_id)
+    if folder_id and tree.get(folder_id) is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    return folder_id
+
+
+def _in_folder(column, parent: str | None):
+    return column.is_(None) if parent is None else column == parent
+
+
+async def _taken_names(session: AsyncSession, parent: str | None, *, exclude: set[str] | None = None) -> set[str]:
+    exclude = exclude or set()
+    rows = [
+        *(await session.execute(
+            select(LegalHubDriveFolderModel.id, LegalHubDriveFolderModel.name)
+            .where(_in_folder(LegalHubDriveFolderModel.parent_id, parent))
+        )).all(),
+        *(await session.execute(
+            select(LegalHubDriveFileModel.id, LegalHubDriveFileModel.name)
+            .where(_in_folder(LegalHubDriveFileModel.folder_id, parent))
+        )).all(),
+    ]
+    return {name.casefold() for item_id, name in rows if item_id not in exclude}
+
+
+def _file_out(item: LegalHubDriveFileModel) -> dict:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "kind": _file_kind(item.name),
+        "size": _file_size(item.size_bytes),
+        "sizeBytes": item.size_bytes,
+        "createdAt": _iso(item.created_at),
+        "updatedAt": _iso(item.updated_at or item.created_at),
+        "hidden": bool(item.is_hidden),
+        "folderId": item.folder_id,
+    }
+
+
+def _folder_out(item: LegalHubDriveFolderModel, count: int = 0) -> dict:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "createdAt": _iso(item.created_at),
+        "updatedAt": _iso(item.updated_at or item.created_at),
+        "hidden": bool(item.is_hidden),
+        "itemCount": count,
+        "parentId": item.parent_id,
+    }
+
+
+async def _child_counts(session: AsyncSession, ids: list[str], *, show_hidden: bool) -> dict[str, int]:
+    if not ids:
+        return {}
+    counts: dict[str, int] = defaultdict(int)
+    folder_q = select(LegalHubDriveFolderModel.parent_id, func.count()).where(LegalHubDriveFolderModel.parent_id.in_(ids))
+    file_q = select(LegalHubDriveFileModel.folder_id, func.count()).where(LegalHubDriveFileModel.folder_id.in_(ids))
+    if not show_hidden:
+        folder_q = folder_q.where(LegalHubDriveFolderModel.is_hidden.is_(False))
+        file_q = file_q.where(LegalHubDriveFileModel.is_hidden.is_(False))
+    for parent, count in (await session.execute(folder_q.group_by(LegalHubDriveFolderModel.parent_id))).all():
+        counts[parent] += int(count)
+    for parent, count in (await session.execute(file_q.group_by(LegalHubDriveFileModel.folder_id))).all():
+        counts[parent] += int(count)
+    return counts
+
+
+async def _browse(session: AsyncSession, user: dict, parent: str | None, *, show_hidden: bool = False) -> dict:
+    tree = await load_tree(session, user)
+    parent = _folder_in(tree, parent)
+    tree.require(parent, "read")
+    level = tree.level(parent)
+    folders = sorted(
+        (
+            folder for folder in tree.children.get(parent, [])
+            if tree.can(folder.id, "read") and (show_hidden or not folder.is_hidden)
+        ),
+        key=lambda folder: folder.name.casefold(),
+    )
+    file_q = (
+        select(LegalHubDriveFileModel)
+        .options(defer(LegalHubDriveFileModel.content))
+        .where(_in_folder(LegalHubDriveFileModel.folder_id, parent))
+        .order_by(LegalHubDriveFileModel.name.asc())
+    )
+    if not show_hidden:
+        file_q = file_q.where(LegalHubDriveFileModel.is_hidden.is_(False))
+    files = list(await session.scalars(file_q))
+    counts = await _child_counts(session, [folder.id for folder in folders], show_hidden=show_hidden)
+    return {
+        "path": tree.crumbs(parent),
+        "folderId": parent,
+        "level": level,
+        "canEdit": LEVEL_RANK.get(level, 0) >= LEVEL_RANK["edit"],
+        "canManage": LEVEL_RANK.get(level, 0) >= LEVEL_RANK["manage"],
+        "folders": [_folder_out(folder, counts.get(folder.id, 0)) for folder in folders],
+        "files": [_file_out(item) for item in files],
+    }
+
+
+async def _ensure_folder_path(
+    session: AsyncSession,
+    tree: DriveTree,
+    parent: str | None,
+    parts: list[str],
+    user: dict,
+    *,
+    cache: dict[tuple[str | None, str], str] | None = None,
+    unique_last: bool = False,
+) -> str | None:
+    """Walk / create «A/B/C» under parent, reusing existing folders (case-insensitive).
+    With unique_last the last level is always new («Папка (2)» if the name is taken)."""
+    cache = cache if cache is not None else {}
+    current = parent
+    now = _now()
+    for index, part in enumerate(parts):
+        fresh = unique_last and index == len(parts) - 1
+        key = (current, part.casefold())
+        if not fresh and key in cache:
+            current = cache[key]
+            continue
+        existing = None if fresh else next(
+            (folder for folder in tree.children.get(current, []) if folder.name.casefold() == part.casefold()),
+            None,
+        )
+        if existing is not None:
+            tree.require(existing.id, "edit")
+            cache[key] = existing.id
+            current = existing.id
+            continue
+        tree.require(current, "edit")
+        name = unique_name(part, await _taken_names(session, current), is_file=False)
+        folder = LegalHubDriveFolderModel(
+            id=str(uuid4()),
+            parent_id=current,
+            name=name,
+            is_hidden=False,
+            created_by_user_id=_user_id(user),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(folder)
+        await session.flush()
+        tree.folders[folder.id] = folder
+        tree.children[current].append(folder)
+        cache[(current, name.casefold())] = folder.id
+        current = folder.id
+    return current
 
 
 @router.get("/drive")
 async def list_drive(
     parentId: str | None = Query(default=None),
+    showHidden: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    parent = (parentId or "").strip() or None
-    await _folder_or_404(session, parent)
-    level = await _require_level(session, user, parent, "read")
-    folder_query = select(LegalHubDriveFolderModel).order_by(LegalHubDriveFolderModel.name.asc())
-    file_query = select(LegalHubDriveFileModel).order_by(LegalHubDriveFileModel.name.asc())
-    if parent is None:
-        folder_query = folder_query.where(LegalHubDriveFolderModel.parent_id.is_(None))
-        file_query = file_query.where(LegalHubDriveFileModel.folder_id.is_(None))
-    else:
-        folder_query = folder_query.where(LegalHubDriveFolderModel.parent_id == parent)
-        file_query = file_query.where(LegalHubDriveFileModel.folder_id == parent)
-    folders = list(await session.scalars(folder_query))
-    files = list(await session.scalars(file_query))
+    return await _browse(session, user, parentId, show_hidden=showHidden)
+
+
+@router.get("/drive/tree")
+async def drive_tree(
+    showHidden: bool = Query(default=False),
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Folder hierarchy for the navigation pane: only branches the user can open."""
+    tree = await load_tree(session, user)
+    if not tree.can(None, "read"):
+        return {"folders": []}
     return {
-        "path": await _crumbs(session, parent),
-        "folderId": parent,
-        "level": level,
-        "canEdit": LEVEL_RANK.get(level, 0) >= LEVEL_RANK["edit"],
-        "canManage": LEVEL_RANK.get(level, 0) >= LEVEL_RANK["manage"],
         "folders": [
-            {"id": item.id, "name": item.name, "createdAt": item.created_at.isoformat()}
-            for item in folders
+            {"id": folder.id, "parentId": folder.parent_id, "name": folder.name, "hidden": bool(folder.is_hidden)}
+            for folder in sorted(tree.walk(None, show_hidden=showHidden), key=lambda folder: folder.name.casefold())
         ],
-        "files": [
-            {
-                "id": item.id,
-                "name": item.name,
-                "kind": _file_kind(item.name),
-                "size": _file_size(item.size_bytes),
-                "sizeBytes": item.size_bytes,
-                "createdAt": item.created_at.isoformat(),
-            }
-            for item in files
+    }
+
+
+@router.get("/drive/search")
+async def search_drive(
+    q: str = Query(min_length=1, max_length=200),
+    folderId: str | None = Query(default=None),
+    showHidden: bool = Query(default=False),
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Search by name in the folder and all its subfolders (like the Explorer search box)."""
+    tree = await load_tree(session, user)
+    scope = _folder_in(tree, folderId)
+    tree.require(scope, "read")
+    words = [word.casefold() for word in q.split() if word.strip()]
+    if not words:
+        return {"query": q, "folders": [], "files": [], "truncated": False}
+
+    def matches(name: str) -> bool:
+        folded = name.casefold()
+        return all(word in folded for word in words)
+
+    folders = tree.walk(scope, show_hidden=showHidden)
+    folder_hits = [folder for folder in folders if matches(folder.name)]
+    readable = [folder.id for folder in folders]
+    file_q = (
+        select(LegalHubDriveFileModel)
+        .options(defer(LegalHubDriveFileModel.content))
+        .where(LegalHubDriveFileModel.name.ilike(f"%{words[0]}%"))
+    )
+    if scope is None:
+        file_q = file_q.where(or_(
+            LegalHubDriveFileModel.folder_id.is_(None),
+            LegalHubDriveFileModel.folder_id.in_(readable or [""]),
+        ))
+    else:
+        file_q = file_q.where(LegalHubDriveFileModel.folder_id.in_([scope, *readable]))
+    if not showHidden:
+        file_q = file_q.where(LegalHubDriveFileModel.is_hidden.is_(False))
+    files = [item for item in await session.scalars(file_q.limit(SEARCH_LIMIT * 4)) if matches(item.name)]
+    folder_hits.sort(key=lambda folder: folder.name.casefold())
+    files.sort(key=lambda item: item.name.casefold())
+    truncated = len(folder_hits) + len(files) > SEARCH_LIMIT
+    folder_hits = folder_hits[:SEARCH_LIMIT]
+    files = files[: max(0, SEARCH_LIMIT - len(folder_hits))]
+    counts = await _child_counts(session, [folder.id for folder in folder_hits], show_hidden=showHidden)
+    return {
+        "query": q,
+        "folders": [
+            {**_folder_out(folder, counts.get(folder.id, 0)), "path": tree.crumbs(folder.parent_id)}
+            for folder in folder_hits
         ],
+        "files": [{**_file_out(item), "path": tree.crumbs(item.folder_id)} for item in files],
+        "truncated": truncated,
     }
 
 
 @router.post("/drive/folders", status_code=201)
 async def create_folder(
     body: FolderIn,
+    showHidden: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    if not body.name or body.name in {".", ".."}:
-        raise HTTPException(status_code=400, detail="Укажите название папки")
-    parent = (body.parentId or "").strip() or None
-    await _folder_or_404(session, parent)
-    await _require_level(session, user, parent, "edit")
-    session.add(LegalHubDriveFolderModel(
-        id=str(uuid4()),
-        parent_id=parent,
-        name=body.name,
-        created_by_user_id=_user_id(user),
-        created_at=datetime.now(timezone.utc),
-    ))
+    """Create a folder; «A/B/C» creates the whole structure at once (existing levels are reused)."""
+    tree = await load_tree(session, user)
+    parent = _folder_in(tree, body.parentId)
+    tree.require(parent, "edit")
+    created = await _ensure_folder_path(session, tree, parent, split_path(body.name), user, unique_last=True)
     await session.commit()
-    return await list_drive(parent, session, user)
+    result = await _browse(session, user, parent, show_hidden=showHidden)
+    result["createdId"] = created
+    return result
 
 
 @router.post("/drive/files", status_code=201)
 async def upload_files(
     files: list[UploadFile] = File(...),
     parentId: str | None = Form(default=None),
+    paths: list[str] | None = Form(default=None),
+    showHidden: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    parent = (parentId or "").strip() or None
-    await _folder_or_404(session, parent)
-    await _require_level(session, user, parent, "edit")
-    now = datetime.now(timezone.utc)
+    """Upload files; with `paths` (relative paths of a dropped / picked folder) the folder structure is recreated.
+    Name clashes get «(2)» like in Explorer instead of overwriting."""
+    tree = await load_tree(session, user)
+    parent = _folder_in(tree, parentId)
+    tree.require(parent, "edit")
+    now = _now()
     stored = 0
-    for upload in files:
+    cache: dict[tuple[str | None, str], str] = {}
+    taken_by_folder: dict[str | None, set[str]] = {}
+    for index, upload in enumerate(files):
         content = await upload.read()
+        if len(content) > MAX_FILE_BYTES:
+            raise HTTPException(status_code=400, detail=f"Файл «{upload.filename}» больше 15 МБ")
+        relative = (paths[index] if paths and index < len(paths) else "") or ""
+        segments = [part for part in re.split(r"[\\/]+", relative) if part.strip()]
+        folder_parts = [clean_name(part) for part in segments[:-1]]
+        target = await _ensure_folder_path(session, tree, parent, folder_parts, user, cache=cache) if folder_parts else parent
         if not content:
             continue
-        if len(content) > MAX_FILE_BYTES:
-            raise HTTPException(status_code=400, detail="Файл больше 15 МБ")
-        name = (upload.filename or "file").strip()[:300] or "file"
+        if target not in taken_by_folder:
+            taken_by_folder[target] = await _taken_names(session, target)
+        try:
+            raw_name = clean_name((upload.filename or "file").replace("\\", "/").rsplit("/", 1)[-1])
+        except HTTPException:
+            raw_name = "file"
+        name = unique_name(raw_name, taken_by_folder[target], is_file=True)
+        taken_by_folder[target].add(name.casefold())
         session.add(LegalHubDriveFileModel(
             id=str(uuid4()),
-            folder_id=parent,
+            folder_id=target,
             name=name,
             content_type=(upload.content_type or "application/octet-stream")[:120],
             size_bytes=len(content),
             content=content,
+            is_hidden=False,
             created_by_user_id=_user_id(user),
             created_at=now,
+            updated_at=now,
         ))
         stored += 1
-    if stored == 0:
+    if stored == 0 and not cache:
         raise HTTPException(status_code=400, detail="Выберите файл")
     await session.commit()
-    return await list_drive(parent, session, user)
+    return await _browse(session, user, parent, show_hidden=showHidden)
 
 
 @router.get("/drive/files/{file_id}")
@@ -264,7 +592,8 @@ async def download_drive_file(
     item = await session.get(LegalHubDriveFileModel, file_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Файл не найден")
-    await _require_level(session, user, item.folder_id, "read")
+    tree = await load_tree(session, user)
+    tree.require(item.folder_id, "read")
     return Response(
         content=item.content,
         media_type=item.content_type or "application/octet-stream",
@@ -272,20 +601,249 @@ async def download_drive_file(
     )
 
 
-@router.delete("/drive/files/{file_id}")
-async def delete_drive_file(
-    file_id: str,
+async def _rename_or_hide(
+    session: AsyncSession,
+    tree: DriveTree,
+    item: LegalHubDriveFolderModel | LegalHubDriveFileModel,
+    parent: str | None,
+    body: ItemPatchIn,
+) -> None:
+    tree.require(parent, "edit")
+    if body.name is not None:
+        name = clean_name(body.name)
+        if name != item.name:
+            if name.casefold() in await _taken_names(session, parent, exclude={item.id}):
+                raise HTTPException(status_code=409, detail=f"В этой папке уже есть элемент «{name}»")
+            item.name = name
+    if body.hidden is not None:
+        item.is_hidden = body.hidden
+    item.updated_at = _now()
+
+
+@router.patch("/drive/folders/{folder_id}")
+async def patch_folder(
+    folder_id: str,
+    body: ItemPatchIn,
+    showHidden: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    item = await session.get(LegalHubDriveFileModel, file_id)
+    """Rename and / or hide a folder."""
+    tree = await load_tree(session, user)
+    folder = tree.get(folder_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    parent = folder.parent_id
+    await _rename_or_hide(session, tree, folder, parent, body)
+    await session.commit()
+    return await _browse(session, user, parent, show_hidden=showHidden)
+
+
+@router.patch("/drive/files/{file_id}")
+async def patch_file(
+    file_id: str,
+    body: ItemPatchIn,
+    showHidden: bool = Query(default=False),
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Rename and / or hide a file."""
+    item = await session.get(LegalHubDriveFileModel, file_id, options=[defer(LegalHubDriveFileModel.content)])
     if item is None:
         raise HTTPException(status_code=404, detail="Файл не найден")
     parent = item.folder_id
-    await _require_level(session, user, parent, "edit")
-    await session.delete(item)
+    tree = await load_tree(session, user)
+    await _rename_or_hide(session, tree, item, parent, body)
     await session.commit()
-    return await list_drive(parent, session, user)
+    return await _browse(session, user, parent, show_hidden=showHidden)
+
+
+async def _selection(
+    session: AsyncSession,
+    tree: DriveTree,
+    body: SelectionIn,
+) -> tuple[list[LegalHubDriveFolderModel], list[LegalHubDriveFileModel]]:
+    folder_ids = list(dict.fromkeys(item for item in (_clean_id(raw) for raw in body.folderIds) if item))
+    file_ids = list(dict.fromkeys(item for item in (_clean_id(raw) for raw in body.fileIds) if item))
+    if not folder_ids and not file_ids:
+        raise HTTPException(status_code=400, detail="Ничего не выбрано")
+    folders: list[LegalHubDriveFolderModel] = []
+    for folder_id in folder_ids:
+        folder = tree.get(folder_id)
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Папка не найдена")
+        folders.append(folder)
+    files = list(await session.scalars(
+        select(LegalHubDriveFileModel)
+        .options(defer(LegalHubDriveFileModel.content))
+        .where(LegalHubDriveFileModel.id.in_(file_ids or [""]))
+    ))
+    if len(files) != len(file_ids):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    # Items inside a selected folder travel with it.
+    selected = {folder.id for folder in folders}
+    folders = [folder for folder in folders if not any(a.id in selected for a in tree.ancestors(folder.parent_id))]
+    files = [item for item in files if not any(a.id in selected for a in tree.ancestors(item.folder_id))]
+    return folders, files
+
+
+@router.post("/drive/move")
+async def move_items(
+    body: TransferIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Move folders / files into another folder (drag-and-drop, cut + paste)."""
+    tree = await load_tree(session, user)
+    target = _folder_in(tree, body.targetId)
+    tree.require(target, "edit")
+    folders, files = await _selection(session, tree, body)
+    taken = await _taken_names(session, target)
+    now = _now()
+    moved = 0
+    for folder in folders:
+        if folder.id == target or tree.is_within(target, folder.id):
+            raise HTTPException(status_code=400, detail=f"Нельзя переместить папку «{folder.name}» в саму себя")
+        tree.require(folder.parent_id, "edit")
+        tree.require(folder.id, "edit")
+        if folder.parent_id == target:
+            continue
+        folder.name = unique_name(folder.name, taken, is_file=False)
+        taken.add(folder.name.casefold())
+        folder.parent_id = target
+        folder.updated_at = now
+        moved += 1
+    for item in files:
+        tree.require(item.folder_id, "edit")
+        if item.folder_id == target:
+            continue
+        item.name = unique_name(item.name, taken, is_file=True)
+        taken.add(item.name.casefold())
+        item.folder_id = target
+        item.updated_at = now
+        moved += 1
+    await session.commit()
+    return {"moved": moved, "targetId": target}
+
+
+def _charge(budget: list[int], size: int) -> None:
+    budget[0] += size
+    if budget[0] > MAX_BULK_BYTES:
+        raise HTTPException(status_code=400, detail="Слишком большой объём (больше 300 МБ) — разделите на части")
+
+
+async def _copy_folder(
+    session: AsyncSession,
+    tree: DriveTree,
+    source: LegalHubDriveFolderModel,
+    target: str | None,
+    name: str,
+    user: dict,
+    now: datetime,
+    budget: list[int],
+) -> int:
+    copy = LegalHubDriveFolderModel(
+        id=str(uuid4()),
+        parent_id=target,
+        name=name,
+        is_hidden=source.is_hidden,
+        created_by_user_id=_user_id(user),
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(copy)
+    count = 1
+    files = list(await session.scalars(
+        select(LegalHubDriveFileModel).where(LegalHubDriveFileModel.folder_id == source.id)
+    ))
+    for item in files:
+        _charge(budget, item.size_bytes)
+        session.add(LegalHubDriveFileModel(
+            id=str(uuid4()),
+            folder_id=copy.id,
+            name=item.name,
+            content_type=item.content_type,
+            size_bytes=item.size_bytes,
+            content=item.content,
+            is_hidden=item.is_hidden,
+            created_by_user_id=_user_id(user),
+            created_at=now,
+            updated_at=now,
+        ))
+        count += 1
+    for child in list(tree.children.get(source.id, [])):
+        if tree.can(child.id, "read"):
+            count += await _copy_folder(session, tree, child, copy.id, child.name, user, now, budget)
+    return count
+
+
+@router.post("/drive/copy")
+async def copy_items(
+    body: TransferIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Copy folders (with everything inside) and files into a folder (copy + paste, Ctrl + drag)."""
+    tree = await load_tree(session, user)
+    target = _folder_in(tree, body.targetId)
+    tree.require(target, "edit")
+    folders, files = await _selection(session, tree, body)
+    taken = await _taken_names(session, target)
+    now = _now()
+    budget = [0]
+    copied = 0
+    for folder in folders:
+        tree.require(folder.id, "read")
+        if folder.id == target or tree.is_within(target, folder.id):
+            raise HTTPException(status_code=400, detail=f"Нельзя скопировать папку «{folder.name}» в её же подпапку")
+        name = unique_name(folder.name, taken, is_file=False)
+        taken.add(name.casefold())
+        copied += await _copy_folder(session, tree, folder, target, name, user, now, budget)
+    for meta in files:
+        tree.require(meta.folder_id, "read")
+        content = (await session.execute(
+            select(LegalHubDriveFileModel.content).where(LegalHubDriveFileModel.id == meta.id)
+        )).scalar_one()
+        _charge(budget, meta.size_bytes)
+        name = unique_name(meta.name, taken, is_file=True)
+        taken.add(name.casefold())
+        session.add(LegalHubDriveFileModel(
+            id=str(uuid4()),
+            folder_id=target,
+            name=name,
+            content_type=meta.content_type,
+            size_bytes=meta.size_bytes,
+            content=content,
+            is_hidden=False,
+            created_by_user_id=_user_id(user),
+            created_at=now,
+            updated_at=now,
+        ))
+        copied += 1
+    await session.commit()
+    return {"copied": copied, "targetId": target}
+
+
+@router.post("/drive/hide")
+async def hide_items(
+    body: HideIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Hide / show several items at once (Explorer «Hidden» attribute)."""
+    tree = await load_tree(session, user)
+    folders, files = await _selection(session, tree, body)
+    now = _now()
+    for folder in folders:
+        tree.require(folder.parent_id, "edit")
+        folder.is_hidden = body.hidden
+        folder.updated_at = now
+    for item in files:
+        tree.require(item.folder_id, "edit")
+        item.is_hidden = body.hidden
+        item.updated_at = now
+    await session.commit()
+    return {"updated": len(folders) + len(files)}
 
 
 async def _delete_folder_tree(session: AsyncSession, folder_id: str) -> None:
@@ -295,7 +853,9 @@ async def _delete_folder_tree(session: AsyncSession, folder_id: str) -> None:
     for child in children:
         await _delete_folder_tree(session, child.id)
     files = list(await session.scalars(
-        select(LegalHubDriveFileModel).where(LegalHubDriveFileModel.folder_id == folder_id)
+        select(LegalHubDriveFileModel)
+        .options(defer(LegalHubDriveFileModel.content))
+        .where(LegalHubDriveFileModel.folder_id == folder_id)
     ))
     for item in files:
         await session.delete(item)
@@ -309,20 +869,114 @@ async def _delete_folder_tree(session: AsyncSession, folder_id: str) -> None:
         await session.delete(folder)
 
 
+@router.post("/drive/delete")
+async def delete_items(
+    body: SelectionIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Delete several folders / files at once."""
+    tree = await load_tree(session, user)
+    folders, files = await _selection(session, tree, body)
+    for folder in folders:
+        tree.require(folder.id, "edit")
+    for item in files:
+        tree.require(item.folder_id, "edit")
+    for folder in folders:
+        await _delete_folder_tree(session, folder.id)
+    for item in files:
+        await session.delete(item)
+    await session.commit()
+    return {"deleted": len(folders) + len(files)}
+
+
+@router.post("/drive/zip")
+async def zip_items(
+    body: SelectionIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Download several items / whole folders as one ZIP archive (folder structure kept)."""
+    tree = await load_tree(session, user)
+    folders, files = await _selection(session, tree, body)
+    entries: list[tuple[str, str]] = []
+    for item in files:
+        tree.require(item.folder_id, "read")
+        entries.append((item.id, item.name))
+    for folder in folders:
+        tree.require(folder.id, "read")
+        skip = len(tree.ancestors(folder.parent_id))
+        for sub in [folder, *tree.walk(folder.id, show_hidden=True)]:
+            rel = "/".join(a.name for a in tree.ancestors(sub.id)[skip:])
+            rows = (await session.execute(
+                select(LegalHubDriveFileModel.id, LegalHubDriveFileModel.name)
+                .where(LegalHubDriveFileModel.folder_id == sub.id)
+            )).all()
+            if not rows:
+                entries.append(("", f"{rel}/"))
+            entries.extend((file_id, f"{rel}/{name}") for file_id, name in rows)
+    buffer = io.BytesIO()
+    budget = [0]
+    used: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for file_id, arcname in entries:
+            if not file_id:
+                archive.writestr(arcname, b"")
+                continue
+            row = (await session.execute(
+                select(LegalHubDriveFileModel.size_bytes, LegalHubDriveFileModel.content)
+                .where(LegalHubDriveFileModel.id == file_id)
+            )).first()
+            if row is None:
+                continue
+            _charge(budget, int(row[0] or 0))
+            name, n = arcname, 2
+            while name.casefold() in used:
+                stem, dot, ext = arcname.rpartition(".")
+                name = f"{stem} ({n}).{ext}" if dot else f"{arcname} ({n})"
+                n += 1
+            used.add(name.casefold())
+            archive.writestr(name, row[1])
+    title = folders[0].name if len(folders) == 1 and not files else "Диск"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(title)}.zip"},
+    )
+
+
+@router.delete("/drive/files/{file_id}")
+async def delete_drive_file(
+    file_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    item = await session.get(LegalHubDriveFileModel, file_id, options=[defer(LegalHubDriveFileModel.content)])
+    if item is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    parent = item.folder_id
+    tree = await load_tree(session, user)
+    tree.require(parent, "edit")
+    await session.delete(item)
+    await session.commit()
+    return await _browse(session, user, parent)
+
+
 @router.delete("/drive/folders/{folder_id}")
 async def delete_folder(
     folder_id: str,
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    folder = await _folder_or_404(session, folder_id)
+    tree = await load_tree(session, user)
+    folder = tree.get(folder_id)
     if folder is None:
         raise HTTPException(status_code=404, detail="Папка не найдена")
     parent = folder.parent_id
-    await _require_level(session, user, folder.id, "edit")
+    tree.require(folder.id, "edit")
     await _delete_folder_tree(session, folder.id)
     await session.commit()
-    return await list_drive(parent, session, user)
+    return await _browse(session, user, parent)
 
 
 @router.get("/drive/security")
@@ -331,10 +985,9 @@ async def get_drive_security(
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    folder = (folderId or "").strip() or None
-    if folder:
-        await _folder_or_404(session, folder)
-    await _require_level(session, user, folder, "manage")
+    tree = await load_tree(session, user)
+    folder = _folder_in(tree, folderId)
+    tree.require(folder, "manage")
     key = _acl_folder_id(folder)
     rows = list(await session.scalars(
         select(LegalHubDriveAclModel)
@@ -354,12 +1007,11 @@ async def set_drive_acl(
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    folder = (folderId or "").strip() or None
-    if folder:
-        await _folder_or_404(session, folder)
-    await _require_level(session, user, folder, "manage")
+    tree = await load_tree(session, user)
+    folder = _folder_in(tree, folderId)
+    tree.require(folder, "manage")
     key = _acl_folder_id(folder)
-    now = datetime.now(timezone.utc)
+    now = _now()
     row = await session.get(LegalHubDriveAclModel, (key, body.userId))
     if row is None:
         row = LegalHubDriveAclModel(
@@ -389,10 +1041,9 @@ async def remove_drive_acl(
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    folder = (folderId or "").strip() or None
-    if folder:
-        await _folder_or_404(session, folder)
-    await _require_level(session, user, folder, "manage")
+    tree = await load_tree(session, user)
+    folder = _folder_in(tree, folderId)
+    tree.require(folder, "manage")
     key = _acl_folder_id(folder)
     row = await session.get(LegalHubDriveAclModel, (key, user_id))
     if row is not None:

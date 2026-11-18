@@ -78,6 +78,24 @@ def _ensure_folder_columns(sync_conn) -> None:
         )
 
 
+def _ensure_drive_columns(sync_conn) -> None:
+    sqlite = sync_conn.dialect.name == "sqlite"
+    columns = {
+        "is_hidden": f"BOOLEAN NOT NULL DEFAULT {'0' if sqlite else 'FALSE'}",
+        "updated_at": "TIMESTAMP" if sqlite else "TIMESTAMP WITH TIME ZONE",
+    }
+    for table in ("legal_hub_drive_folders", "legal_hub_drive_files"):
+        if sqlite:
+            rows = sync_conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            present = {row[1] for row in rows}
+            for name, ddl in columns.items():
+                if rows and name not in present:
+                    sync_conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            continue
+        for name, ddl in columns.items():
+            sync_conn.exec_driver_sql(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS {name} {ddl}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
@@ -85,6 +103,7 @@ async def lifespan(_: FastAPI):
         await conn.run_sync(_ensure_task_columns)
         await conn.run_sync(_ensure_folder_columns)
         await conn.run_sync(_ensure_file_columns)
+        await conn.run_sync(_ensure_drive_columns)
     yield
 
 

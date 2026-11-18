@@ -41,8 +41,10 @@ class LegalHubDriveFolderModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class LegalHubDriveFileModel(Base):
@@ -54,8 +56,10 @@ class LegalHubDriveFileModel(Base):
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class LegalHubDriveAclModel(Base):
