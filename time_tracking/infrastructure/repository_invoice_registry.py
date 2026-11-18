@@ -25,17 +25,43 @@ def _str(v: Any) -> str:
     return str(v)
 
 
+# Placeholder initials of test / demo accounts: never shown as an invoice partner.
+_PLACEHOLDER_INITIALS = frozenset({"TEST", "TST", "DEMO", "?"})
+
+
+def _is_placeholder_initials(code: str) -> bool:
+    key = (code or "").strip().upper()
+    return not key or key in _PLACEHOLDER_INITIALS or key.startswith("TEST")
+
+
 def _initials_for_users(user_ids: list[int], initials_by_user: dict[int, str | None]) -> str:
     codes: list[str] = []
     seen: set[str] = set()
     for user_id in user_ids:
         raw = (initials_by_user.get(user_id) or "").strip()
         key = raw.upper()
-        if not key or key in seen:
+        if _is_placeholder_initials(key) or key in seen:
             continue
         seen.add(key)
         codes.append(raw)
     return ", ".join(codes)
+
+
+def _team_partner_ids(
+    worker_ids: list[int],
+    partner_by_worker: dict[int, int],
+    initials_by_user: dict[int, str | None],
+) -> list[int]:
+    """Team partners of the people who logged the invoice hours (a partner logging hours counts too)."""
+    partner_ids: list[int] = []
+    team_partners = set(partner_by_worker.values())
+    for worker_id in worker_ids:
+        partner_id = partner_by_worker.get(worker_id)
+        if partner_id is None and worker_id in initials_by_user and worker_id in team_partners:
+            partner_id = worker_id
+        if partner_id is not None and partner_id not in partner_ids:
+            partner_ids.append(partner_id)
+    return partner_ids
 
 
 def _registry_partner_codes(
@@ -44,16 +70,7 @@ def _registry_partner_codes(
     initials_by_user: dict[int, str | None],
 ) -> str:
     """Partner initials for the people who logged the invoice hours. Several partners stay listed."""
-    partner_ids: list[int] = []
-    for worker_id in worker_ids:
-        partner_id = partner_by_worker.get(worker_id)
-        if partner_id is None and worker_id in initials_by_user and any(
-            partner == worker_id for partner in partner_by_worker.values()
-        ):
-            partner_id = worker_id
-        if partner_id is not None:
-            partner_ids.append(partner_id)
-    return _initials_for_users(partner_ids, initials_by_user)
+    return _initials_for_users(_team_partner_ids(worker_ids, partner_by_worker, initials_by_user), initials_by_user)
 
 
 def registry_sheet_partner(
@@ -65,21 +82,34 @@ def registry_sheet_partner(
     partners_by_project: dict[str, list[int]],
     initials_by_user: dict[int, str | None],
 ) -> str:
-    """Hours and the invoice author first. If that is empty, partners of the invoice and report projects."""
-    partner = _registry_partner_codes(worker_ids, partner_by_worker, initials_by_user)
-    if not partner and creator_id > 0:
-        partner = _registry_partner_codes([creator_id], partner_by_worker, initials_by_user)
-    if partner:
-        return partner
-    ordered: list[int] = []
-    seen: set[int] = set()
+    """Partners who took part in the invoiced project.
+
+    1. Project partners whose team members logged the invoice hours.
+    2. Otherwise all partners of the invoice / report projects.
+    3. Otherwise team partners of the people who logged the hours, then of the invoice author.
+    Test accounts (placeholder initials like TEST) are never returned.
+    """
+    project_partners: list[int] = []
     for project_id in project_ids:
         for user_id in partners_by_project.get(project_id, []):
-            if user_id in seen:
-                continue
-            seen.add(user_id)
-            ordered.append(int(user_id))
-    return _initials_for_users(ordered, initials_by_user)
+            uid = int(user_id)
+            if uid not in project_partners:
+                project_partners.append(uid)
+
+    team_partners = _team_partner_ids(worker_ids, partner_by_worker, initials_by_user)
+    if project_partners:
+        involved = [uid for uid in project_partners if uid in team_partners or uid in worker_ids]
+        codes = _initials_for_users(involved, initials_by_user)
+        if codes:
+            return codes
+        codes = _initials_for_users(project_partners, initials_by_user)
+        if codes:
+            return codes
+
+    codes = _initials_for_users(team_partners, initials_by_user)
+    if not codes and creator_id > 0:
+        codes = _registry_partner_codes([creator_id], partner_by_worker, initials_by_user)
+    return codes
 
 
 def _seq_sort_key(seq: str) -> tuple[int, str]:
@@ -119,9 +149,11 @@ def _registry_partner_note(client_note: str, *, limit: int = 600) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _short_registry_details(internal_note: str, *, limit: int = 180) -> str:
-    """Внутреннее примечание счёта, одной строкой. Текст работ из отчёта сюда не попадает."""
-    text = " ".join((internal_note or "").split())
+def _short_registry_details(internal_note: str, *, limit: int = 4000) -> str:
+    """Внутреннее примечание счёта целиком (с переносами строк): ячейка реестра редактирует именно его,
+    поэтому обрезать или склеивать строки нельзя — иначе сохранение перезапишет полный текст огрызком.
+    Лимит — только защита от аномально длинного текста."""
+    text = (internal_note or "").replace("\r\n", "\n").strip()
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"

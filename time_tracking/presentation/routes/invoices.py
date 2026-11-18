@@ -385,6 +385,7 @@ async def patch_invoice_route(
         client_note=body.client_note,
         client_note_provided="client_note" in body.model_fields_set,
         internal_note=body.internal_note,
+        internal_note_provided="internal_note" in body.model_fields_set,
         tax_percent=body.tax_percent,
         tax2_percent=body.tax2_percent,
         discount_percent=body.discount_percent,

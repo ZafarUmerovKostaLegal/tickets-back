@@ -1528,6 +1528,7 @@ async def patch_invoice_draft(
     client_note: str | None = None,
     client_note_provided: bool = False,
     internal_note: str | None = None,
+    internal_note_provided: bool = False,
     tax_percent: Decimal | None = None,
     tax2_percent: Decimal | None = None,
     discount_percent: Decimal | None = None,
@@ -1540,12 +1541,15 @@ async def patch_invoice_draft(
     extra_fixed_fee_specified: bool = False,
 ) -> InvoiceModel:
     repo = InvoiceRepository(session)
+    # Older callers pass internal_note without the flag: a non-None value still means "set it".
+    internal_note_provided = internal_note_provided or internal_note is not None
+    # Notes (for the partner and internal) are bookkeeping, not invoice content: editable in any status,
+    # e.g. from the invoice registry for issued / paid invoices.
     only_partner_note = (
-        client_note_provided
+        (client_note_provided or internal_note_provided)
         and issue_date is None
         and due_date is None
         and invoice_number is None
-        and internal_note is None
         and tax_percent is None
         and tax2_percent is None
         and discount_percent is None
@@ -1563,7 +1567,6 @@ async def patch_invoice_draft(
             issue_date,
             due_date,
             invoice_number,
-            internal_note,
             tax_percent,
             tax2_percent,
             discount_percent,
@@ -1588,8 +1591,8 @@ async def patch_invoice_draft(
         inv.due_date = due_date
     if client_note_provided:
         inv.client_note = (client_note or "").strip() or None
-    if internal_note is not None:
-        inv.internal_note = internal_note
+    if internal_note_provided:
+        inv.internal_note = (internal_note or "").strip() or None
     if tax_percent is not None:
         inv.tax_percent = tax_percent
     if tax2_percent is not None:
