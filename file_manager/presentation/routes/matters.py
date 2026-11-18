@@ -29,7 +29,15 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
-from presentation.routes.mail import new_email_filing
+from presentation.routes.mail import FILING_KINDS, mail_target_folder, new_email_filing
+from presentation.versioning import (
+    backfill_fingerprints,
+    current_digest,
+    digest,
+    find_mail_document,
+    find_same_content,
+    set_fingerprint,
+)
 
 router = APIRouter(tags=["file-manager"])
 
@@ -316,20 +324,36 @@ async def upload_documents(
     mailFrom: str = Form(default="", max_length=320),
     mailSubject: str = Form(default="", max_length=2000),
     mailKind: str = Form(default="", max_length=16),
+    allowDuplicate: bool = Form(default=False),
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    """Upload into a matter folder; a file with the same name becomes a new version.
+    """Upload into a matter folder without piling up copies.
+
+    Per file the result is one of:
+    * ``created``   — a new document;
+    * ``version``   — same name in the folder (or the same thread) with new content → next version;
+    * ``unchanged`` — same name and identical content → nothing written;
+    * ``exists``    — this letter / attachment is already filed in the matter → nothing written;
+    * ``duplicate`` — identical content already lives in the matter under another name
+      (skipped unless ``allowDuplicate``).
 
     `mail*` fields come from the Outlook add-in: they record where the message was filed.
     """
     dirx, matter, _ = await require_matter(session, viewer, matter_id, "edit")
     folder = await folder_in_matter(session, matter.id, folderId)
+    is_mail = bool(mailMessageId.strip() or mailConversationId.strip())
+    kind = mailKind if mailKind in FILING_KINDS else "email"
+    if is_mail:
+        folder = await mail_target_folder(session, viewer, matter, folder)
+        if kind == "email":
+            # Letters filed before fingerprints existed are matched by their Message-ID header.
+            await backfill_fingerprints(session, matter.id, mail_only=True)
     folder_id = folder.id if folder else None
     limit = get_settings().max_file_bytes
     stamp = now()
     number = await next_doc_number(session)
-    saved: list[DocumentModel] = []
+    results: list[tuple[str, DocumentModel]] = []
     for upload in files:
         content = await upload.read()
         if not content:
@@ -338,24 +362,44 @@ async def upload_documents(
             raise HTTPException(status_code=400, detail=f"Файл больше {limit // (1024 * 1024)} МБ")
         name = safe_name(upload.filename)
         content_type = (upload.content_type or "application/octet-stream")[:120]
-        query = select(DocumentModel).where(
-            DocumentModel.matter_id == matter.id,
-            DocumentModel.deleted_at.is_(None),
-            func.lower(DocumentModel.name) == name.lower(),
-        )
-        query = query.where(DocumentModel.folder_id.is_(None) if folder_id is None else DocumentModel.folder_id == folder_id)
-        existing = await session.scalar(query.limit(1))
+        sha = digest(content)
+
+        existing: DocumentModel | None = None
+        if is_mail:
+            existing = await find_mail_document(session, matter.id, kind=kind, message_id=mailMessageId,
+                                                conversation_id=mailConversationId, name=name)
+            if existing is not None and kind != "thread":
+                results.append(("exists", existing))
+                continue
+        if existing is None:
+            query = select(DocumentModel).where(
+                DocumentModel.matter_id == matter.id,
+                DocumentModel.deleted_at.is_(None),
+                func.lower(DocumentModel.name) == name.lower(),
+            )
+            query = query.where(DocumentModel.folder_id.is_(None) if folder_id is None else DocumentModel.folder_id == folder_id)
+            existing = await session.scalar(query.limit(1))
+
         if existing is not None:
             ensure_not_locked(existing, viewer)
+            if await current_digest(session, existing) == sha:
+                results.append(("unchanged", existing))
+                continue
             existing.current_version += 1
             existing.size_bytes = len(content)
             existing.content_type = content_type
             existing.updated_at = stamp
             existing.updated_by_name = viewer.name
             doc = existing
+            status = "version"
             audit(session, viewer, "version", matter=matter, kind="document", target_id=doc.id,
                   target_name=doc.name, detail=f"v{doc.current_version}")
         else:
+            if not is_mail and not allowDuplicate:
+                twin = await find_same_content(session, matter.id, sha)
+                if twin is not None:
+                    results.append(("duplicate", twin))
+                    continue
             doc = DocumentModel(
                 id=str(uuid4()),
                 doc_number=number,
@@ -374,6 +418,7 @@ async def upload_documents(
             )
             number += 1
             session.add(doc)
+            status = "created"
             audit(session, viewer, "upload", matter=matter, kind="document", target_id=doc.id, target_name=name)
         session.add(VersionModel(
             id=str(uuid4()),
@@ -388,11 +433,18 @@ async def upload_documents(
             created_by_name=viewer.name,
             created_at=stamp,
         ))
-        saved.append(doc)
-    if not saved:
+        await set_fingerprint(session, doc, content, name=name)
+        results.append((status, doc))
+    if not results:
         raise HTTPException(status_code=400, detail="Выберите файл")
-    if mailMessageId.strip() or mailConversationId.strip():
-        for doc in saved:
+    if is_mail:
+        subject = " ".join(mailSubject.split())[:500]
+        for status, doc in results:
+            if status != "created":
+                continue
+            # The subject is what people look for — keep it as the document description.
+            if subject and not (doc.description or "").strip():
+                doc.description = subject
             session.add(new_email_filing(
                 viewer,
                 doc,
@@ -400,11 +452,15 @@ async def upload_documents(
                 conversation_id=mailConversationId,
                 from_email=mailFrom,
                 subject=mailSubject,
-                kind=mailKind,
+                kind=kind,
                 stamp=stamp,
             ))
     await session.commit()
-    return {"documents": [doc_out(doc, dirx) for doc in saved]}
+    out = [(status, doc_out(doc, dirx)) for status, doc in results]
+    return {
+        "documents": [doc for _, doc in out],
+        "results": [{"status": status, "document": doc} for status, doc in out],
+    }
 
 
 @router.get("/matters/{matter_id}/level")

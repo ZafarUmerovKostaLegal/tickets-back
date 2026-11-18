@@ -5,16 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.access import has_level
+from application.access import has_level, safe_name
 from infrastructure.database import get_session
-from infrastructure.models import DocumentModel, EmailFilingModel, FolderModel
-from presentation.common import crumbs, directory, iso, levels, matter_closed, now
+from infrastructure.models import DocumentModel, EmailFilingModel, FolderModel, VersionModel
+from presentation.common import audit, crumbs, directory, folder_in_matter, iso, levels, matter_closed, now, require_matter
 from presentation.deps import Viewer, get_viewer
+from presentation.versioning import subject_from_eml
 
 router = APIRouter(tags=["file-manager"])
 
@@ -45,6 +46,65 @@ def normalize_email(raw: str | None) -> str:
 
 def email_domain(email: str) -> str:
     return email.rsplit("@", 1)[1] if "@" in email else ""
+
+
+MAIL_EXTENSIONS = (".eml", ".msg")
+_EMAILS_FOLDER = "emails"
+_CORRESPONDENCE_FOLDER = "correspondence"
+
+
+def is_mail_document(name: str) -> bool:
+    return (name or "").lower().endswith(MAIL_EXTENSIONS)
+
+
+def is_emails_folder(folder: FolderModel | None, parent: FolderModel | None) -> bool:
+    """`Correspondence/Emails` of the FM template: mail filed there is sorted by the person who filed it."""
+    return (
+        folder is not None
+        and folder.name.strip().lower() == _EMAILS_FOLDER
+        and parent is not None
+        and parent.name.strip().lower() == _CORRESPONDENCE_FOLDER
+    )
+
+
+def person_folder_name(name: str | None) -> str:
+    return safe_name(name, "Без имени").strip(" .")[:120] or "Без имени"
+
+
+async def ensure_child_folder(session: AsyncSession, viewer: Viewer, matter, parent: FolderModel, name: str) -> FolderModel:
+    """Find (case-insensitive) or create a live subfolder of `parent`."""
+    existing = await session.scalar(select(FolderModel).where(
+        FolderModel.matter_id == parent.matter_id,
+        FolderModel.parent_id == parent.id,
+        FolderModel.deleted_at.is_(None),
+        func.lower(FolderModel.name) == name.lower(),
+    ).limit(1))
+    if existing is not None:
+        return existing
+    folder = FolderModel(
+        id=str(uuid4()),
+        matter_id=parent.matter_id,
+        client_id=parent.client_id,
+        parent_id=parent.id,
+        name=name,
+        created_by_user_id=viewer.user_id,
+        created_at=now(),
+    )
+    session.add(folder)
+    await session.flush()
+    audit(session, viewer, "folder_create", matter=matter, kind="folder", target_id=folder.id, target_name=name,
+          detail="auto: correspondence by person")
+    return folder
+
+
+async def mail_target_folder(session: AsyncSession, viewer: Viewer, matter, folder: FolderModel | None) -> FolderModel | None:
+    """Mail filed into Correspondence/Emails goes to Correspondence/Emails/<who filed it>."""
+    if folder is None or folder.parent_id is None:
+        return folder
+    parent = await session.get(FolderModel, folder.parent_id)
+    if not is_emails_folder(folder, parent if parent and parent.deleted_at is None else None):
+        return folder
+    return await ensure_child_folder(session, viewer, matter, folder, person_folder_name(viewer.name))
 
 
 def new_email_filing(
@@ -227,3 +287,78 @@ async def filing_suggestions(
     for row in ranked:
         row.pop("_rank")
     return {"locations": ranked[:limit]}
+
+
+class OrganizeIn(BaseModel):
+    folderId: str = Field(min_length=1, max_length=36)
+
+
+@router.post("/matters/{matter_id}/mail/organize")
+async def organize_mail_folder(
+    matter_id: str,
+    body: OrganizeIn,
+    session: AsyncSession = Depends(get_session),
+    viewer: Viewer = Depends(get_viewer),
+):
+    """
+    Sort letters lying loose in a folder into `<folder>/<who filed it>` subfolders and fill
+    the missing descriptions with the e-mail subject (for letters filed before this existed).
+    """
+    _, matter, _ = await require_matter(session, viewer, matter_id, "edit")
+    folder = await folder_in_matter(session, matter.id, body.folderId)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    docs = [
+        doc for doc in await session.scalars(select(DocumentModel).where(
+            DocumentModel.matter_id == matter.id,
+            DocumentModel.folder_id == folder.id,
+            DocumentModel.deleted_at.is_(None),
+        ).limit(2000))
+        if is_mail_document(doc.name)
+    ]
+    if not docs:
+        return {"moved": 0, "folders": [], "subjects": 0}
+    filers = dict((await session.execute(
+        select(EmailFilingModel.document_id, EmailFilingModel.filed_by_name)
+        .where(EmailFilingModel.document_id.in_([doc.id for doc in docs]))
+        .order_by(EmailFilingModel.filed_at.asc())
+    )).all())
+
+    stamp = now()
+    subjects = 0
+    moved = 0
+    created: dict[str, FolderModel] = {}
+    moved_to: list[tuple[str, str]] = []
+    for doc in docs:
+        if not (doc.description or "").strip() and doc.name.lower().endswith(".eml"):
+            content = await session.scalar(select(VersionModel.content).where(
+                VersionModel.document_id == doc.id, VersionModel.version == doc.current_version,
+            ).limit(1))
+            subject = subject_from_eml(content or b"")
+            if subject:
+                doc.description = subject
+                subjects += 1
+        person = person_folder_name(filers.get(doc.id) or doc.created_by_name)
+        target = created.get(person.lower())
+        if target is None:
+            target = await ensure_child_folder(session, viewer, matter, folder, person)
+            created[person.lower()] = target
+        clash = await session.scalar(select(DocumentModel.id).where(
+            DocumentModel.folder_id == target.id,
+            DocumentModel.deleted_at.is_(None),
+            func.lower(DocumentModel.name) == doc.name.lower(),
+        ).limit(1))
+        if clash:
+            continue
+        doc.folder_id = target.id
+        doc.updated_at = stamp
+        moved_to.append((doc.id, target.id))
+        moved += 1
+    for doc_id, target_id in moved_to:
+        await session.execute(
+            update(EmailFilingModel).where(EmailFilingModel.document_id == doc_id).values(folder_id=target_id)
+        )
+    audit(session, viewer, "mail_organize", matter=matter, kind="folder", target_id=folder.id,
+          target_name=folder.name, detail=f"moved {moved}, subjects {subjects}")
+    await session.commit()
+    return {"moved": moved, "folders": sorted(target.name for target in created.values()), "subjects": subjects}

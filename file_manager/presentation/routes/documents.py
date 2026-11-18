@@ -28,6 +28,7 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
+from presentation.versioning import current_digest, digest, set_fingerprint
 
 router = APIRouter(tags=["file-manager"])
 
@@ -222,7 +223,9 @@ async def checkin_document(
         limit = get_settings().max_file_bytes
         if len(content) > limit:
             raise HTTPException(status_code=400, detail=f"Файл больше {limit // (1024 * 1024)} МБ")
-        if content:
+        if content and await current_digest(session, doc) == digest(content):
+            detail = "без изменений (тот же файл)"
+        elif content:
             doc.current_version += 1
             doc.size_bytes = len(content)
             doc.content_type = (file.content_type or doc.content_type)[:120]
@@ -239,6 +242,7 @@ async def checkin_document(
                 created_by_name=viewer.name,
                 created_at=stamp,
             ))
+            await set_fingerprint(session, doc, content, name=safe_name(file.filename, doc.name))
             detail = f"v{doc.current_version}"
     _release(doc)
     doc.updated_at = stamp
@@ -307,6 +311,7 @@ async def restore_version(
         created_by_name=viewer.name,
         created_at=stamp,
     ))
+    await set_fingerprint(session, doc, source.content, name=source.name)
     audit(session, viewer, "version", matter=matter, kind="document", target_id=doc.id,
           target_name=doc.name, detail=f"v{version} → v{doc.current_version}")
     await session.commit()

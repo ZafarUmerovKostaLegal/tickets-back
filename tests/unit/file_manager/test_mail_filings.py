@@ -46,10 +46,10 @@ def _emails_folder(client, matter_id):
     return next(f["id"] for f in folders if f["name"] == "Emails")
 
 
-def _file(client, matter_id, folder_id, name, **mail):
+def _file(client, matter_id, folder_id, name, content=None, **mail):
     data = {"folderId": folder_id, **mail}
     response = client.post(f"{BASE}/matters/{matter_id}/documents", data=data,
-                           files={"files": (name, b"mime", "message/rfc822")})
+                           files={"files": (name, content or name.encode(), "message/rfc822")})
     assert response.status_code == 201, response.text
     return response.json()["documents"][0]
 
@@ -65,7 +65,8 @@ def test_lookup_finds_where_message_was_filed(env):
     row = found[0]
     assert row["documentId"] == doc["id"] and row["sameMessage"] is True
     assert row["matterName"] == "Acme v. Beta" and row["clientName"] == "Acme LLC"
-    assert [c["name"] for c in row["folderPath"]] == ["Correspondence", "Emails"]
+    # Mail filed into Correspondence/Emails lands in the filer's own subfolder.
+    assert [c["name"] for c in row["folderPath"]] == ["Correspondence", "Emails", "Partner P"]
 
     thread = client.post(f"{BASE}/mail/lookup", json={"messageIds": ["other@x"], "conversationId": "conv-1"}).json()
     assert thread["filings"][0]["sameMessage"] is False
@@ -106,3 +107,48 @@ def test_suggestions_skip_deleted_folders(env):
     _file(client, "m1", folder, "1.eml", mailMessageId="1@x", mailFrom="ivan@acme.com")
     assert client.delete(f"{BASE}/folders/{folder}").status_code == 200
     assert client.get(f"{BASE}/mail/suggestions", params={"fromEmail": "ivan@acme.com"}).json()["locations"] == []
+
+
+def test_mail_into_emails_goes_to_person_folder_with_subject(env):
+    client, state, Viewer = env
+    emails = _emails_folder(client, "m1")
+    doc = _file(client, "m1", emails, "a.eml", mailMessageId="1@x", mailFrom="ivan@acme.com", mailSubject="  SPA   final ")
+    folders = client.get(f"{BASE}/matters/m1/browse").json()["folders"]
+    person = next(f for f in folders if f["id"] == doc["folderId"])
+    assert person["name"] == "Partner P" and person["parentId"] == emails
+    assert doc["description"] == "SPA final"
+
+    state["viewer"] = Viewer(3, "Lawyer Two", True, False, "Bearer z")
+    other = _file(client, "m1", emails, "b.eml", mailMessageId="2@x", mailSubject="Hello")
+    assert other["folderId"] != doc["folderId"]
+
+    # A specific folder chosen by the user is respected.
+    agreements = next(f["id"] for f in folders if f["name"] == "Agreements")
+    kept = _file(client, "m1", agreements, "c.eml", mailMessageId="3@x")
+    assert kept["folderId"] == agreements
+
+    # Plain uploads into Emails are not rerouted.
+    plain = _file(client, "m1", emails, "manual.docx")
+    assert plain["folderId"] == emails
+
+
+def test_organize_sorts_old_letters_and_reads_subjects(env):
+    client, _, _ = env
+    emails = _emails_folder(client, "m1")
+    eml = b"From: a@acme.com\r\nSubject: =?UTF-8?B?0J/RgNC40LLQtdGC?= deal\r\n\r\nbody"
+    client.post(f"{BASE}/matters/m1/documents", data={"folderId": emails},
+                files={"files": ("2026-11-03_01_old.eml", eml, "message/rfc822")})
+    client.post(f"{BASE}/matters/m1/documents", data={"folderId": emails},
+                files={"files": ("notes.docx", b"x", "application/octet-stream")})
+
+    result = client.post(f"{BASE}/matters/m1/mail/organize", json={"folderId": emails}).json()
+    assert result == {"moved": 1, "folders": ["Partner P"], "subjects": 1}
+
+    browse = client.get(f"{BASE}/matters/m1/browse", params={"folderId": emails}).json()
+    assert [d["name"] for d in browse["documents"]] == ["notes.docx"]
+    person = next(f["id"] for f in browse["folders"] if f["name"] == "Partner P")
+    moved = client.get(f"{BASE}/matters/m1/browse", params={"folderId": person}).json()["documents"]
+    assert moved[0]["description"] == "Привет deal"
+
+    again = client.post(f"{BASE}/matters/m1/mail/organize", json={"folderId": emails}).json()
+    assert again["moved"] == 0

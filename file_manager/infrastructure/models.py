@@ -161,3 +161,15 @@ class EmailFilingModel(Base):
     filed_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     filed_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     filed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class DocumentFingerprintModel(Base):
+    """Hash (and e-mail Message-ID) of a document's current version: finds duplicates and unchanged re-uploads."""
+
+    __tablename__ = "fm_doc_fingerprints"
+
+    document_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    message_id: Mapped[str] = mapped_column(String(500), nullable=False, default="", index=True)
