@@ -623,6 +623,7 @@ def _file_response(item: LegalHubDriveFileModel, *, inline: bool = False) -> Res
 async def drive_file_link(
     file_id: str,
     inline: bool = Query(default=False),
+    entry: int | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
@@ -632,8 +633,10 @@ async def drive_file_link(
         raise HTTPException(status_code=404, detail="Файл не найден")
     tree = await load_tree(session, user)
     tree.require(item.folder_id, "read")
-    token = sign_link(blobs.link_secret(), {"f": item.id, "i": 1 if inline else 0, "u": _user_id(user),
-                                            "exp": int(time.time()) + LINK_TTL_SECONDS})
+    payload = {"f": item.id, "i": 1 if inline else 0, "u": _user_id(user), "exp": int(time.time()) + LINK_TTL_SECONDS}
+    if entry is not None:
+        payload["e"] = entry
+    token = sign_link(blobs.link_secret(), payload)
     return {"url": f"/api/v1/legal-hub/drive/dl/{token}", "expiresIn": LINK_TTL_SECONDS}
 
 
@@ -643,6 +646,9 @@ async def drive_signed_download(token: str, session: AsyncSession = Depends(get_
     item = await session.get(LegalHubDriveFileModel, str(payload.get("f", "")))
     if item is None:
         raise HTTPException(status_code=404, detail="Файл не найден")
+    if payload.get("e") is not None:
+        from presentation.routes.drive_preview import entry_response, opener
+        return await entry_response(opener(item), int(payload["e"]), inline=bool(payload.get("i")))
     return _file_response(item, inline=bool(payload.get("i")))
 
 

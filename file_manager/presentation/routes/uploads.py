@@ -28,7 +28,6 @@ from presentation.intake import blob_in_use, file_into_matter
 
 router = APIRouter(tags=["uploads"])
 
-# Several devices may upload at once: cap unfinished uploads per person and per server.
 MAX_ACTIVE_PER_USER = 6
 MAX_ACTIVE_TOTAL = 60
 

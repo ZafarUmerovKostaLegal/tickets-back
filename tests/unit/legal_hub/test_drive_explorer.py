@@ -24,11 +24,13 @@ def drive():
     from presentation.deps import require_user
     from presentation.routes.drive import router
     from presentation.routes.drive_uploads import router as uploads_router
+    from presentation.routes.drive_preview import router as preview_router
 
     current = {"user": ADMIN}
     loop = asyncio.new_event_loop()
     app = FastAPI()
     app.include_router(uploads_router, prefix="/api/v1/legal-hub")
+    app.include_router(preview_router, prefix="/api/v1/legal-hub")
     app.include_router(router, prefix="/api/v1/legal-hub")
     app.dependency_overrides[require_user] = lambda: current["user"]
 
@@ -238,3 +240,25 @@ def test_upload_limits_size_space_and_parallel_devices(drive, monkeypatch):
     for index in range(uploads.MAX_ACTIVE_PER_USER):
         drive.ok("POST", "/uploads", json={"name": f"p{index}.bin", "size": 10})
     assert drive.call("POST", "/uploads", json={"name": "more.bin", "size": 10}).status_code == 429
+
+
+def test_archive_and_email_previews_on_disk(drive):
+    from email.message import EmailMessage
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("Docs/a.txt", "alpha")
+    message = EmailMessage()
+    message["Subject"] = "Hello"
+    message.set_content("Body")
+    message.add_attachment(b"xyz", maintype="text", subtype="plain", filename="n.txt")
+    listing = drive.upload(None, ("pack.zip", buffer.getvalue()), ("mail.eml", bytes(message)))
+    ids = {item["name"]: item["id"] for item in listing["files"]}
+    entries = drive.ok("GET", f"/files/{ids['pack.zip']}/archive")["entries"]
+    assert [entry["path"] for entry in entries] == ["Docs/a.txt"]
+    assert drive.call("GET", f"/files/{ids['pack.zip']}/archive/0").content == b"alpha"
+    token = drive.ok("POST", f"/files/{ids['pack.zip']}/link", params={"inline": True, "entry": 0})["url"].rsplit("/", 1)[-1]
+    assert drive.call("GET", f"/dl/{token}").content == b"alpha"
+    mail = drive.ok("GET", f"/files/{ids['mail.eml']}/email")
+    assert mail["subject"] == "Hello" and mail["attachments"][0]["name"] == "n.txt"
+    assert drive.call("GET", f"/files/{ids['mail.eml']}/email/0").content == b"xyz"

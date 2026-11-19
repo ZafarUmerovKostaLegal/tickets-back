@@ -8,6 +8,7 @@ from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models as _models  # noqa: F401
 from presentation.routes.board import router as board_router
 from presentation.routes.drive import router as drive_router
+from presentation.routes.drive_preview import router as drive_preview_router
 from presentation.routes.drive_uploads import purge_stale_drive_uploads, router as drive_uploads_router
 from presentation.routes.tasks import router as tasks_router
 from presentation.routes.teams import router as teams_router
@@ -139,6 +140,7 @@ app.add_middleware(
 app.include_router(board_router, prefix="/api/v1/legal-hub")
 app.include_router(tasks_router, prefix="/api/v1/legal-hub")
 app.include_router(drive_uploads_router, prefix="/api/v1/legal-hub")
+app.include_router(drive_preview_router, prefix="/api/v1/legal-hub")
 app.include_router(drive_router, prefix="/api/v1/legal-hub")
 app.include_router(teams_router, prefix="/api/v1/legal-hub")
 

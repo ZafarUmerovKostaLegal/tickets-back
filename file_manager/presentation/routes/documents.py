@@ -176,6 +176,7 @@ async def document_link(
     document_id: str,
     version: int | None = Query(default=None, ge=1),
     inline: bool = Query(default=False),
+    entry: int | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
@@ -191,10 +192,13 @@ async def document_link(
         raise HTTPException(status_code=404, detail="Версия не найдена")
     if not inline:
         audit(session, viewer, "download", matter=matter, kind="document", target_id=doc.id,
-              target_name=doc.name, detail=f"v{wanted}")
+              target_name=doc.name, detail=f"v{wanted}" + (f" #{entry}" if entry is not None else ""))
         await session.commit()
-    token = _sign({"d": doc.id, "v": wanted, "i": 1 if inline else 0, "u": viewer.user_id,
-                   "exp": int(time.time()) + LINK_TTL_SECONDS})
+    payload = {"d": doc.id, "v": wanted, "i": 1 if inline else 0, "u": viewer.user_id,
+               "exp": int(time.time()) + LINK_TTL_SECONDS}
+    if entry is not None:
+        payload["e"] = entry
+    token = _sign(payload)
     return {"url": f"/api/v1/files/dl/{token}", "expiresIn": LINK_TTL_SECONDS}
 
 
@@ -207,6 +211,9 @@ async def signed_download(token: str, session: AsyncSession = Depends(get_sessio
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Версия не найдена")
+    if payload.get("e") is not None:
+        from presentation.routes.preview import entry_response, opener
+        return await entry_response(opener(row), int(payload["e"]), inline=bool(payload.get("i")))
     disposition = "inline" if payload.get("i") else "attachment"
     headers = {
         "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(doc.name)}",

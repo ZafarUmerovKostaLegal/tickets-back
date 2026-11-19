@@ -14,6 +14,7 @@ from presentation.routes.library import router as library_router
 from presentation.routes.duplicates import router as duplicates_router
 from presentation.routes.mail import router as mail_router
 from presentation.routes.matters import router as matters_router
+from presentation.routes.preview import router as preview_router
 from presentation.routes.uploads import purge_stale_uploads, router as uploads_router
 
 API_PREFIX = "/api/v1/files"
@@ -64,6 +65,7 @@ app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(mail_router, prefix=API_PREFIX)
 app.include_router(duplicates_router, prefix=API_PREFIX)
 app.include_router(uploads_router, prefix=API_PREFIX)
+app.include_router(preview_router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["health"])
