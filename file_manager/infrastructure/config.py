@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FILE_MANAGER_BLOB_DIR", "blob_dir"),
     )
     max_upload_bytes: int = Field(
-        default=20 * 1024 * 1024 * 1024,
+        default=2 * 1024 * 1024 * 1024,
         validation_alias=AliasChoices("FILE_MANAGER_MAX_UPLOAD_BYTES", "max_upload_bytes"),
     )
     upload_chunk_bytes: int = Field(

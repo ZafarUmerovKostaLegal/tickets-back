@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     smtp_user: str = Field(default="", validation_alias=AliasChoices("LEGAL_HUB_SMTP_USER", "EXPENSE_SMTP_USER", "SMTP_USER"))
     smtp_password: str = Field(default="", validation_alias=AliasChoices("LEGAL_HUB_SMTP_PASSWORD", "EXPENSE_SMTP_PASSWORD", "SMTP_PASSWORD"))
     smtp_use_tls: bool = Field(default=True, validation_alias=AliasChoices("LEGAL_HUB_SMTP_USE_TLS", "EXPENSE_SMTP_USE_TLS", "SMTP_USE_TLS"))
+    # Disk (File Manager → Диск): files live on disk, large ones arrive in resumable chunks.
+    drive_blob_dir: str = Field(default="./data/drive-blobs", validation_alias=AliasChoices("LEGAL_HUB_DRIVE_BLOB_DIR", "drive_blob_dir"))
+    drive_max_upload_bytes: int = Field(default=2 * 1024 * 1024 * 1024, validation_alias=AliasChoices("LEGAL_HUB_DRIVE_MAX_UPLOAD_BYTES", "drive_max_upload_bytes"))
+    drive_upload_chunk_bytes: int = Field(default=8 * 1024 * 1024, validation_alias=AliasChoices("LEGAL_HUB_DRIVE_UPLOAD_CHUNK_BYTES", "drive_upload_chunk_bytes"))
+    drive_disk_reserve_bytes: int = Field(default=2 * 1024 * 1024 * 1024, validation_alias=AliasChoices("LEGAL_HUB_DRIVE_DISK_RESERVE_BYTES", "drive_disk_reserve_bytes"))
+    drive_upload_ttl_hours: int = Field(default=48, validation_alias=AliasChoices("LEGAL_HUB_DRIVE_UPLOAD_TTL_HOURS", "drive_upload_ttl_hours"))
     mail_from: str = Field(default="", validation_alias=AliasChoices("LEGAL_HUB_MAIL_FROM", "EXPENSE_MAIL_FROM", "SMTP_FROM"))
 
     @field_validator("auth_service_url", mode="before")

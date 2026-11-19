@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response as FastAPIResponse
 
 from infrastructure.config import get_settings
 from infrastructure.upstream_auth_context import merge_upstream_headers
+from presentation.routes.stream_proxy import stream_proxy
 
 router = APIRouter(prefix="/api/v1/legal-hub", tags=["legal_hub"])
 
@@ -88,6 +89,9 @@ async def proxy_legal_hub(request: Request, path: str):
     if query:
         upstream_url = f"{upstream_url}?{query}"
     headers = merge_upstream_headers(_request_headers_for_upstream(request))
+    if path.startswith("drive/"):
+        # Disk files up to 2 GB: stream both ways instead of buffering in gateway memory.
+        return await stream_proxy(request, upstream_url, headers, lambda exc: _legal_hub_upstream_503(base, exc))
     body = await request.body()
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

@@ -4,10 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend_common.cors_origins import resolve_cors_origins
 
-from infrastructure.database import Base, engine
+from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models as _models  # noqa: F401
 from presentation.routes.board import router as board_router
 from presentation.routes.drive import router as drive_router
+from presentation.routes.drive_uploads import purge_stale_drive_uploads, router as drive_uploads_router
 from presentation.routes.tasks import router as tasks_router
 from presentation.routes.teams import router as teams_router
 
@@ -95,6 +96,15 @@ def _ensure_drive_columns(sync_conn) -> None:
             continue
         for name, ddl in columns.items():
             sync_conn.exec_driver_sql(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS {name} {ddl}")
+    # Large files on disk: blob reference, sizes past 2 GB.
+    if sqlite:
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(legal_hub_drive_files)").fetchall()
+        if rows and "blob_sha" not in {row[1] for row in rows}:
+            sync_conn.exec_driver_sql("ALTER TABLE legal_hub_drive_files ADD COLUMN blob_sha VARCHAR(64)")
+    else:
+        sync_conn.exec_driver_sql("ALTER TABLE IF EXISTS legal_hub_drive_files ADD COLUMN IF NOT EXISTS blob_sha VARCHAR(64)")
+        sync_conn.exec_driver_sql("ALTER TABLE IF EXISTS legal_hub_drive_files ALTER COLUMN size_bytes TYPE BIGINT")
+    sync_conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_legal_hub_drive_files_blob_sha ON legal_hub_drive_files (blob_sha)")
 
 
 @asynccontextmanager
@@ -105,6 +115,8 @@ async def lifespan(_: FastAPI):
         await conn.run_sync(_ensure_folder_columns)
         await conn.run_sync(_ensure_file_columns)
         await conn.run_sync(_ensure_drive_columns)
+    async with async_session_factory() as session:
+        await purge_stale_drive_uploads(session)
     yield
 
 
@@ -126,6 +138,7 @@ app.add_middleware(
 )
 app.include_router(board_router, prefix="/api/v1/legal-hub")
 app.include_router(tasks_router, prefix="/api/v1/legal-hub")
+app.include_router(drive_uploads_router, prefix="/api/v1/legal-hub")
 app.include_router(drive_router, prefix="/api/v1/legal-hub")
 app.include_router(teams_router, prefix="/api/v1/legal-hub")
 

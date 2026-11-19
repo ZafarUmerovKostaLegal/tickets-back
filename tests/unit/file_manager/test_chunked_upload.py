@@ -74,8 +74,20 @@ def test_cancel_and_size_limits(env, monkeypatch):
 
     import infrastructure.blobs as blobs
     monkeypatch.setattr(blobs, "free_bytes", lambda: 1024)
-    full = client.post(f"{BASE}/matters/m1/uploads", json={"name": "huge.bin", "size": 5 * 1024 ** 3, "folderId": folder})
+    too_big = client.post(f"{BASE}/matters/m1/uploads", json={"name": "huge.bin", "size": 5 * 1024 ** 3, "folderId": folder})
+    assert too_big.status_code == 413 and "2.0 ГБ" in too_big.json()["detail"]
+    full = client.post(f"{BASE}/matters/m1/uploads", json={"name": "big.bin", "size": 1536 * 1024 ** 2, "folderId": folder})
     assert full.status_code == 507 and "места" in full.json()["detail"]
+
+
+def test_parallel_uploads_from_many_devices_are_capped(env):
+    client, _, _ = env
+    import presentation.routes.uploads as uploads
+    folder = _folder(client, "Agreements")
+    for index in range(uploads.MAX_ACTIVE_PER_USER):
+        _start(client, folder, f"part{index}.bin", 10)
+    busy = client.post(f"{BASE}/matters/m1/uploads", json={"name": "one-more.bin", "size": 10, "folderId": folder})
+    assert busy.status_code == 429 and busy.headers.get("retry-after")
 
 
 def test_signed_link_downloads_without_session_and_expires(env, monkeypatch):

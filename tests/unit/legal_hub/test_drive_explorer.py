@@ -23,10 +23,12 @@ def drive():
     from infrastructure import models  # noqa: F401
     from presentation.deps import require_user
     from presentation.routes.drive import router
+    from presentation.routes.drive_uploads import router as uploads_router
 
     current = {"user": ADMIN}
     loop = asyncio.new_event_loop()
     app = FastAPI()
+    app.include_router(uploads_router, prefix="/api/v1/legal-hub")
     app.include_router(router, prefix="/api/v1/legal-hub")
     app.dependency_overrides[require_user] = lambda: current["user"]
 
@@ -177,3 +179,62 @@ def test_unique_name_and_path_helpers():
     assert unique_name("Папка", {"папка", "папка (2)"}, is_file=False) == "Папка (3)"
     assert unique_name(".env", {".env"}, is_file=True) == ".env (2)"
     assert split_path(" A / B\\C ") == ["A", "B", "C"]
+
+
+def _chunked(drive, parent, name, payload, path="", chunk=40_000):
+    session = drive.ok("POST", "/uploads", json={"name": name, "size": len(payload), "parentId": parent, "path": path})
+    offset = 0
+    while offset < len(payload):
+        offset = drive.ok("PUT", f"/uploads/{session['id']}", params={"offset": offset}, content=payload[offset:offset + chunk])["received"]
+    return drive.ok("POST", f"/uploads/{session['id']}/complete")
+
+
+def test_large_files_upload_in_chunks_into_folders_and_stream_back(drive):
+    payload = os.urandom(150_000)
+    root = drive.folder("Projects")
+    done = _chunked(drive, root, "Video.mp4", payload, path="Shoot/Day 1/Video.mp4")
+    assert done["file"]["sizeBytes"] == len(payload)
+    shoot = next(f for f in drive.ok("GET", "", params={"parentId": root})["folders"] if f["name"] == "Shoot")
+    assert shoot["id"]
+    file_id = done["file"]["id"]
+    assert drive.call("GET", f"/files/{file_id}").content == payload
+    link = drive.ok("POST", f"/files/{file_id}/link")["url"]
+    token = link.rsplit("/", 1)[-1]
+    part = drive.call("GET", f"/dl/{token}", headers={"Range": "bytes=5-14"})
+    assert part.status_code == 206 and part.content == payload[5:15]
+    # Same name again → «(2)», resend of a chunk is harmless, a gap tells where to continue.
+    session = drive.ok("POST", "/uploads", json={"name": "Video.mp4", "size": 10, "parentId": done["file"]["folderId"]})
+    assert drive.call("PUT", f"/uploads/{session['id']}", params={"offset": 5}, content=b"x").status_code == 409
+    drive.ok("PUT", f"/uploads/{session['id']}", params={"offset": 0}, content=b"0123456789")
+    drive.ok("PUT", f"/uploads/{session['id']}", params={"offset": 0}, content=b"0123456789")
+    assert drive.ok("POST", f"/uploads/{session['id']}/complete")["file"]["name"] == "Video (2).mp4"
+
+
+def test_copies_share_the_stored_file_and_delete_frees_disk_last(drive):
+    from infrastructure import blobs
+    import hashlib
+
+    payload = os.urandom(60_000)
+    a = drive.folder("A")
+    b = drive.folder("B")
+    done = _chunked(drive, a, "big.bin", payload)
+    drive.ok("POST", "/copy", json={"fileIds": [done["file"]["id"]], "folderIds": [], "targetId": b})
+    stored = blobs.store.blob_path(hashlib.sha256(payload).hexdigest())
+    drive.ok("POST", "/delete", json={"fileIds": [], "folderIds": [a]})
+    assert stored.exists()  # the copy in B still uses it
+    drive.ok("POST", "/delete", json={"fileIds": [], "folderIds": [b]})
+    assert not stored.exists()
+
+
+def test_upload_limits_size_space_and_parallel_devices(drive, monkeypatch):
+    from infrastructure import blobs
+    import presentation.routes.drive_uploads as uploads
+
+    assert drive.call("POST", "/uploads", json={"name": "x.iso", "size": 3 * 1024 ** 3}).status_code == 413
+    monkeypatch.setattr(blobs.store, "free_bytes", lambda: 1024)
+    full = drive.call("POST", "/uploads", json={"name": "x.iso", "size": 1024 ** 3})
+    assert full.status_code == 507 and "места" in full.json()["detail"]
+    monkeypatch.undo()
+    for index in range(uploads.MAX_ACTIVE_PER_USER):
+        drive.ok("POST", "/uploads", json={"name": f"p{index}.bin", "size": 10})
+    assert drive.call("POST", "/uploads", json={"name": "more.bin", "size": 10}).status_code == 429

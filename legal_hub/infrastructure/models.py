@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, JSON, LargeBinary, String, Text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.database import Base
@@ -54,8 +54,10 @@ class LegalHubDriveFileModel(Base):
     folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Legacy files keep bytes here; new ones store b"" and point to the on-disk blob (infrastructure/blobs.py).
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    blob_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -332,3 +334,20 @@ class LegalHubTempAccessModel(Base):
     granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubDriveUploadModel(Base):
+    """A large Disk upload arriving in chunks (resumable); removed when completed, cancelled or abandoned."""
+
+    __tablename__ = "legal_hub_drive_uploads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    rel_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    received_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

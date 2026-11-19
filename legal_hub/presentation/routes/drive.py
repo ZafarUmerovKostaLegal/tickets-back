@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import time
 import re
 import zipfile
 from collections import defaultdict
@@ -9,18 +10,24 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
+from starlette.concurrency import run_in_threadpool
 
+from backend_common.blob_store import read_link, sign_link
+
+from infrastructure import blobs
 from infrastructure.database import get_session
 from infrastructure.models import LegalHubDriveAclModel, LegalHubDriveFileModel, LegalHubDriveFolderModel
 from presentation.deps import require_user
 
 router = APIRouter(tags=["legal-hub"])
-MAX_FILE_BYTES = 15 * 1024 * 1024
+# One request carries files up to this size; bigger ones go through /drive/uploads (chunked, up to 2 GB).
+MAX_FILE_BYTES = 40 * 1024 * 1024
+LINK_TTL_SECONDS = 300
 MAX_BULK_BYTES = 300 * 1024 * 1024
 MAX_BATCH = 500
 SEARCH_LIMIT = 300
@@ -549,7 +556,7 @@ async def upload_files(
     for index, upload in enumerate(files):
         content = await upload.read()
         if len(content) > MAX_FILE_BYTES:
-            raise HTTPException(status_code=400, detail=f"Файл «{upload.filename}» больше 15 МБ")
+            raise HTTPException(status_code=413, detail=f"Файл «{upload.filename}» больше 40 МБ — он будет загружен частями")
         relative = (paths[index] if paths and index < len(paths) else "") or ""
         segments = [part for part in re.split(r"[\\/]+", relative) if part.strip()]
         folder_parts = [clean_name(part) for part in segments[:-1]]
@@ -570,7 +577,8 @@ async def upload_files(
             name=name,
             content_type=(upload.content_type or "application/octet-stream")[:120],
             size_bytes=len(content),
-            content=content,
+            content=b"",
+            blob_sha=await run_in_threadpool(blobs.store.put_bytes, content),
             is_hidden=False,
             created_by_user_id=_user_id(user),
             created_at=now,
@@ -594,11 +602,56 @@ async def download_drive_file(
         raise HTTPException(status_code=404, detail="Файл не найден")
     tree = await load_tree(session, user)
     tree.require(item.folder_id, "read")
-    return Response(
-        content=item.content,
-        media_type=item.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(item.name)}"},
-    )
+    return _file_response(item)
+
+
+def _file_response(item: LegalHubDriveFileModel, *, inline: bool = False) -> Response:
+    headers = {
+        "Content-Disposition": f"{'inline' if inline else 'attachment'}; filename*=UTF-8''{quote(item.name)}",
+        "Cache-Control": "private, no-store",
+    }
+    media = item.content_type or "application/octet-stream"
+    if item.blob_sha:
+        path = blobs.store.blob_path(item.blob_sha)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
+        return FileResponse(path, media_type=media, headers=headers)  # streamed, Range supported
+    return Response(content=item.content, media_type=media, headers=headers)
+
+
+@router.post("/drive/files/{file_id}/link")
+async def drive_file_link(
+    file_id: str,
+    inline: bool = Query(default=False),
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Short-lived signed URL: the browser downloads big files itself (to disk, resumable)."""
+    item = await session.get(LegalHubDriveFileModel, file_id, options=[defer(LegalHubDriveFileModel.content)])
+    if item is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    tree = await load_tree(session, user)
+    tree.require(item.folder_id, "read")
+    token = sign_link(blobs.link_secret(), {"f": item.id, "i": 1 if inline else 0, "u": _user_id(user),
+                                            "exp": int(time.time()) + LINK_TTL_SECONDS})
+    return {"url": f"/api/v1/legal-hub/drive/dl/{token}", "expiresIn": LINK_TTL_SECONDS}
+
+
+@router.get("/drive/dl/{token}")
+async def drive_signed_download(token: str, session: AsyncSession = Depends(get_session)):
+    payload = read_link(blobs.link_secret(), token)
+    item = await session.get(LegalHubDriveFileModel, str(payload.get("f", "")))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return _file_response(item, inline=bool(payload.get("i")))
+
+
+async def gc_blobs(session: AsyncSession, shas: set[str]) -> None:
+    """Remove files from disk that no Disk entry points to any more (after the delete is committed)."""
+    for sha in shas:
+        used = await session.scalar(select(LegalHubDriveFileModel.id).where(LegalHubDriveFileModel.blob_sha == sha).limit(1))
+        if used is None:
+            await run_in_threadpool(blobs.store.remove, sha)
 
 
 async def _rename_or_hide(
@@ -757,7 +810,8 @@ async def _copy_folder(
         select(LegalHubDriveFileModel).where(LegalHubDriveFileModel.folder_id == source.id)
     ))
     for item in files:
-        _charge(budget, item.size_bytes)
+        if not item.blob_sha:
+            _charge(budget, item.size_bytes)
         session.add(LegalHubDriveFileModel(
             id=str(uuid4()),
             folder_id=copy.id,
@@ -765,6 +819,7 @@ async def _copy_folder(
             content_type=item.content_type,
             size_bytes=item.size_bytes,
             content=item.content,
+            blob_sha=item.blob_sha,
             is_hidden=item.is_hidden,
             created_by_user_id=_user_id(user),
             created_at=now,
@@ -801,10 +856,11 @@ async def copy_items(
         copied += await _copy_folder(session, tree, folder, target, name, user, now, budget)
     for meta in files:
         tree.require(meta.folder_id, "read")
-        content = (await session.execute(
-            select(LegalHubDriveFileModel.content).where(LegalHubDriveFileModel.id == meta.id)
-        )).scalar_one()
-        _charge(budget, meta.size_bytes)
+        content, blob_sha = (await session.execute(
+            select(LegalHubDriveFileModel.content, LegalHubDriveFileModel.blob_sha).where(LegalHubDriveFileModel.id == meta.id)
+        )).one()
+        if not blob_sha:
+            _charge(budget, meta.size_bytes)
         name = unique_name(meta.name, taken, is_file=True)
         taken.add(name.casefold())
         session.add(LegalHubDriveFileModel(
@@ -814,6 +870,7 @@ async def copy_items(
             content_type=meta.content_type,
             size_bytes=meta.size_bytes,
             content=content,
+            blob_sha=blob_sha,
             is_hidden=False,
             created_by_user_id=_user_id(user),
             created_at=now,
@@ -846,18 +903,20 @@ async def hide_items(
     return {"updated": len(folders) + len(files)}
 
 
-async def _delete_folder_tree(session: AsyncSession, folder_id: str) -> None:
+async def _delete_folder_tree(session: AsyncSession, folder_id: str, shas: set[str] | None = None) -> None:
     children = list(await session.scalars(
         select(LegalHubDriveFolderModel).where(LegalHubDriveFolderModel.parent_id == folder_id)
     ))
     for child in children:
-        await _delete_folder_tree(session, child.id)
+        await _delete_folder_tree(session, child.id, shas)
     files = list(await session.scalars(
         select(LegalHubDriveFileModel)
         .options(defer(LegalHubDriveFileModel.content))
         .where(LegalHubDriveFileModel.folder_id == folder_id)
     ))
     for item in files:
+        if shas is not None and item.blob_sha:
+            shas.add(item.blob_sha)
         await session.delete(item)
     acls = list(await session.scalars(
         select(LegalHubDriveAclModel).where(LegalHubDriveAclModel.folder_id == folder_id)
@@ -882,11 +941,15 @@ async def delete_items(
         tree.require(folder.id, "edit")
     for item in files:
         tree.require(item.folder_id, "edit")
+    shas: set[str] = set()
     for folder in folders:
-        await _delete_folder_tree(session, folder.id)
+        await _delete_folder_tree(session, folder.id, shas)
     for item in files:
+        if item.blob_sha:
+            shas.add(item.blob_sha)
         await session.delete(item)
     await session.commit()
+    await gc_blobs(session, shas)
     return {"deleted": len(folders) + len(files)}
 
 
@@ -924,7 +987,7 @@ async def zip_items(
                 archive.writestr(arcname, b"")
                 continue
             row = (await session.execute(
-                select(LegalHubDriveFileModel.size_bytes, LegalHubDriveFileModel.content)
+                select(LegalHubDriveFileModel.size_bytes, LegalHubDriveFileModel.content, LegalHubDriveFileModel.blob_sha)
                 .where(LegalHubDriveFileModel.id == file_id)
             )).first()
             if row is None:
@@ -936,7 +999,10 @@ async def zip_items(
                 name = f"{stem} ({n}).{ext}" if dot else f"{arcname} ({n})"
                 n += 1
             used.add(name.casefold())
-            archive.writestr(name, row[1])
+            if row[2]:
+                await run_in_threadpool(archive.write, blobs.store.blob_path(row[2]), name)
+            else:
+                archive.writestr(name, row[1])
     title = folders[0].name if len(folders) == 1 and not files else "Диск"
     return Response(
         content=buffer.getvalue(),
@@ -957,8 +1023,11 @@ async def delete_drive_file(
     parent = item.folder_id
     tree = await load_tree(session, user)
     tree.require(parent, "edit")
+    sha = item.blob_sha
     await session.delete(item)
     await session.commit()
+    if sha:
+        await gc_blobs(session, {sha})
     return await _browse(session, user, parent)
 
 
@@ -974,8 +1043,10 @@ async def delete_folder(
         raise HTTPException(status_code=404, detail="Папка не найдена")
     parent = folder.parent_id
     tree.require(folder.id, "edit")
-    await _delete_folder_tree(session, folder.id)
+    shas: set[str] = set()
+    await _delete_folder_tree(session, folder.id, shas)
     await session.commit()
+    await gc_blobs(session, shas)
     return await _browse(session, user, parent)
 
 

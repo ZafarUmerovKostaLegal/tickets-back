@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -27,6 +27,10 @@ from presentation.deps import Viewer, get_viewer
 from presentation.intake import blob_in_use, file_into_matter
 
 router = APIRouter(tags=["uploads"])
+
+# Several devices may upload at once: cap unfinished uploads per person and per server.
+MAX_ACTIVE_PER_USER = 6
+MAX_ACTIVE_TOTAL = 60
 
 
 class UploadInit(BaseModel):
@@ -89,11 +93,22 @@ async def start_upload(
     if body.size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"Файл больше {_gb(settings.max_upload_bytes)}")
     await purge_stale_uploads(session)
-    free = await run_in_threadpool(blobs.free_bytes)
-    if free - settings.disk_reserve_bytes < body.size:
+    mine = await session.scalar(select(func.count()).select_from(UploadSessionModel).where(UploadSessionModel.user_id == viewer.user_id)) or 0
+    if mine >= MAX_ACTIVE_PER_USER:
+        raise HTTPException(status_code=429, detail="Уже идёт несколько загрузок — новая начнётся, когда освободится место",
+                            headers={"Retry-After": "10"})
+    total, pending = (await session.execute(select(
+        func.count(), func.coalesce(func.sum(UploadSessionModel.size_bytes - UploadSessionModel.received_bytes), 0),
+    ).select_from(UploadSessionModel))).one()
+    if total >= MAX_ACTIVE_TOTAL:
+        raise HTTPException(status_code=429, detail="Сервер сейчас принимает много файлов — загрузка начнётся автоматически",
+                            headers={"Retry-After": "15"})
+    # Space already promised to unfinished uploads (other devices) counts as used.
+    free = await run_in_threadpool(blobs.free_bytes) - settings.disk_reserve_bytes - int(pending or 0)
+    if free < body.size:
         raise HTTPException(
             status_code=507,
-            detail=f"На сервере не хватает места: свободно {_gb(max(0, free - settings.disk_reserve_bytes))}, "
+            detail=f"На сервере не хватает места: свободно {_gb(max(0, free))}, "
                    f"нужно {_gb(body.size)}. Обратитесь к администратору.",
         )
     stamp = now()
@@ -141,6 +156,11 @@ async def upload_chunk(
     viewer: Viewer = Depends(get_viewer),
 ):
     row = await _own(session, viewer, upload_id)
+    async with blobs.gate.slot("write"):
+        return await _write_chunk(session, row, request, offset)
+
+
+async def _write_chunk(session: AsyncSession, row: UploadSessionModel, request: Request, offset: int) -> dict:
     limit = get_settings().upload_chunk_bytes * 2
     data = bytearray()
     async for part in request.stream():
@@ -176,7 +196,8 @@ async def complete_upload(
     folder = await folder_in_matter(session, matter.id, row.folder_id)
     target = await live_document(session, row.document_id) if row.document_id else None
     # Hash + move into the store (seconds for gigabytes; runs off the event loop).
-    sha, size = await run_in_threadpool(blobs.adopt, blobs.part_path(row.id))
+    async with blobs.gate.slot("finish"):
+        sha, size = await run_in_threadpool(blobs.adopt, blobs.part_path(row.id))
     head = await run_in_threadpool(blobs.read_head, sha)
     counter = {"next": await next_doc_number(session)}
 
