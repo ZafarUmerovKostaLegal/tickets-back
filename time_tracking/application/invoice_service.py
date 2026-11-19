@@ -1507,7 +1507,8 @@ async def _load_expense_rows_for_project(
     return {eid: by_id[eid] for eid in expense_ids if eid in by_id}
 
 
-MAX_DOCUMENT_OVERRIDES_JSON_BYTES = 512 * 1024
+# Whole edited document (cover, invoice, every time-report sheet, combined report) — large matters go past 512 KB.
+MAX_DOCUMENT_OVERRIDES_JSON_BYTES = 4 * 1024 * 1024
 
 
 def _serialize_document_overrides(raw: dict[str, Any] | None) -> str | None:
