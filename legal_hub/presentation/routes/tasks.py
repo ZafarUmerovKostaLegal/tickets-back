@@ -419,6 +419,24 @@ async def get_task(
     return payload
 
 
+FLOW_COLUMNS = frozenset({"associate", "partner", "done"})
+FLOW_STATUSES = frozenset({"associate", "partner"})
+FLOW_ONLY = "На проверку и в «Утверждено» задача переводится через действия «На проверку» и «Принять работу»"
+
+
+def _ensure_free_move(row: LegalHubTaskModel, data: dict) -> None:
+    """A plain PATCH may move a card between free columns only; review and approval go through /action
+    (reviewer, comment, notification and history are recorded there)."""
+    column = data.get("boardColumn")
+    if column in FLOW_COLUMNS and column != (row.board_column or ""):
+        raise HTTPException(status_code=409, detail=FLOW_ONLY)
+    status = data.get("status")
+    if status in FLOW_STATUSES and status != row.status:
+        raise HTTPException(status_code=409, detail=FLOW_ONLY)
+    if data.get("approval") and not row.approval:
+        raise HTTPException(status_code=409, detail=FLOW_ONLY)
+
+
 @router.patch("/tasks/{task_id}")
 async def patch_task(
     task_id: str,
@@ -431,6 +449,7 @@ async def patch_task(
         raise HTTPException(status_code=404, detail="Задача не найдена")
     await _ensure_task_access(session, user, row)
     data = body.model_dump(exclude_unset=True)
+    _ensure_free_move(row, data)
     scope = None
     if data.get("assigneeUserId") is not None:
         scope = await _ensure_teammate(session, user, data["assigneeUserId"], "Исполнитель")

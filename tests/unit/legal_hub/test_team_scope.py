@@ -163,6 +163,19 @@ def test_review_workflow_take_submit_return_approve_reassign(hub):
     assert (moved["assigneeUserId"], moved["status"]) == (12, "todo")
 
 
+def test_board_drag_cannot_skip_review(hub):
+    task = hub.as_user(PARTNER).task("Lease memo", assigneeUserId=11)
+    lawyer = hub.as_user(LAWYER)
+    # Free columns move freely (drag and drop on the board).
+    assert lawyer.ok("PATCH", f"/tasks/{task['id']}", json={"boardColumn": "waitClient", "status": "wait"})["boardColumn"] == "waitClient"
+    # Review and approval only through the workflow actions.
+    for patch in ({"boardColumn": "done", "approval": True}, {"boardColumn": "associate"}, {"status": "partner"}, {"approval": True}):
+        assert lawyer.call("PATCH", f"/tasks/{task['id']}", json=patch).status_code == 409, patch
+    # Saving the same column again (e.g. other fields of a task already in review) is fine.
+    lawyer.ok("POST", f"/tasks/{task['id']}/action", json={"action": "submit", "userId": 10})
+    assert lawyer.call("PATCH", f"/tasks/{task['id']}", json={"boardColumn": "partner", "title": "Lease memo v2"}).status_code < 300
+
+
 def test_project_map_and_stats(hub):
     hub.as_user(PARTNER)
     late = (date.today() - timedelta(days=2)).isoformat()
