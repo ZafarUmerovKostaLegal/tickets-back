@@ -189,7 +189,7 @@ def convert_expense_amount(
     invoice_currency: str,
     fallback_date: date,
 ) -> FxConversion:
-    """Convert expense amount into invoice currency by **expense date** (not issue date).
+    """Convert expense amount into invoice currency — **the fact first**: the recorded USD amount of the expense.
 
     Expenses are stored in UZS. If the invoice/project currency is UZS, the UZS
     amount is copied as-is (no FX). Otherwise UZS → invoice ccy via CBU/fx book
@@ -202,6 +202,18 @@ def convert_expense_amount(
         fallback_date,
     )
     uzs = _d(row.get("amount_uzs", row.get("amountUzs", 0)) or 0)
+    usd_fact = _d(row.get("equivalent_amount", row.get("equivalentAmount", 0)) or 0)
+    # The expense as actually paid: its recorded USD amount (registry «Сумма, USD», rate fixed at payment).
+    # Recomputing UZS by the CBU rate of the expense date gives another number than the registry shows.
+    if inv_ccy == "USD" and Decimal(0) < usd_fact < Decimal(1_000_000):
+        src = _money4(usd_fact)
+        return FxConversion(
+            source_amount=_money4(uzs) if uzs > 0 else src,
+            source_currency="UZS" if uzs > 0 else "USD",
+            target_currency="USD",
+            fx_rate=(_money4(uzs / usd_fact) if uzs > 0 else Decimal(1)),
+            converted_amount=src,
+        )
     if uzs > 0:
         if inv_ccy == "UZS":
             src = _money4(uzs)

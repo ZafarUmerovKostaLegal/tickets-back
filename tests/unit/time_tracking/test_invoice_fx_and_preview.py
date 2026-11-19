@@ -113,7 +113,22 @@ def test_convert_expense_amount_usd_invoice_from_uzs():
     assert conv.source_currency == "UZS"
     assert conv.source_amount == Decimal("12360000.0000")
     assert conv.target_currency == "USD"
-    assert conv.converted_amount == Decimal("1037.7456")
+    # The expense as recorded (registry USD amount), not UZS re-converted by the CBU rate.
+    assert conv.converted_amount == Decimal("1037.8100")
+
+
+def test_convert_expense_amount_uses_the_recorded_usd_and_uzs_facts():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_fx import FxRateBook, convert_expense_amount
+
+    book = FxRateBook()
+    book.add("USD", "UZS", date(2026, 10, 29), Decimal("12000"))
+    book.add("EUR", "UZS", date(2026, 10, 29), Decimal("13000"))
+    row = {"amount_uzs": 20478398, "equivalent_amount": 1705.96, "expense_date": "2026-10-29"}
+    assert convert_expense_amount(book, row, "USD", date(2026, 11, 19)).converted_amount == Decimal("1705.9600")
+    assert convert_expense_amount(book, row, "UZS", date(2026, 11, 19)).converted_amount == Decimal("20478398.0000")
+    eur = convert_expense_amount(book, row, "EUR", date(2026, 11, 19))
+    assert eur.source_currency == "UZS" and abs(eur.converted_amount - Decimal("1575.20")) < Decimal("0.01")
 
 
 def test_convert_expense_amount_falls_back_to_usd_equivalent():
