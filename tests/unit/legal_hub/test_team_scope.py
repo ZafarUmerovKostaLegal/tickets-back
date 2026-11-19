@@ -126,6 +126,8 @@ def test_temporary_member_joins_the_team_until_the_date(hub):
     teams = hub.as_user(GUEST).ok("GET", "/teams")["teams"]
     assert [(t["id"], t["viaTemp"]) for t in teams] == [("team-a", True)]
     assert hub.ok("GET", f"/tasks/{task['id']}")["title"] == "DD memo"
+    card = next(t for t in hub.ok("GET", "/tasks?view=team")["items"] if t["id"] == task["id"])
+    assert (card["commentCount"], card["fileCount"], card["checkTotal"], card["checkDone"]) == (0, 0, 0, 0)
     assert hub.as_user(LAWYER).call("PATCH", f"/tasks/{task['id']}", json={"assigneeUserId": 30}).status_code == 200
     assert 30 in hub.ok("GET", "/teams")["mates"]
 

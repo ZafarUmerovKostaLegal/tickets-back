@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.task_mail import notify_assignee
@@ -264,7 +264,31 @@ async def list_tasks(
         rows = await scoped_tasks(session, await scope_or_503(session, user), include_archived=True)
     else:
         rows = _visible(await _all_tasks(session), _user_id(user), view)
-    return {"items": [_payload(row) for row in rows]}
+    counts = await _card_counts(session, [row.id for row in rows])
+    return {"items": [{**_payload(row), **counts.get(row.id, {})} for row in rows]}
+
+
+async def _card_counts(session: AsyncSession, ids: list[str]) -> dict[str, dict]:
+    """Badges for board cards: comments, files and checklist progress (one grouped query each)."""
+    if not ids:
+        return {}
+    out: dict[str, dict] = {task_id: {"commentCount": 0, "fileCount": 0, "checkTotal": 0, "checkDone": 0} for task_id in ids}
+    for model, key in ((LegalHubTaskCommentModel, "commentCount"), (LegalHubTaskFileModel, "fileCount")):
+        rows = await session.execute(
+            select(model.task_id, func.count()).where(model.task_id.in_(ids)).group_by(model.task_id)
+        )
+        for task_id, count in rows:
+            out[task_id][key] = int(count)
+    rows = await session.execute(
+        select(LegalHubTaskCheckModel.task_id, LegalHubTaskCheckModel.done, func.count())
+        .where(LegalHubTaskCheckModel.task_id.in_(ids))
+        .group_by(LegalHubTaskCheckModel.task_id, LegalHubTaskCheckModel.done)
+    )
+    for task_id, done, count in rows:
+        out[task_id]["checkTotal"] += int(count)
+        if done:
+            out[task_id]["checkDone"] += int(count)
+    return out
 
 
 @router.post("/tasks", status_code=201)
