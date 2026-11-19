@@ -9,6 +9,7 @@ from infrastructure import models as _models  # noqa: F401
 from presentation.routes.board import router as board_router
 from presentation.routes.drive import router as drive_router
 from presentation.routes.tasks import router as tasks_router
+from presentation.routes.teams import router as teams_router
 
 
 def _ensure_task_columns(sync_conn) -> None:
@@ -126,6 +127,7 @@ app.add_middleware(
 app.include_router(board_router, prefix="/api/v1/legal-hub")
 app.include_router(tasks_router, prefix="/api/v1/legal-hub")
 app.include_router(drive_router, prefix="/api/v1/legal-hub")
+app.include_router(teams_router, prefix="/api/v1/legal-hub")
 
 
 @app.get("/health", tags=["health"])

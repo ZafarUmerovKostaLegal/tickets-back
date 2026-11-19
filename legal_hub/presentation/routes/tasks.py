@@ -23,7 +23,9 @@ from infrastructure.models import (
     LegalHubTaskFileModel,
     LegalHubTaskModel,
 )
+from application.teams import TeamScope
 from presentation.deps import require_user
+from presentation.routes.teams import in_scope, scope_or_503, scoped_tasks
 
 router = APIRouter(tags=["legal-hub"])
 
@@ -171,6 +173,28 @@ def _payload(row: LegalHubTaskModel) -> dict:
     }
 
 
+def _involved(row: LegalHubTaskModel, uid: int) -> bool:
+    return uid in {row.assignee_user_id, row.reviewer_user_id or 0, row.created_by_user_id}
+
+
+async def _ensure_task_access(session: AsyncSession, user: dict, row: LegalHubTaskModel) -> None:
+    """Own tasks always; others only inside the viewer's teams (404, not 403: do not leak existence)."""
+    if _involved(row, _user_id(user)):
+        return
+    if not in_scope(row, await scope_or_503(session, user)):
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+
+async def _ensure_teammate(session: AsyncSession, user: dict, target: int | None, label: str, scope: TeamScope | None = None) -> TeamScope | None:
+    """Tasks are assigned strictly inside the team, whatever the role of the person."""
+    if target is None or target == _user_id(user):
+        return scope
+    scope = scope or await scope_or_503(session, user)
+    if target not in scope.mates:
+        raise HTTPException(status_code=403, detail=f"{label} должен быть из вашей команды")
+    return scope
+
+
 async def _all_tasks(session: AsyncSession) -> list[LegalHubTaskModel]:
     rows = await session.scalars(
         select(LegalHubTaskModel).order_by(LegalHubTaskModel.updated_at.desc(), LegalHubTaskModel.id.desc())
@@ -197,19 +221,23 @@ async def task_summary(
 ):
     uid = _user_id(user)
     rows = await _all_tasks(session)
+    try:
+        team = len(await scoped_tasks(session, await scope_or_503(session, user)))
+    except HTTPException:
+        team = 0
     return {
         "mine": len(_visible(rows, uid, "mine")),
         "review": len(_visible(rows, uid, "review")),
-        "team": len(rows),
+        "team": team,
     }
 
 
 @router.get("/team")
 async def team_workload(
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
-    rows = await _all_tasks(session)
+    rows = await scoped_tasks(session, await scope_or_503(session, user))
     grouped: dict[int, Counter[str]] = {}
     for row in rows:
         grouped.setdefault(row.assignee_user_id, Counter())[row.status] += 1
@@ -232,7 +260,10 @@ async def list_tasks(
 ):
     if view not in TASK_VIEWS:
         raise HTTPException(status_code=400, detail="Неизвестный раздел")
-    rows = _visible(await _all_tasks(session), _user_id(user), view)
+    if view == "team":
+        rows = await scoped_tasks(session, await scope_or_503(session, user), include_archived=True)
+    else:
+        rows = _visible(await _all_tasks(session), _user_id(user), view)
     return {"items": [_payload(row) for row in rows]}
 
 
@@ -247,6 +278,8 @@ async def create_task(
     uid = _user_id(user)
     assignee = _positive_user(body.assigneeUserId, "исполнитель") or uid
     reviewer = _positive_user(body.reviewerUserId, "проверяющий")
+    scope = await _ensure_teammate(session, user, assignee, "Исполнитель")
+    await _ensure_teammate(session, user, reviewer, "Проверяющий", scope)
     now = datetime.now(timezone.utc)
     row = LegalHubTaskModel(
         id=str(uuid4()),
@@ -371,12 +404,19 @@ async def _detail(session: AsyncSession, row: LegalHubTaskModel) -> dict:
 async def get_task(
     task_id: str,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
     row = await session.get(LegalHubTaskModel, task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    return await _detail(session, row)
+    await _ensure_task_access(session, user, row)
+    payload = await _detail(session, row)
+    uid = _user_id(user)
+    lead = False
+    if not _involved(row, uid):
+        lead = any(team.partner_id == uid for team in (await scope_or_503(session, user)).teams)
+    payload["actions"] = allowed_actions(row, uid, lead)
+    return payload
 
 
 @router.patch("/tasks/{task_id}")
@@ -389,7 +429,13 @@ async def patch_task(
     row = await session.get(LegalHubTaskModel, task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    await _ensure_task_access(session, user, row)
     data = body.model_dump(exclude_unset=True)
+    scope = None
+    if data.get("assigneeUserId") is not None:
+        scope = await _ensure_teammate(session, user, data["assigneeUserId"], "Исполнитель")
+    if data.get("reviewerUserId") is not None and not body.clearReviewer:
+        await _ensure_teammate(session, user, data["reviewerUserId"], "Проверяющий", scope)
     before = (
         row.internal_on.isoformat() if row.internal_on else None,
         row.review_on.isoformat() if row.review_on else None,
@@ -494,10 +540,11 @@ async def patch_task(
 MAX_FILE_BYTES = 15 * 1024 * 1024
 
 
-async def _task_or_404(session: AsyncSession, task_id: str) -> LegalHubTaskModel:
+async def _task_or_404(session: AsyncSession, task_id: str, user: dict) -> LegalHubTaskModel:
     row = await session.get(LegalHubTaskModel, task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    await _ensure_task_access(session, user, row)
     return row
 
 
@@ -510,7 +557,7 @@ async def add_comment(
 ):
     if not body.text:
         raise HTTPException(status_code=400, detail="Напишите сообщение")
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     now = datetime.now(timezone.utc)
     comment = LegalHubTaskCommentModel(
         id=str(uuid4()),
@@ -558,7 +605,7 @@ async def add_files(
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     linked_check = (check_id or "").strip() or None
     linked_comment = (comment_id or "").strip() or None
     if linked_check is not None:
@@ -611,8 +658,9 @@ async def download_file(
     task_id: str,
     file_id: str,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
+    await _task_or_404(session, task_id, user)
     item = await session.get(LegalHubTaskFileModel, file_id)
     if item is None or item.task_id != task_id:
         raise HTTPException(status_code=404, detail="Файл не найден")
@@ -628,8 +676,9 @@ async def delete_file(
     task_id: str,
     file_id: str,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
+    await _task_or_404(session, task_id, user)
     item = await session.get(LegalHubTaskFileModel, file_id)
     if item is None or item.task_id != task_id:
         raise HTTPException(status_code=404, detail="Файл не найден")
@@ -650,11 +699,11 @@ async def add_check(
     task_id: str,
     body: CheckIn,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
     if not body.label:
         raise HTTPException(status_code=400, detail="Напишите пункт")
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     existing = list(await session.scalars(
         select(LegalHubTaskCheckModel.id).where(LegalHubTaskCheckModel.task_id == row.id)
     ))
@@ -678,15 +727,16 @@ async def patch_check(
     check_id: str,
     body: CheckPatch,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
+    await _task_or_404(session, task_id, user)
     item = await _check_or_404(session, task_id, check_id)
     if body.done is not None:
         item.done = body.done
     if body.label is not None and body.label.strip():
         item.label = body.label.strip()
     await session.commit()
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     return await _detail(session, row)
 
 
@@ -696,10 +746,11 @@ async def add_check_note(
     check_id: str,
     body: CommentIn,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
     if not body.text:
         raise HTTPException(status_code=400, detail="Напишите комментарий")
+    await _task_or_404(session, task_id, user)
     await _check_or_404(session, task_id, check_id)
     session.add(LegalHubTaskCheckNoteModel(
         id=str(uuid4()),
@@ -708,7 +759,7 @@ async def add_check_note(
         created_at=datetime.now(timezone.utc),
     ))
     await session.commit()
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     return await _detail(session, row)
 
 
@@ -718,13 +769,137 @@ async def delete_check_note(
     check_id: str,
     note_id: str,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
+    await _task_or_404(session, task_id, user)
     await _check_or_404(session, task_id, check_id)
     note = await session.get(LegalHubTaskCheckNoteModel, note_id)
     if note is None or note.check_id != check_id:
         raise HTTPException(status_code=404, detail="Комментарий не найден")
     await session.delete(note)
     await session.commit()
-    row = await _task_or_404(session, task_id)
+    row = await _task_or_404(session, task_id, user)
     return await _detail(session, row)
+
+
+class TaskAction(BaseModel):
+    action: str = Field(pattern="^(take|submit|return|approve|reassign)$")
+    comment: str = Field(default="", max_length=8000)
+    userId: int | None = None
+
+
+ACTION_EVENTS = {
+    "take": ("taken", "Принял(а) задачу в работу"),
+    "submit": ("submitted", "Отправил(а) на проверку"),
+    "return": ("returned", "Вернул(а) на доработку"),
+    "approve": ("approved", "Принял(а) работу"),
+    "reassign": ("reassigned", "Передал(а) задачу"),
+}
+
+
+def allowed_actions(row: LegalHubTaskModel, uid: int, lead: bool = False) -> list[str]:
+    """What the viewer may do with the task right now (the drawer shows exactly these buttons)."""
+    done = (row.board_column or "") == "done"
+    assignee = row.assignee_user_id == uid
+    checker = uid in {row.reviewer_user_id or 0, row.created_by_user_id} or lead
+    in_review = row.status in {"associate", "partner", "pending_review", "in_review", "reviewing"}
+    out: list[str] = []
+    if done:
+        return ["return"] if checker else []
+    if assignee and row.status in {"todo", "changes", "changes_required"}:
+        out.append("take")
+    if assignee and not in_review:
+        out.append("submit")
+    if checker and in_review:
+        out += ["approve", "return"]
+    if assignee or checker:
+        out.append("reassign")
+    return out
+
+
+@router.post("/tasks/{task_id}/action")
+async def task_action(
+    task_id: str,
+    body: TaskAction,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Team workflow: take a task, send it for review, return it for changes, accept the work, hand it over."""
+    row = await _task_or_404(session, task_id, user)
+    uid = _user_id(user)
+    scope = None
+    lead = False
+    if not _involved(row, uid):
+        scope = await scope_or_503(session, user)
+        lead = any(team.partner_id == uid for team in scope.teams)
+    if body.action not in allowed_actions(row, uid, lead):
+        raise HTTPException(status_code=409, detail="Это действие сейчас недоступно для задачи")
+    comment = body.comment.strip()
+    notify_user: int | None = None
+    kind = "assigned"
+    if body.action == "take":
+        row.status, row.board_column = "progress", "progress"
+    elif body.action == "submit":
+        if row.reviewer_user_id is None:
+            if body.userId is None:
+                raise HTTPException(status_code=400, detail="Выберите проверяющего")
+            await _ensure_teammate(session, user, body.userId, "Проверяющий", scope)
+            row.reviewer_user_id = body.userId
+        scope = scope or await scope_or_503(session, user)
+        reviewer_leads = any(team.partner_id == row.reviewer_user_id for team in scope.teams)
+        row.status = "partner" if reviewer_leads else "associate"
+        row.board_column = row.status
+        row.review_on = row.review_on or date.today()
+        notify_user, kind = row.reviewer_user_id, "review"
+    elif body.action == "return":
+        if not comment:
+            raise HTTPException(status_code=400, detail="Напишите, что нужно доработать")
+        row.status, row.board_column = "changes", "changes"
+        notify_user, kind = row.assignee_user_id, "returned"
+    elif body.action == "approve":
+        row.board_column = "done"
+        notify_user, kind = row.assignee_user_id, "approved"
+    elif body.action == "reassign":
+        if body.userId is None or body.userId == row.assignee_user_id:
+            raise HTTPException(status_code=400, detail="Выберите нового исполнителя")
+        await _ensure_teammate(session, user, body.userId, "Исполнитель", scope)
+        row.assignee_user_id = body.userId
+        row.assignee_name, row.assignee_code = "", ""
+        row.status, row.board_column = "todo", "todo"
+        notify_user = body.userId
+    now = datetime.now(timezone.utc)
+    event_kind, event_text = ACTION_EVENTS[body.action]
+    session.add(LegalHubTaskEventModel(
+        id=str(uuid4()),
+        task_id=row.id,
+        kind=event_kind,
+        actor_name=_display(user),
+        text=f"{event_text}: {comment}"[:500] if comment else event_text,
+        created_at=now,
+    ))
+    if comment:
+        session.add(LegalHubTaskCommentModel(
+            id=str(uuid4()),
+            task_id=row.id,
+            author_user_id=uid,
+            author_name=_display(user),
+            text=comment,
+            created_at=now,
+        ))
+    row.updated_at = now
+    await session.commit()
+    await session.refresh(row)
+    if notify_user and notify_user != uid:
+        await notify_assignee(
+            get_settings(),
+            authorization=str(user.get("authorization") or ""),
+            assignee_user_id=notify_user,
+            actor=user,
+            title=row.title,
+            project=row.project_label,
+            due_on=row.due_on.isoformat() if row.due_on else None,
+            kind=kind,
+        )
+    payload = await _detail(session, row)
+    payload["actions"] = allowed_actions(row, uid, lead)
+    return payload

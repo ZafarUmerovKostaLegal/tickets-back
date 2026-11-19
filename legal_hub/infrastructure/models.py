@@ -302,3 +302,33 @@ class LegalHubBoardFilterModel(Base):
     owner: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTeamRosterModel(Base):
+    """Last known roster of a time-tracking team (lets temporary members see the team they were invited to)."""
+
+    __tablename__ = "legal_hub_team_rosters"
+
+    team_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    partner_user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    member_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    members: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LegalHubTempAccessModel(Base):
+    """Temporary membership of a user in a team until `expires_on` (inclusive)."""
+
+    __tablename__ = "legal_hub_temp_access"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    team_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    user_email: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    expires_on: Mapped[date] = mapped_column(Date, nullable=False)
+    granted_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -141,6 +141,25 @@ async def list_teams(
     return out
 
 
+@router.get("/mine", response_model=list[TimeTrackingTeamOut])
+async def list_my_teams(
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+) -> list[TimeTrackingTeamOut]:
+    """Active teams the viewer leads or belongs to — any employee may see their own teams (Legal Hub)."""
+    viewer_id = int(viewer.get("id") or 0)
+    repo = TeamRepository(session)
+    rows = await repo.list_all(include_archived=False)
+    members_map = await repo.list_members_by_team_ids([r.id for r in rows])
+    out: list[TimeTrackingTeamOut] = []
+    for row in rows:
+        member_ids = members_map.get(row.id, [])
+        if int(row.partner_auth_user_id) != viewer_id and viewer_id not in member_ids:
+            continue
+        out.append(await _team_out(session, row, member_auth_user_ids=member_ids))
+    return out
+
+
 @router.post("", response_model=TimeTrackingTeamOut, status_code=201)
 async def create_team(
     body: TimeTrackingTeamCreateBody,

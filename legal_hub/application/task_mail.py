@@ -83,6 +83,12 @@ async def notify_assignee(
         elif kind == "review":
             subject = f"Задача на проверке: {title}"
             text = f"{who} отправил вам на проверку задачу «{title}».{matter}{when}\n\n{link}"
+        elif kind == "returned":
+            subject = f"Задача возвращена на доработку: {title}"
+            text = f"{who} вернул(а) вам задачу «{title}» на доработку.{matter}{when}\n\n{link}"
+        elif kind == "approved":
+            subject = f"Работа принята: {title}"
+            text = f"{who} принял(а) вашу работу по задаче «{title}».{matter}\n\n{link}"
         elif kind == "dates":
             subject = f"Изменены сроки: {title}"
             extra = f"\n{due_on}" if due_on else ""
