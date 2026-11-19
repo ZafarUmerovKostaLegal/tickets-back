@@ -8,6 +8,9 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access import file_kind, has_level
+from starlette.concurrency import run_in_threadpool
+
+from infrastructure import blobs
 from infrastructure.database import get_session
 from infrastructure.models import AuditModel, DocumentModel, FavoriteModel, FolderModel, VersionModel
 from presentation.common import (
@@ -21,6 +24,7 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
+from presentation.intake import blob_in_use
 
 router = APIRouter(tags=["file-manager"])
 
@@ -329,7 +333,11 @@ async def purge_trash(
     root = await _trash_root(session, kind, item_id)
     _, matter, _ = await require_matter(session, viewer, root.matter_id, "manage")
     doc_ids = list(await session.scalars(select(DocumentModel.id).where(DocumentModel.trash_root_id == root.id)))
+    shas: set[str] = set()
     if doc_ids:
+        shas = {sha for sha in await session.scalars(
+            select(VersionModel.blob_sha).where(VersionModel.document_id.in_(doc_ids), VersionModel.blob_sha.is_not(None))
+        ) if sha}
         await session.execute(delete(VersionModel).where(VersionModel.document_id.in_(doc_ids)))
         await session.execute(delete(DocumentModel).where(DocumentModel.id.in_(doc_ids)))
         await session.execute(delete(FavoriteModel).where(FavoriteModel.target_id.in_(doc_ids)))
@@ -337,4 +345,8 @@ async def purge_trash(
     audit(session, viewer, "purge", matter=matter, kind=kind, target_id=root.id, target_name=root.name,
           detail=f"{len(doc_ids)} docs")
     await session.commit()
+    # Files on disk go too, unless another document still points to the same content.
+    for sha in shas:
+        if not await blob_in_use(session, sha):
+            await run_in_threadpool(lambda value=sha: blobs.blob_path(value).unlink(missing_ok=True))
     return {"ok": True}

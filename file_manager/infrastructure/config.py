@@ -17,6 +17,28 @@ class Settings(BaseSettings):
         default=50 * 1024 * 1024,
         validation_alias=AliasChoices("FILE_MANAGER_MAX_FILE_BYTES", "max_file_bytes"),
     )
+    # Large files go through resumable chunked uploads and are stored on disk, not in the database.
+    blob_dir: str = Field(
+        default="./data/blobs",
+        validation_alias=AliasChoices("FILE_MANAGER_BLOB_DIR", "blob_dir"),
+    )
+    max_upload_bytes: int = Field(
+        default=20 * 1024 * 1024 * 1024,
+        validation_alias=AliasChoices("FILE_MANAGER_MAX_UPLOAD_BYTES", "max_upload_bytes"),
+    )
+    upload_chunk_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        validation_alias=AliasChoices("FILE_MANAGER_UPLOAD_CHUNK_BYTES", "upload_chunk_bytes"),
+    )
+    # Keep this much disk free for the database and other files.
+    disk_reserve_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        validation_alias=AliasChoices("FILE_MANAGER_DISK_RESERVE_BYTES", "disk_reserve_bytes"),
+    )
+    upload_session_ttl_hours: int = Field(
+        default=48,
+        validation_alias=AliasChoices("FILE_MANAGER_UPLOAD_TTL_HOURS", "upload_session_ttl_hours"),
+    )
 
     @field_validator("auth_service_url", "time_tracking_service_url", mode="before")
     @classmethod

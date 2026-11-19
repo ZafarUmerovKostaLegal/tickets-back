@@ -8,7 +8,9 @@ from email.parser import BytesHeaderParser
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
+from infrastructure import blobs
 from infrastructure.models import DocumentFingerprintModel, DocumentModel, EmailFilingModel, VersionModel
 
 _HEADER_BYTES = 65536
@@ -49,18 +51,22 @@ def subject_from_eml(content: bytes) -> str:
         return ""
 
 
-async def set_fingerprint(session: AsyncSession, doc: DocumentModel, content: bytes, *, name: str | None = None) -> DocumentFingerprintModel:
-    """Record the fingerprint of the version just written (call after bumping current_version)."""
+async def set_fingerprint(session: AsyncSession, doc: DocumentModel, content: bytes, *, name: str | None = None,
+                          sha: str | None = None) -> DocumentFingerprintModel:
+    """Record the fingerprint of the version just written (call after bumping current_version).
+
+    For files stored on disk pass ``sha`` and only the first bytes as ``content`` (e-mail headers)."""
     row = await session.get(DocumentFingerprintModel, doc.id)
     message_id = message_id_from_eml(name or doc.name, content)
+    sha = sha or digest(content)
     if row is None:
         row = DocumentFingerprintModel(document_id=doc.id, matter_id=doc.matter_id, version=doc.current_version,
-                                       sha256=digest(content), message_id=message_id)
+                                       sha256=sha, message_id=message_id)
         session.add(row)
     else:
         row.matter_id = doc.matter_id
         row.version = doc.current_version
-        row.sha256 = digest(content)
+        row.sha256 = sha
         row.message_id = message_id or row.message_id
     return row
 
@@ -82,7 +88,11 @@ async def ensure_fingerprints(session: AsyncSession, docs: list[DocumentModel]) 
         ).limit(1))
         if version is None:
             continue
-        rows[doc.id] = await set_fingerprint(session, doc, version.content, name=version.name)
+        if version.blob_sha:
+            head = await run_in_threadpool(blobs.read_head, version.blob_sha)
+            rows[doc.id] = await set_fingerprint(session, doc, head, name=version.name, sha=version.blob_sha)
+        else:
+            rows[doc.id] = await set_fingerprint(session, doc, version.content, name=version.name)
     return rows
 
 
@@ -169,3 +179,15 @@ async def backfill_fingerprints(session: AsyncSession, matter_id: str, *, mail_o
     docs = list(await session.scalars(query.limit(limit)))
     await ensure_fingerprints(session, docs)
     return len(docs)
+
+
+async def store_content(content: bytes) -> str:
+    """Put uploaded bytes into the on-disk store; returns the sha256 used as the blob id."""
+    return await run_in_threadpool(blobs.put_bytes, content)
+
+
+async def version_head(version: VersionModel) -> bytes:
+    """First bytes of a version (e-mail headers), wherever it is stored."""
+    if version.blob_sha:
+        return await run_in_threadpool(blobs.read_head, version.blob_sha)
+    return (version.content or b"")[:_HEADER_BYTES]

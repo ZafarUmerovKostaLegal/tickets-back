@@ -4,7 +4,8 @@ import sys
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response as FastAPIResponse
+from fastapi.responses import JSONResponse, Response as FastAPIResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from infrastructure.config import get_settings
 from infrastructure.upstream_auth_context import merge_upstream_headers
@@ -70,6 +71,23 @@ def _strip_hop_and_cors(headers: dict) -> dict:
     return {k: v for k, v in headers.items() if k.lower() not in skip}
 
 
+_STREAM_RESPONSE_SKIP = frozenset(
+    {
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+    }
+)
+
+# Uploads arrive in 8 MB chunks and downloads may be gigabytes: the body is streamed in both directions,
+# never held in gateway memory. Completing a multi-GB upload hashes the file, hence the long read timeout.
+_TIMEOUT = httpx.Timeout(connect=10.0, read=900.0, write=900.0, pool=30.0)
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def proxy_file_manager(request: Request, path: str):
     base = _file_manager_base()
@@ -80,23 +98,38 @@ async def proxy_file_manager(request: Request, path: str):
     if query:
         upstream_url = f"{upstream_url}?{query}"
     headers = merge_upstream_headers(_request_headers_for_upstream(request))
-    body = await request.body()
+    length = request.headers.get("content-length")
+    if length:
+        headers["content-length"] = length
+    has_body = request.method in {"POST", "PUT", "PATCH", "DELETE"} and (
+        bool(length and length != "0") or "chunked" in request.headers.get("transfer-encoding", "").lower()
+    )
+    client = httpx.AsyncClient(timeout=_TIMEOUT)
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            upstream = await client.request(
+        upstream = await client.send(
+            client.build_request(
                 request.method,
                 upstream_url,
                 headers=headers,
-                content=body if body else None,
-            )
+                content=request.stream() if has_body else None,
+            ),
+            stream=True,
+        )
     except httpx.RequestError as exc:
+        await client.aclose()
         return _upstream_503(base, exc)
-    out_headers = _strip_hop_and_cors(dict(upstream.headers))
+
+    async def close() -> None:
+        await upstream.aclose()
+        await client.aclose()
+
+    out_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _STREAM_RESPONSE_SKIP}
     if upstream.status_code == 204:
-        return FastAPIResponse(status_code=204, headers=out_headers)
-    return FastAPIResponse(
-        content=upstream.content,
+        await close()
+        return FastAPIResponse(status_code=204, headers=_strip_hop_and_cors(dict(upstream.headers)))
+    return StreamingResponse(
+        upstream.aiter_raw(),
         status_code=upstream.status_code,
         headers=out_headers,
-        media_type=upstream.headers.get("content-type"),
+        background=BackgroundTask(close),
     )

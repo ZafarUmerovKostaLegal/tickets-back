@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access import has_level, safe_name
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.models import DocumentModel, FolderModel, MatterWorkspaceModel, VersionModel
+from infrastructure.models import DocumentModel, FolderModel, MatterWorkspaceModel
 from presentation.common import (
     audit,
     crumbs,
@@ -30,14 +30,8 @@ from presentation.common import (
 )
 from presentation.deps import Viewer, get_viewer
 from presentation.routes.mail import FILING_KINDS, mail_target_folder, new_email_filing
-from presentation.versioning import (
-    backfill_fingerprints,
-    current_digest,
-    digest,
-    find_mail_document,
-    find_same_content,
-    set_fingerprint,
-)
+from presentation.intake import file_into_matter
+from presentation.versioning import backfill_fingerprints, digest, store_content
 
 router = APIRouter(tags=["file-manager"])
 
@@ -352,89 +346,47 @@ async def upload_documents(
     folder_id = folder.id if folder else None
     limit = get_settings().max_file_bytes
     stamp = now()
-    number = await next_doc_number(session)
+    counter = {"next": await next_doc_number(session)}
+
+    async def next_number() -> int:
+        value = counter["next"]
+        counter["next"] += 1
+        return value
+
     results: list[tuple[str, DocumentModel]] = []
     for upload in files:
         content = await upload.read()
         if not content:
             continue
         if len(content) > limit:
-            raise HTTPException(status_code=400, detail=f"Файл больше {limit // (1024 * 1024)} МБ")
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл больше {limit // (1024 * 1024)} МБ — он будет загружен частями",
+            )
         name = safe_name(upload.filename)
-        content_type = (upload.content_type or "application/octet-stream")[:120]
         sha = digest(content)
 
-        existing: DocumentModel | None = None
-        if is_mail:
-            existing = await find_mail_document(session, matter.id, kind=kind, message_id=mailMessageId,
-                                                conversation_id=mailConversationId, name=name)
-            if existing is not None and kind != "thread":
-                results.append(("exists", existing))
-                continue
-        if existing is None:
-            query = select(DocumentModel).where(
-                DocumentModel.matter_id == matter.id,
-                DocumentModel.deleted_at.is_(None),
-                func.lower(DocumentModel.name) == name.lower(),
-            )
-            query = query.where(DocumentModel.folder_id.is_(None) if folder_id is None else DocumentModel.folder_id == folder_id)
-            existing = await session.scalar(query.limit(1))
+        async def store(data: bytes = content) -> None:
+            await store_content(data)
 
-        if existing is not None:
-            ensure_not_locked(existing, viewer)
-            if await current_digest(session, existing) == sha:
-                results.append(("unchanged", existing))
-                continue
-            existing.current_version += 1
-            existing.size_bytes = len(content)
-            existing.content_type = content_type
-            existing.updated_at = stamp
-            existing.updated_by_name = viewer.name
-            doc = existing
-            status = "version"
-            audit(session, viewer, "version", matter=matter, kind="document", target_id=doc.id,
-                  target_name=doc.name, detail=f"v{doc.current_version}")
-        else:
-            if not is_mail and not allowDuplicate:
-                twin = await find_same_content(session, matter.id, sha)
-                if twin is not None:
-                    results.append(("duplicate", twin))
-                    continue
-            doc = DocumentModel(
-                id=str(uuid4()),
-                doc_number=number,
-                matter_id=matter.id,
-                client_id=matter.client_id,
-                folder_id=folder_id,
-                name=name,
-                current_version=1,
-                content_type=content_type,
-                size_bytes=len(content),
-                created_by_user_id=viewer.user_id,
-                created_by_name=viewer.name,
-                created_at=stamp,
-                updated_by_name=viewer.name,
-                updated_at=stamp,
-            )
-            number += 1
-            session.add(doc)
-            status = "created"
-            audit(session, viewer, "upload", matter=matter, kind="document", target_id=doc.id, target_name=name)
-        session.add(VersionModel(
-            id=str(uuid4()),
-            document_id=doc.id,
-            version=doc.current_version,
+        results.append(await file_into_matter(
+            session, viewer, matter,
+            folder_id=folder_id,
             name=name,
-            content_type=content_type,
-            size_bytes=len(content),
-            content=content,
-            comment=(comment or "").strip()[:500],
-            created_by_user_id=viewer.user_id,
-            created_by_name=viewer.name,
-            created_at=stamp,
+            content_type=(upload.content_type or "application/octet-stream")[:120],
+            size=len(content),
+            sha=sha,
+            head=content[:65536],
+            comment=comment,
+            allow_duplicate=allowDuplicate,
+            stamp=stamp,
+            next_number=next_number,
+            store=store,
+            is_mail=is_mail,
+            kind=kind,
+            mail_message_id=mailMessageId,
+            mail_conversation_id=mailConversationId,
         ))
-        await set_fingerprint(session, doc, content, name=name)
-        results.append((status, doc))
     if not results:
         raise HTTPException(status_code=400, detail="Выберите файл")
     if is_mail:

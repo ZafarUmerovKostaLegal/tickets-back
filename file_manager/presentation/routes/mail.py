@@ -15,7 +15,7 @@ from infrastructure.database import get_session
 from infrastructure.models import DocumentModel, EmailFilingModel, FolderModel, VersionModel
 from presentation.common import audit, crumbs, directory, folder_in_matter, iso, levels, matter_closed, now, require_matter
 from presentation.deps import Viewer, get_viewer
-from presentation.versioning import subject_from_eml
+from presentation.versioning import version_head, subject_from_eml
 
 router = APIRouter(tags=["file-manager"])
 
@@ -331,10 +331,10 @@ async def organize_mail_folder(
     moved_to: list[tuple[str, str]] = []
     for doc in docs:
         if not (doc.description or "").strip() and doc.name.lower().endswith(".eml"):
-            content = await session.scalar(select(VersionModel.content).where(
+            version = await session.scalar(select(VersionModel).where(
                 VersionModel.document_id == doc.id, VersionModel.version == doc.current_version,
             ).limit(1))
-            subject = subject_from_eml(content or b"")
+            subject = subject_from_eml(await version_head(version)) if version is not None else ""
             if subject:
                 doc.description = subject
                 subjects += 1

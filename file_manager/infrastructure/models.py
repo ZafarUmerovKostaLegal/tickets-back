@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, JSON, LargeBinary, String, Text
+from sqlalchemy import BigInteger, DateTime, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.database import Base
@@ -47,7 +47,7 @@ class DocumentModel(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     checked_out_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     checked_out_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     checked_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -69,8 +69,10 @@ class VersionModel(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Legacy versions keep bytes here; new ones store b"" and point to the on-disk blob (infrastructure/blobs.py).
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    blob_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     comment: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
@@ -173,3 +175,23 @@ class DocumentFingerprintModel(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     message_id: Mapped[str] = mapped_column(String(500), nullable=False, default="", index=True)
+
+
+class UploadSessionModel(Base):
+    """A large file arriving in chunks (resumable). Removed when completed, cancelled or abandoned."""
+
+    __tablename__ = "fm_upload_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    received_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    comment: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    allow_duplicate: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

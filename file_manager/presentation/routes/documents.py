@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 from datetime import timedelta
 from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access import has_level, safe_name
+from infrastructure import blobs
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.models import AuditModel, DocumentModel, VersionModel
@@ -28,7 +35,7 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
-from presentation.versioning import current_digest, digest, set_fingerprint
+from presentation.versioning import current_digest, digest, set_fingerprint, store_content, version_head
 
 router = APIRouter(tags=["file-manager"])
 
@@ -131,14 +138,86 @@ async def document_content(
               target_name=doc.name, detail=f"v{wanted}")
         await session.commit()
     disposition = "inline" if inline else "attachment"
-    return Response(
-        content=row.content,
-        media_type=row.content_type or "application/octet-stream",
-        headers={
-            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(doc.name)}",
-            "Cache-Control": "private, no-store",
-        },
+    headers = {
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(doc.name)}",
+        "Cache-Control": "private, no-store",
+    }
+    if row.blob_sha:
+        # Streamed from disk with Range support (resumable downloads, video seeking) — never loaded into memory.
+        path = blobs.blob_path(row.blob_sha)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
+        return FileResponse(path, media_type=row.content_type or "application/octet-stream", headers=headers)
+    return Response(content=row.content, media_type=row.content_type or "application/octet-stream", headers=headers)
+
+
+LINK_TTL_SECONDS = 300
+
+
+def _sign(payload: dict) -> str:
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    mac = hmac.new(blobs.link_secret(), raw.encode(), hashlib.sha256).hexdigest()[:40]
+    return f"{raw}.{mac}"
+
+
+def _unsign(token: str) -> dict:
+    raw, _, mac = token.partition(".")
+    good = hmac.new(blobs.link_secret(), raw.encode(), hashlib.sha256).hexdigest()[:40]
+    if not mac or not hmac.compare_digest(mac, good):
+        raise HTTPException(status_code=403, detail="Ссылка недействительна")
+    payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    if int(payload.get("exp", 0)) < int(time.time()):
+        raise HTTPException(status_code=410, detail="Ссылка устарела — нажмите «Скачать» ещё раз")
+    return payload
+
+
+@router.post("/documents/{document_id}/link")
+async def document_link(
+    document_id: str,
+    version: int | None = Query(default=None, ge=1),
+    inline: bool = Query(default=False),
+    session: AsyncSession = Depends(get_session),
+    viewer: Viewer = Depends(get_viewer),
+):
+    """Short-lived signed URL: the browser downloads large files itself (straight to disk, resumable),
+    instead of pulling gigabytes through JavaScript memory."""
+    doc = await live_document(session, document_id)
+    _, matter, _ = await require_matter(session, viewer, doc.matter_id, "read")
+    wanted = version or doc.current_version
+    exists = await session.scalar(
+        select(VersionModel.id).where(VersionModel.document_id == doc.id, VersionModel.version == wanted).limit(1)
     )
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    if not inline:
+        audit(session, viewer, "download", matter=matter, kind="document", target_id=doc.id,
+              target_name=doc.name, detail=f"v{wanted}")
+        await session.commit()
+    token = _sign({"d": doc.id, "v": wanted, "i": 1 if inline else 0, "u": viewer.user_id,
+                   "exp": int(time.time()) + LINK_TTL_SECONDS})
+    return {"url": f"/api/v1/files/dl/{token}", "expiresIn": LINK_TTL_SECONDS}
+
+
+@router.get("/dl/{token}")
+async def signed_download(token: str, session: AsyncSession = Depends(get_session)):
+    payload = _unsign(token)
+    doc = await live_document(session, str(payload.get("d", "")))
+    row = await session.scalar(
+        select(VersionModel).where(VersionModel.document_id == doc.id, VersionModel.version == int(payload.get("v", 0))).limit(1)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    disposition = "inline" if payload.get("i") else "attachment"
+    headers = {
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(doc.name)}",
+        "Cache-Control": "private, no-store",
+    }
+    if row.blob_sha:
+        path = blobs.blob_path(row.blob_sha)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
+        return FileResponse(path, media_type=row.content_type or "application/octet-stream", headers=headers)
+    return Response(content=row.content, media_type=row.content_type or "application/octet-stream", headers=headers)
 
 
 @router.patch("/documents/{document_id}")
@@ -236,7 +315,8 @@ async def checkin_document(
                 name=safe_name(file.filename, doc.name),
                 content_type=doc.content_type,
                 size_bytes=len(content),
-                content=content,
+                content=b"",
+                blob_sha=await store_content(content),
                 comment=(comment or "").strip()[:500],
                 created_by_user_id=viewer.user_id,
                 created_by_name=viewer.name,
@@ -306,12 +386,14 @@ async def restore_version(
         content_type=source.content_type,
         size_bytes=source.size_bytes,
         content=source.content,
+        blob_sha=source.blob_sha,
         comment=f"Восстановлено из v{version}",
         created_by_user_id=viewer.user_id,
         created_by_name=viewer.name,
         created_at=stamp,
     ))
-    await set_fingerprint(session, doc, source.content, name=source.name)
+    await set_fingerprint(session, doc, await version_head(source), name=source.name,
+                          sha=source.blob_sha or digest(source.content))
     audit(session, viewer, "version", matter=matter, kind="document", target_id=doc.id,
           target_name=doc.name, detail=f"v{version} → v{doc.current_version}")
     await session.commit()
