@@ -198,3 +198,18 @@ def test_invoice_create_body_rejects_non_positive_billed_amount():
                 "billedAmount": "0",
             }
         )
+
+
+def test_build_billed_amount_document_overrides_adds_project_expenses():
+    ensure_service_in_path("time_tracking")
+    from application.invoice_service import build_billed_amount_document_overrides
+
+    ovr = build_billed_amount_document_overrides(
+        billed_amount=Decimal("10000"),
+        currency="USD",
+        service_description="Legal opinion",
+        expenses_amount=Decimal("250.5"),
+    )
+    assert ovr["cover"]["totalFormatted"] == "USD 10,250.50"
+    assert ovr["legal"]["extraExpensesAmount"] == "USD 250.50"
+    assert ovr["legal"]["serviceLines"][0]["amountFormatted"] == "USD 10,000.00"

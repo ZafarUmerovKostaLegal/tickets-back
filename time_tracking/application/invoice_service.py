@@ -461,9 +461,10 @@ def build_billed_amount_document_overrides(
     service_description: str | None = None,
     service_lines: list[tuple[str, Decimal]] | None = None,
     fx: dict[str, Any] | None = None,
+    expenses_amount: Decimal = Decimal(0),
 ) -> dict[str, Any]:
-    """Legal-page-only pack + service line(s) + total matching billed amount."""
-    total_fmt = format_invoice_total_display(billed_amount, currency)
+    """Legal-page-only pack + service line(s) + total matching billed amount (+ billed project expenses)."""
+    total_fmt = format_invoice_total_display(billed_amount + expenses_amount, currency)
     rows: list[tuple[str, Decimal]] = []
     if service_lines:
         for desc_raw, amt in service_lines:
@@ -476,6 +477,8 @@ def build_billed_amount_document_overrides(
         if desc:
             rows.append((desc[:2000], _money4(billed_amount)))
     legal: dict[str, Any] = {}
+    if expenses_amount > 0:
+        legal["extraExpensesAmount"] = format_invoice_total_display(expenses_amount, currency)
     if rows:
         legal["serviceDescriptionLine"] = rows[0][0]
         legal["serviceLines"] = [
@@ -517,11 +520,16 @@ async def _apply_billed_amount_override(
     fx_book: FxRateBook | None = None,
     service_lines: list[tuple[str, Decimal]] | None = None,
 ) -> int:
-    """Zero money on linkage lines; add manual billed line(s); set document overrides."""
+    """Zero money on time lines; keep project expenses billed on top; add manual billed line(s);
+    set document overrides."""
     await session.flush()
     await session.refresh(inv, ["line_items"])
     inv_ccy = (inv.currency or "USD").strip().upper()[:10] or "USD"
+    expenses_amount = Decimal(0)
     for ln in list(inv.line_items or []):
+        if (ln.line_kind or "") == "expense" and ln.expense_request_id:
+            expenses_amount += _money4(Decimal(str(ln.line_total or 0)))
+            continue
         worked = _money4(Decimal(str(ln.line_total or 0)))
         if worked > 0:
             ln.source_amount = worked
@@ -580,6 +588,7 @@ async def _apply_billed_amount_override(
             service_description=rows[0][0],
             service_lines=rows,
             fx=fx or None,
+            expenses_amount=_money4(expenses_amount),
         )
     )
     return sort_order
@@ -730,8 +739,15 @@ async def create_invoice(
         and not expense_ids
         and not lines
     )
+    # Custom sum with project expenses only: expenses are already approved/paid, there is no time to confirm.
+    billed_with_expenses_only = (
+        billed_amount is not None
+        and not time_entry_ids
+        and bool(expense_ids)
+        and not lines
+    )
 
-    needs_partner_confirmation = (not skip_partner_gate) and (not pure_billed) and (
+    needs_partner_confirmation = (not skip_partner_gate) and (not pure_billed) and (not billed_with_expenses_only) and (
         bool(time_entry_ids)
         or bool(expense_ids)
         or (bool(lines) and len(lines) > 0 and bool((project_id or "").strip()))
@@ -794,6 +810,7 @@ async def create_invoice(
     requested_exp = expense_ids
     if (
         (not pure_billed)
+        and (not billed_with_expenses_only)
         and partner_billing_period_from is not None
         and partner_billing_period_to is not None
         and eff_pid
