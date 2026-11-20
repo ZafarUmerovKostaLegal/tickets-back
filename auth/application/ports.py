@@ -155,6 +155,21 @@ class UserRepositoryPort(ABC):
     async def remove_session_jti(self, user_id: int, jti: str) -> None:
         pass
 
+    async def describe_session(self, jti: str, *, user_agent: str, ip: str) -> None:
+        """Remember which device signed in (optional for test doubles)."""
+
+    async def touch_session(self, jti: str) -> None:
+        """Mark the session as active now (throttled; optional for test doubles)."""
+
+    async def list_sessions(self, user_id: int) -> list[dict]:
+        return []
+
+    async def remove_session_by_id(self, user_id: int, session_id: int) -> bool:
+        return False
+
+    async def remove_other_sessions(self, user_id: int, keep_jti: str) -> int:
+        return 0
+
     @abstractmethod
     async def clear_all_session_jtis(self, user_id: int) -> None:
         pass

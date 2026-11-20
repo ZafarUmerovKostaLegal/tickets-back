@@ -20,6 +20,9 @@ _USER_COLUMN_PATCHES: Sequence[str] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS initials VARCHAR(8)",
     "ALTER TABLE users ALTER COLUMN initials TYPE VARCHAR(8)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_jti VARCHAR(64)",
+    "ALTER TABLE user_auth_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(512)",
+    "ALTER TABLE user_auth_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)",
+    "ALTER TABLE user_auth_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP",
 )
 
 _LEGACY_SESSION_MIGRATION = """

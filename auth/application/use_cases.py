@@ -82,6 +82,12 @@ class GetCurrentUserUseCase:
         active_jtis = await self._user_repo.list_active_session_jtis(user.id)
         if not self._session_matches(payload, user, active_jtis):
             return None
+        jti = payload.get("jti")
+        if isinstance(jti, str) and jti.strip():
+            try:
+                await self._user_repo.touch_session(jti.strip())
+            except Exception:
+                pass  # last-activity stamp is a convenience, never a reason to fail auth
         return user
 
     async def _user_from_outlook(self, payload: dict, device_id: str | None) -> Optional[User]:

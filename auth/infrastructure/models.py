@@ -32,6 +32,10 @@ class UserAuthSessionModel(Base):
     )
     jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # Device list in the profile menu: what signed in, from where, when it was last active.
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class OutlookRefreshTokenModel(Base):

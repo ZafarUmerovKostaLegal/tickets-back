@@ -90,11 +90,11 @@ class Settings(BaseSettings):
     )
     frontend_url: str = ""
     auth_max_concurrent_sessions: int = Field(
-        default=2,
-        ge=1,
-        le=10,
+        default=0,
+        ge=0,
         validation_alias=AliasChoices("AUTH_MAX_CONCURRENT_SESSIONS"),
-        description="Максимум одновременных активных входов (устройств) на одного пользователя.",
+        description="Максимум одновременных входов (устройств) на пользователя; 0 — без ограничения. "
+                    "Устройства видны и завершаются в меню профиля.",
     )
     service_name: str = "auth"
     ws_internal_secret: str = Field(

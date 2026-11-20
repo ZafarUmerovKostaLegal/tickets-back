@@ -20,6 +20,6 @@ def session_jti_is_valid(
 def jtis_to_evict_after_register(existing_asc: list[str], max_sessions: int) -> list[str]:
     """Return oldest JTIs to remove after appending a new session (FIFO)."""
     if max_sessions < 1:
-        max_sessions = 1
+        return []  # no limit
     overflow = max(0, len(existing_asc) + 1 - max_sessions)
     return existing_asc[:overflow]

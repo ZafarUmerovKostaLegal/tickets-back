@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta
 from typing import Optional, Sequence, Tuple
 from sqlalchemy import and_, case, func, or_, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities import User
 from application.ports import UserRepositoryPort, RoleRepositoryPort
+from infrastructure.config import get_settings
 from infrastructure.models import UserModel, RoleModel, RolePermissionModel, UserAuthSessionModel
 
 _HIDDEN_LOCAL_PARTS = ("admin", "info")
@@ -358,11 +360,20 @@ class UserRepository(UserRepositoryPort):
         jti = (jti or "").strip()
         if not jti:
             return
-        limit = max(1, int(max_sessions))
+        limit = int(max_sessions)  # 0 → no limit on devices
         await self._session.execute(
             delete(UserAuthSessionModel).where(UserAuthSessionModel.jti == jti)
         )
-        self._session.add(UserAuthSessionModel(user_id=user_id, jti=jti))
+        # Sessions whose token has expired can never be used again — drop them.
+        expired_before = datetime.utcnow() - timedelta(minutes=get_settings().jwt_expire_minutes)
+        await self._session.execute(
+            delete(UserAuthSessionModel).where(
+                UserAuthSessionModel.user_id == user_id,
+                UserAuthSessionModel.created_at < expired_before,
+            )
+        )
+        now = datetime.utcnow()
+        self._session.add(UserAuthSessionModel(user_id=user_id, jti=jti, created_at=now, last_seen_at=now))
         await self._session.flush()
         result = await self._session.execute(
             select(UserAuthSessionModel)
@@ -370,13 +381,73 @@ class UserRepository(UserRepositoryPort):
             .order_by(UserAuthSessionModel.created_at.asc())
         )
         rows = list(result.scalars().all())
-        while len(rows) > limit:
+        while limit > 0 and len(rows) > limit:
             oldest = rows.pop(0)
             await self._session.delete(oldest)
         await self._session.flush()
         await self._session.execute(
             update(UserModel).where(UserModel.id == user_id).values(active_session_jti=None)
         )
+
+    async def describe_session(self, jti: str, *, user_agent: str, ip: str) -> None:
+        await self._session.execute(
+            update(UserAuthSessionModel)
+            .where(UserAuthSessionModel.jti == jti)
+            .values(user_agent=(user_agent or "")[:512] or None, ip=(ip or "")[:64] or None)
+        )
+        await self._session.flush()
+
+    async def touch_session(self, jti: str) -> None:
+        """Last activity, at most once per 5 minutes per session (cheap on every authenticated request)."""
+        now = datetime.utcnow()
+        result = await self._session.execute(
+            update(UserAuthSessionModel)
+            .where(
+                UserAuthSessionModel.jti == jti,
+                (UserAuthSessionModel.last_seen_at.is_(None)) | (UserAuthSessionModel.last_seen_at < now - timedelta(minutes=5)),
+            )
+            .values(last_seen_at=now)
+        )
+        if result.rowcount:
+            await self._session.commit()
+
+    async def list_sessions(self, user_id: int) -> list[dict]:
+        result = await self._session.execute(
+            select(UserAuthSessionModel)
+            .where(UserAuthSessionModel.user_id == user_id)
+            .order_by(UserAuthSessionModel.created_at.desc())
+        )
+        return [
+            {
+                "id": row.id,
+                "jti": row.jti,
+                "userAgent": row.user_agent or "",
+                "ip": row.ip or "",
+                "createdAt": row.created_at.isoformat() + "Z" if row.created_at else None,
+                "lastSeenAt": (row.last_seen_at or row.created_at).isoformat() + "Z" if (row.last_seen_at or row.created_at) else None,
+            }
+            for row in result.scalars().all()
+        ]
+
+    async def remove_session_by_id(self, user_id: int, session_id: int) -> bool:
+        result = await self._session.execute(
+            delete(UserAuthSessionModel).where(
+                UserAuthSessionModel.user_id == user_id,
+                UserAuthSessionModel.id == session_id,
+            )
+        )
+        await self._session.flush()
+        return bool(result.rowcount)
+
+    async def remove_other_sessions(self, user_id: int, keep_jti: str) -> int:
+        result = await self._session.execute(
+            delete(UserAuthSessionModel).where(
+                UserAuthSessionModel.user_id == user_id,
+                UserAuthSessionModel.jti != keep_jti,
+            )
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
 
     async def remove_session_jti(self, user_id: int, jti: str) -> None:
         jti = (jti or "").strip()

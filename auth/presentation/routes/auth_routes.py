@@ -189,6 +189,7 @@ async def callback(
         resp = _error_redirect(settings, "user_blocked")
         _clear_oauth_cookies(resp)
         return resp
+    await _remember_device(request, access_token, session)
     await session.commit()
     redirect_base = _frontend_base(settings)
     callback_path = "/auth/callback"
@@ -209,6 +210,7 @@ async def callback(
 async def exchange(
     body: dict,
     response: Response,
+    request: Request,
     uc: AzureLoginUseCase = Depends(get_login_use_case),
     session: AsyncSession = Depends(get_session),
 ):
@@ -238,6 +240,7 @@ async def exchange(
         )
     except UserAccessDenied:
         raise HTTPException(status_code=403, detail="User blocked or archived")
+    await _remember_device(request, access_token, session)
     await session.commit()
     _apply_session_cookie(response, access_token)
     return TokenResponse(access_token=access_token)
@@ -247,6 +250,7 @@ async def exchange(
 async def bootstrap_from_azure_token(
     body: dict,
     response: Response,
+    request: Request,
     uc: AzureLoginUseCase = Depends(get_login_use_case),
     session: AsyncSession = Depends(get_session),
 ):
@@ -304,9 +308,86 @@ async def bootstrap_from_azure_token(
         )
     except UserAccessDenied:
         raise HTTPException(status_code=403, detail="User blocked or archived")
+    await _remember_device(request, hub_token, session)
     await session.commit()
     _apply_session_cookie(response, hub_token)
     return TokenResponse(access_token=hub_token)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return forwarded or (request.headers.get("x-real-ip") or "").strip() or (request.client.host if request.client else "")
+
+
+async def _remember_device(request: Request, token: str, session: AsyncSession) -> None:
+    """Store which browser / device and IP opened this session (shown in the profile → Devices)."""
+    payload = JWTService().decode_token(token) or {}
+    jti = payload.get("jti")
+    if isinstance(jti, str) and jti.strip():
+        await UserRepository(session).describe_session(
+            jti.strip(), user_agent=request.headers.get("user-agent", ""), ip=_client_ip(request),
+        )
+
+
+async def _session_owner(request: Request, authorization: Optional[str], user_repo: UserRepositoryPort,
+                         token_service: TokenServicePort) -> tuple:
+    token = access_token_from_request(request, authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authorization required")
+    user = await GetCurrentUserUseCase(user_repo, token_service).execute(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    jti = (token_service.decode_token(token) or {}).get("jti")
+    return user, (jti.strip() if isinstance(jti, str) else "")
+
+
+@router.get("/sessions")
+async def list_my_sessions(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    token_service: TokenServicePort = Depends(get_token_service),
+):
+    """Devices signed in to this account (no limit on their number)."""
+    user, current = await _session_owner(request, authorization, user_repo, token_service)
+    rows = await user_repo.list_sessions(user.id)
+    return {"sessions": [
+        {key: value for key, value in row.items() if key != "jti"} | {"current": row["jti"] == current}
+        for row in rows
+    ]}
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def end_session(
+    session_id: int,
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    token_service: TokenServicePort = Depends(get_token_service),
+    session: AsyncSession = Depends(get_session),
+):
+    """Sign a device out: its token stops working on the next request."""
+    user, _ = await _session_owner(request, authorization, user_repo, token_service)
+    if not await user_repo.remove_session_by_id(user.id, session_id):
+        raise HTTPException(status_code=404, detail="Сеанс не найден")
+    await session.commit()
+    return Response(status_code=204)
+
+
+@router.post("/sessions/end-others")
+async def end_other_sessions(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    token_service: TokenServicePort = Depends(get_token_service),
+    session: AsyncSession = Depends(get_session),
+):
+    user, current = await _session_owner(request, authorization, user_repo, token_service)
+    if not current:
+        raise HTTPException(status_code=400, detail="Текущий сеанс не определён")
+    ended = await user_repo.remove_other_sessions(user.id, current)
+    await session.commit()
+    return {"ended": ended}
 
 
 @router.post("/logout", status_code=204)

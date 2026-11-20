@@ -41,7 +41,7 @@ class AzureExchangeBody(BaseModel):
         "и с URI платформы Android в Azure. Web callback URI не подставляйте сюда."
     ),
 )
-async def azure_exchange(body: AzureExchangeBody):
+async def azure_exchange(body: AzureExchangeBody, request: Request):
     settings = get_settings()
     payload: dict = {"code": body.code}
     if body.redirect_uri and str(body.redirect_uri).strip():
@@ -53,6 +53,7 @@ async def azure_exchange(body: AzureExchangeBody):
             r = await client.post(
                 f"{settings.auth_service_url.rstrip('/')}/auth/exchange",
                 json=payload,
+                headers=_device_headers(request),
             )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail="Auth service unavailable") from e
@@ -90,7 +91,7 @@ async def azure_bootstrap(body: AzureBootstrapBody, request: Request):
     }
     if not payload["id_token"]:
         raise HTTPException(status_code=400, detail="id_token required")
-    headers: dict[str, str] = {"Content-Type": "application/json"}
+    headers: dict[str, str] = {"Content-Type": "application/json", **_device_headers(request)}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
@@ -155,6 +156,53 @@ async def azure_login():
         status_code=502,
         detail="Auth service unavailable. Check: docker compose ps auth; docker compose logs auth",
     )
+
+
+def _device_headers(request: Request) -> dict[str, str]:
+    """Browser and client IP of the person signing in — stored with the session (profile → Devices)."""
+    out: dict[str, str] = {}
+    agent = request.headers.get("user-agent")
+    if agent:
+        out["User-Agent"] = agent[:512]
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or (request.headers.get("x-real-ip") or "").strip() or (request.client.host if request.client else "")
+    if ip:
+        out["X-Forwarded-For"] = ip
+    return out
+
+
+def _session_headers(request: Request) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if request.headers.get("Authorization"):
+        headers["Authorization"] = request.headers["Authorization"]
+    if request.headers.get("Cookie"):
+        headers["Cookie"] = request.headers["Cookie"]
+    return headers
+
+
+async def _sessions_call(method: str, path: str, request: Request) -> Response:
+    url = f"{get_settings().auth_service_url.rstrip('/')}/auth/sessions{path}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.request(method, url, headers=_session_headers(request))
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail="Auth service unavailable") from e
+    return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type"))
+
+
+@router.get("/sessions", summary="Устройства, с которых выполнен вход")
+async def list_sessions(request: Request):
+    return await _sessions_call("GET", "", request)
+
+
+@router.delete("/sessions/{session_id}", status_code=204, summary="Завершить сеанс на устройстве")
+async def end_session(session_id: int, request: Request):
+    return await _sessions_call("DELETE", f"/{session_id}", request)
+
+
+@router.post("/sessions/end-others", summary="Завершить все сеансы, кроме текущего")
+async def end_other_sessions(request: Request):
+    return await _sessions_call("POST", "/end-others", request)
 
 
 @router.post("/session/logout", status_code=204, summary="Сброс серверной сессии (инвалидация JWT)")
@@ -245,6 +293,7 @@ async def azure_callback(
             r = await client.post(
                 f"{settings.auth_service_url.rstrip('/')}/auth/exchange",
                 json={"code": code},
+                headers=_device_headers(request),
             )
         if r.status_code != 200:
             _log.warning(
