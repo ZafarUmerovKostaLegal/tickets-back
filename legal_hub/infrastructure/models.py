@@ -351,3 +351,26 @@ class LegalHubDriveUploadModel(Base):
     received_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class LegalHubDeletedFileModel(Base):
+    """Every deleted Disk file / task attachment ends up here — content included. Nothing is erased."""
+
+    __tablename__ = "legal_hub_deleted_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    original_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    blob_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deleted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

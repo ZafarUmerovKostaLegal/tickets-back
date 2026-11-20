@@ -24,7 +24,7 @@ from infrastructure.database import get_session
 from infrastructure.models import UploadSessionModel
 from presentation.common import doc_out, folder_in_matter, live_document, next_doc_number, now, require_matter
 from presentation.deps import Viewer, get_viewer
-from presentation.intake import blob_in_use, file_into_matter
+from presentation.intake import file_into_matter
 
 router = APIRouter(tags=["uploads"])
 
@@ -221,8 +221,6 @@ async def complete_upload(
     )
     await session.delete(row)
     await session.commit()
-    if status not in {"created", "version"} and not await blob_in_use(session, sha):
-        await run_in_threadpool(lambda: blobs.blob_path(sha).unlink(missing_ok=True))
     document = doc_out(doc, dirx)
     return {"documents": [document], "results": [{"status": status, "document": document}]}
 

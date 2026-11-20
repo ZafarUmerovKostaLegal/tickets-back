@@ -410,7 +410,7 @@ async def test_notification_stays_on_internal_services(api, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_storage_lists_unique_files_and_delete_frees_disk(api, tmp_path: Path):
+async def test_storage_lists_unique_files_and_delete_keeps_copies_aside(api, tmp_path: Path):
     client, settings, factory = api
     payload = b"stored-bytes"
     first = await client.post(
@@ -465,7 +465,10 @@ async def test_storage_lists_unique_files_and_delete_frees_disk(api, tmp_path: P
     assert removed.json()["removedFiles"] == 1
     assert removed.json()["freedBytes"] == len(payload)
     assert removed.json()["clearedEvents"] == 2
-    assert len(list(Path(settings.files_dir).iterdir())) == 1
+    active = [item for item in Path(settings.files_dir).iterdir() if item.is_file()]
+    assert len(active) == 1
+    kept = list((Path(settings.files_dir) / ".deleted").iterdir())
+    assert len(kept) == 1 and kept[0].read_bytes() == payload
     async with factory() as session:
         rows = list((await session.scalars(select(FileGuardEventModel))).all())
     by_name = {row.file_name: row for row in rows}
@@ -477,7 +480,8 @@ async def test_storage_lists_unique_files_and_delete_frees_disk(api, tmp_path: P
     month = await client.post("/api/v1/file-guard/storage/remove", json={"ids": [other.json()["id"]]})
     assert month.status_code == 200
     assert month.json()["freedBytes"] == len(b"october-only")
-    assert list(Path(settings.files_dir).iterdir()) == []
+    assert [item for item in Path(settings.files_dir).iterdir() if item.is_file()] == []
+    assert len(list((Path(settings.files_dir) / ".deleted").iterdir())) == 2
     again = await client.get("/api/v1/file-guard/storage")
     assert again.json()["items"] == []
     assert again.json()["totalBytes"] == 0

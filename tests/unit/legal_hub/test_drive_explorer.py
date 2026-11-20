@@ -212,7 +212,7 @@ def test_large_files_upload_in_chunks_into_folders_and_stream_back(drive):
     assert drive.ok("POST", f"/uploads/{session['id']}/complete")["file"]["name"] == "Video (2).mp4"
 
 
-def test_copies_share_the_stored_file_and_delete_frees_disk_last(drive):
+def test_deleted_files_are_kept_and_can_be_restored(drive):
     from infrastructure import blobs
     import hashlib
 
@@ -221,11 +221,21 @@ def test_copies_share_the_stored_file_and_delete_frees_disk_last(drive):
     b = drive.folder("B")
     done = _chunked(drive, a, "big.bin", payload)
     drive.ok("POST", "/copy", json={"fileIds": [done["file"]["id"]], "folderIds": [], "targetId": b})
+    drive.upload(b, ("old.txt", b"legacy bytes"))
     stored = blobs.store.blob_path(hashlib.sha256(payload).hexdigest())
     drive.ok("POST", "/delete", json={"fileIds": [], "folderIds": [a]})
-    assert stored.exists()  # the copy in B still uses it
     drive.ok("POST", "/delete", json={"fileIds": [], "folderIds": [b]})
-    assert not stored.exists()
+    # Nothing is erased: the content stays on disk and every file is listed as deleted.
+    assert stored.exists()
+    deleted = drive.ok("GET", "/deleted")["items"]
+    assert sorted((item["name"], item["path"]) for item in deleted) == [("big.bin", "A"), ("big.bin", "B"), ("old.txt", "B")]
+    old = next(item for item in deleted if item["name"] == "old.txt")
+    restored = drive.ok("POST", f"/deleted/{old['id']}/restore")
+    assert restored["parentId"] is None
+    assert drive.call("GET", f"/files/{restored['file']['id']}").content == b"legacy bytes"
+    assert len(drive.ok("GET", "/deleted")["items"]) == 2
+    drive.as_user({"id": 9, "name": "Lawyer", "role": "Юрист"})
+    assert drive.call("GET", "/deleted").status_code == 403
 
 
 def test_upload_limits_size_space_and_parallel_devices(drive, monkeypatch):

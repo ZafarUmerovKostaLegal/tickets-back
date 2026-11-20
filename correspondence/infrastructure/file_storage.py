@@ -3,6 +3,7 @@ from pathlib import Path
 
 from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
+from backend_common.file_retention import retire_file
 
 
 def get_correspondence_upload_dir(document_id: str) -> Path:
@@ -38,7 +39,7 @@ def delete_correspondence_storage(document_id: str, storage_keys: list[str]) -> 
         path = resolve_storage_path(key)
         if path is not None and path.is_file():
             try:
-                path.unlink()
+                retire_file(path)
             except OSError:
                 pass
     folder = safe_media_path(get_settings().media_path, f"correspondence/{document_id}")

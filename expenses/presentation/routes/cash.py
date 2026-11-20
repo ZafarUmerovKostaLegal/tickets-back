@@ -25,6 +25,7 @@ from infrastructure.file_storage import save_cash_attachment
 from infrastructure.models import CashAttachmentModel, CashBalanceModel, CashMovementModel, CashTrackedModel
 from backend_common.media_path import safe_media_path
 from presentation.deps import get_current_user
+from backend_common.file_retention import retire_file
 
 router = APIRouter(prefix="/expenses/cash", tags=["expenses-cash"])
 
@@ -434,7 +435,7 @@ async def delete_cash_movement(
     for item in stored:
         path = safe_media_path(get_settings().media_path, item.storage_key)
         if path is not None and path.is_file():
-            path.unlink()
+            retire_file(path)
     await session.delete(row)
     _apply_delta(balance, later, delta)
     await session.commit()
@@ -538,7 +539,7 @@ async def delete_cash_attachment(
         raise HTTPException(status_code=404, detail="Файл не найден")
     path = safe_media_path(get_settings().media_path, row.storage_key)
     if path is not None and path.is_file():
-        path.unlink()
+        retire_file(path)
     await session.delete(row)
     await session.commit()
     loaded = await _load_movement(session, movement_id)

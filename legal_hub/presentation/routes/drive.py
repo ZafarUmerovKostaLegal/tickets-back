@@ -21,7 +21,12 @@ from backend_common.blob_store import read_link, sign_link
 
 from infrastructure import blobs
 from infrastructure.database import get_session
-from infrastructure.models import LegalHubDriveAclModel, LegalHubDriveFileModel, LegalHubDriveFolderModel
+from infrastructure.models import (
+    LegalHubDeletedFileModel,
+    LegalHubDriveAclModel,
+    LegalHubDriveFileModel,
+    LegalHubDriveFolderModel,
+)
 from presentation.deps import require_user
 
 router = APIRouter(tags=["legal-hub"])
@@ -652,12 +657,26 @@ async def drive_signed_download(token: str, session: AsyncSession = Depends(get_
     return _file_response(item, inline=bool(payload.get("i")))
 
 
-async def gc_blobs(session: AsyncSession, shas: set[str]) -> None:
-    """Remove files from disk that no Disk entry points to any more (after the delete is committed)."""
-    for sha in shas:
-        used = await session.scalar(select(LegalHubDriveFileModel.id).where(LegalHubDriveFileModel.blob_sha == sha).limit(1))
-        if used is None:
-            await run_in_threadpool(blobs.store.remove, sha)
+async def archive_drive_file(
+    session: AsyncSession,
+    item: LegalHubDriveFileModel,
+    user: dict,
+    folder_path: str,
+    stamp: datetime,
+) -> None:
+    """Keep a deleted Disk file (bytes or blob reference) in legal_hub_deleted_files, then drop the live row."""
+    content = item.content if item.blob_sha is None else b""
+    if item.blob_sha is None and not content:
+        loaded = await session.scalar(select(LegalHubDriveFileModel.content).where(LegalHubDriveFileModel.id == item.id))
+        content = loaded or b""
+    session.add(LegalHubDeletedFileModel(
+        id=str(uuid4()), source="drive", original_id=item.id, name=item.name, content_type=item.content_type,
+        size_bytes=int(item.size_bytes or 0), content=content, blob_sha=item.blob_sha, folder_id=item.folder_id,
+        folder_path=folder_path, task_id=None, created_by_user_id=int(item.created_by_user_id or 0),
+        created_at=item.created_at, deleted_by_user_id=_user_id(user), deleted_by_name=_user_name(user),
+        deleted_at=stamp,
+    ))
+    await session.delete(item)
 
 
 async def _rename_or_hide(
@@ -909,21 +928,24 @@ async def hide_items(
     return {"updated": len(folders) + len(files)}
 
 
-async def _delete_folder_tree(session: AsyncSession, folder_id: str, shas: set[str] | None = None) -> None:
+async def _delete_folder_tree(
+    session: AsyncSession,
+    tree: DriveTree,
+    folder_id: str,
+    user: dict,
+    stamp: datetime,
+) -> None:
     children = list(await session.scalars(
         select(LegalHubDriveFolderModel).where(LegalHubDriveFolderModel.parent_id == folder_id)
     ))
     for child in children:
-        await _delete_folder_tree(session, child.id, shas)
+        await _delete_folder_tree(session, tree, child.id, user, stamp)
     files = list(await session.scalars(
-        select(LegalHubDriveFileModel)
-        .options(defer(LegalHubDriveFileModel.content))
-        .where(LegalHubDriveFileModel.folder_id == folder_id)
+        select(LegalHubDriveFileModel).where(LegalHubDriveFileModel.folder_id == folder_id)
     ))
+    path = _folder_path_text(tree, folder_id)
     for item in files:
-        if shas is not None and item.blob_sha:
-            shas.add(item.blob_sha)
-        await session.delete(item)
+        await archive_drive_file(session, item, user, path, stamp)
     acls = list(await session.scalars(
         select(LegalHubDriveAclModel).where(LegalHubDriveAclModel.folder_id == folder_id)
     ))
@@ -932,6 +954,10 @@ async def _delete_folder_tree(session: AsyncSession, folder_id: str, shas: set[s
     folder = await session.get(LegalHubDriveFolderModel, folder_id)
     if folder is not None:
         await session.delete(folder)
+
+
+def _folder_path_text(tree: DriveTree, folder_id: str | None) -> str:
+    return "/".join(folder.name for folder in tree.ancestors(folder_id))
 
 
 @router.post("/drive/delete")
@@ -947,15 +973,12 @@ async def delete_items(
         tree.require(folder.id, "edit")
     for item in files:
         tree.require(item.folder_id, "edit")
-    shas: set[str] = set()
+    stamp = datetime.now(timezone.utc)
     for folder in folders:
-        await _delete_folder_tree(session, folder.id, shas)
+        await _delete_folder_tree(session, tree, folder.id, user, stamp)
     for item in files:
-        if item.blob_sha:
-            shas.add(item.blob_sha)
-        await session.delete(item)
+        await archive_drive_file(session, item, user, _folder_path_text(tree, item.folder_id), stamp)
     await session.commit()
-    await gc_blobs(session, shas)
     return {"deleted": len(folders) + len(files)}
 
 
@@ -1023,17 +1046,14 @@ async def delete_drive_file(
     session: AsyncSession = Depends(get_session),
     user: dict = Depends(require_user),
 ):
-    item = await session.get(LegalHubDriveFileModel, file_id, options=[defer(LegalHubDriveFileModel.content)])
+    item = await session.get(LegalHubDriveFileModel, file_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Файл не найден")
     parent = item.folder_id
     tree = await load_tree(session, user)
     tree.require(parent, "edit")
-    sha = item.blob_sha
-    await session.delete(item)
+    await archive_drive_file(session, item, user, _folder_path_text(tree, parent), datetime.now(timezone.utc))
     await session.commit()
-    if sha:
-        await gc_blobs(session, {sha})
     return await _browse(session, user, parent)
 
 
@@ -1049,10 +1069,8 @@ async def delete_folder(
         raise HTTPException(status_code=404, detail="Папка не найдена")
     parent = folder.parent_id
     tree.require(folder.id, "edit")
-    shas: set[str] = set()
-    await _delete_folder_tree(session, folder.id, shas)
+    await _delete_folder_tree(session, tree, folder.id, user, datetime.now(timezone.utc))
     await session.commit()
-    await gc_blobs(session, shas)
     return await _browse(session, user, parent)
 
 
@@ -1127,3 +1145,56 @@ async def remove_drive_acl(
         await session.delete(row)
         await session.commit()
     return {"ok": True}
+
+
+@router.get("/drive/deleted")
+async def list_deleted_files(
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Everything ever deleted from Disk and task attachments — kept forever, managers can restore."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Удалённые файлы видят администраторы и партнёры")
+    rows = list(await session.scalars(
+        select(LegalHubDeletedFileModel)
+        .options(defer(LegalHubDeletedFileModel.content))
+        .order_by(LegalHubDeletedFileModel.deleted_at.desc())
+        .limit(2000)
+    ))
+    return {"items": [{
+        "id": row.id,
+        "source": row.source,
+        "name": row.name,
+        "sizeBytes": row.size_bytes,
+        "contentType": row.content_type,
+        "path": row.folder_path,
+        "taskId": row.task_id,
+        "deletedBy": row.deleted_by_name,
+        "deletedAt": row.deleted_at.isoformat() if row.deleted_at else None,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows]}
+
+
+@router.post("/drive/deleted/{deleted_id}/restore")
+async def restore_deleted_file(
+    deleted_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Put a deleted file back on Disk: into its old folder if it still exists, otherwise into the root."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Восстанавливать файлы могут администраторы и партнёры")
+    row = await session.get(LegalHubDeletedFileModel, deleted_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Удалённый файл не найден")
+    folder_id = row.folder_id if row.folder_id and await session.get(LegalHubDriveFolderModel, row.folder_id) else None
+    stamp = datetime.now(timezone.utc)
+    item = LegalHubDriveFileModel(
+        id=str(uuid4()), folder_id=folder_id, name=row.name, content_type=row.content_type, size_bytes=row.size_bytes,
+        content=row.content, blob_sha=row.blob_sha, is_hidden=False,
+        created_by_user_id=row.created_by_user_id or _user_id(user), created_at=row.created_at or stamp, updated_at=stamp,
+    )
+    session.add(item)
+    await session.delete(row)
+    await session.commit()
+    return {"file": _file_out(item), "parentId": folder_id}

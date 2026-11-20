@@ -6,6 +6,7 @@ from pathlib import Path
 
 from backend_common.media_path import safe_media_path
 from infrastructure.config import get_settings
+from backend_common.file_retention import retire_file
 
 _SAFE_NAME_RE = re.compile(r"[^\w.\-()+ ]+", re.UNICODE)
 
@@ -42,6 +43,6 @@ def delete_storage_file(storage_key: str) -> None:
         return
     try:
         if path.is_file():
-            path.unlink()
+            retire_file(path)
     except OSError:
         pass

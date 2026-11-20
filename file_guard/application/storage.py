@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from backend_common.file_retention import retire_file
+
 _STORED_NAME = re.compile(r"^[a-f0-9]{32}$")
 
 
@@ -19,7 +21,9 @@ def resolve_stored_file(files_dir: str, stored_name: str | None) -> Path | None:
 
 
 def unlink_stored_file(files_dir: str, stored_name: str) -> int:
-    """Delete one blob inside files_dir and return the freed size.
+    """Take one stored copy out of the journal and return its size.
+
+    The file is never deleted: it moves to files_dir/.deleted and is kept there.
 
     Names that are not a stored hash, and paths that leave the directory, are ignored.
     """
@@ -36,7 +40,7 @@ def unlink_stored_file(files_dir: str, stored_name: str) -> int:
     if path.resolve().parent != root:
         return 0
     size = path.stat().st_size
-    path.unlink()
+    retire_file(path)
     return size
 
 

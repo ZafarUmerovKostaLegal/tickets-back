@@ -75,6 +75,7 @@ from presentation.schemas import (
     ReviseBody,
     StatusHistoryOut,
 )
+from backend_common.file_retention import retire_file
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -1608,7 +1609,7 @@ async def delete_expense(
         p = safe_media_path(settings.media_path, storage_key)
         try:
             if p is not None and p.is_file():
-                p.unlink()
+                retire_file(p)
         except OSError:
             pass
 
@@ -1841,7 +1842,7 @@ async def delete_attachment(
     p = safe_media_path(settings.media_path, storage_key)
     try:
         if p is not None and p.is_file():
-            p.unlink()
+            retire_file(p)
     except OSError:
         pass
     await repo.add_audit(

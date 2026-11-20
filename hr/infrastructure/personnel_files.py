@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend_common.media_path import safe_media_path
+from backend_common.file_retention import retire_file
 
 MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
@@ -86,4 +87,4 @@ def personnel_disk_path(base: Path, storage_key: str) -> Path | None:
 def delete_personnel_bytes(base: Path, storage_key: str) -> None:
     target = safe_media_path(base, storage_key)
     if target is not None and target.is_file():
-        target.unlink()
+        retire_file(target)

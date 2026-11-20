@@ -27,6 +27,11 @@ async def _ensure_schema(conn) -> None:
     if "blob_sha" not in columns:
         await conn.execute(text("ALTER TABLE fm_versions ADD COLUMN blob_sha VARCHAR(64)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_fm_versions_blob_sha ON fm_versions (blob_sha)"))
+    for table in ("fm_folders", "fm_documents"):
+        existing = await conn.run_sync(lambda sync, name=table: {col["name"] for col in inspect(sync).get_columns(name)})
+        if "purged_at" not in existing:
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN purged_at TIMESTAMP WITH TIME ZONE"
+                                    if conn.dialect.name == "postgresql" else f"ALTER TABLE {table} ADD COLUMN purged_at DATETIME"))
     if conn.dialect.name == "postgresql":
         # Files over 2 GB: sizes no longer fit into INTEGER.
         for table in ("fm_documents", "fm_versions"):

@@ -26,6 +26,7 @@ from presentation.schemas.user_schemas import (
 from presentation.time_tracking_capacity import fetch_weekly_capacity_hours, merge_weekly_capacity_into_user
 
 from presentation.time_tracking_user_provision import upsert_time_tracking_user_from_auth_record
+from backend_common.file_retention import retire_file
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -234,7 +235,7 @@ async def upload_desktop_background(
     if old_path:
         old_file = safe_media_path(settings.media_path, old_path)
         if old_file is not None and old_file.exists() and old_file.is_file():
-            old_file.unlink(missing_ok=True)
+            retire_file(old_file)
     user_dir = safe_media_path(settings.media_path, f"{DESKTOP_BG_SUBDIR}/{user_id}")
     if user_dir is None:
         raise HTTPException(status_code=500, detail="Invalid media path")
@@ -281,7 +282,7 @@ async def delete_desktop_background(
     if old_path:
         target = safe_media_path(settings.media_path, old_path)
         if target is not None and target.exists() and target.is_file():
-            target.unlink(missing_ok=True)
+            retire_file(target)
 
     r = await auth_service_request(
         "DELETE",

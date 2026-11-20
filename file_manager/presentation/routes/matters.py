@@ -115,7 +115,7 @@ async def list_clients(
     requestable.sort(key=lambda r: (r["clientName"].lower(), r["matterName"].lower()))
     closed_matters = sum(1 for matter in dirx.matters.values() if matter_closed(dirx, matter))
     return {
-        "viewer": {"userId": viewer.user_id, "name": viewer.name, "canManage": viewer.manager},
+        "viewer": {"userId": viewer.user_id, "name": viewer.name, "canManage": viewer.manager, "superAdmin": viewer.super_admin},
         "clients": out,
         "requestable": requestable,
         "stats": {

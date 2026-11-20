@@ -32,6 +32,8 @@ class FolderModel(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     trash_root_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # «Удалить навсегда» only hides the item from the trash: rows and files are kept forever.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentModel(Base):
@@ -59,6 +61,8 @@ class DocumentModel(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     trash_root_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # «Удалить навсегда» only hides the item from the trash: rows and files are kept forever.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class VersionModel(Base):

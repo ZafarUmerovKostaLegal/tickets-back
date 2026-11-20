@@ -113,17 +113,25 @@ def test_signed_link_downloads_without_session_and_expires(env, monkeypatch):
     assert client.get(link["url"]).status_code == 410
 
 
-def test_purging_trash_removes_the_file_from_disk_unless_shared(env):
-    client, _, _ = env
+def test_deleting_forever_keeps_files_and_super_admin_can_restore(env):
+    client, state, Viewer = env
     import infrastructure.blobs as blobs
     from presentation.versioning import digest
 
     folder = _folder(client, "Agreements")
     _, solo = _upload(client, folder, "Solo.pdf", b"only here")
-    _, first = _upload(client, folder, "Shared.pdf", b"shared bytes")
-    _upload(client, folder, "Shared copy.pdf", b"shared bytes", allowDuplicate="true")
-    for doc in (solo, first):
-        assert client.delete(f"{BASE}/documents/{doc['id']}").status_code == 200
-        assert client.delete(f"{BASE}/trash/document/{doc['id']}").status_code == 200
-    assert not blobs.blob_path(digest(b"only here")).exists()
-    assert blobs.blob_path(digest(b"shared bytes")).exists()
+    assert client.delete(f"{BASE}/documents/{solo['id']}").status_code == 200
+    assert client.delete(f"{BASE}/trash/document/{solo['id']}").status_code == 200
+    # Gone from the trash, but the file and its record stay.
+    assert blobs.blob_path(digest(b"only here")).exists()
+    assert all(item["id"] != solo["id"] for item in client.get(f"{BASE}/trash").json()["items"])
+    assert client.delete(f"{BASE}/trash/document/{solo['id']}").status_code == 404
+    assert client.get(f"{BASE}/trash", params={"archived": "true"}).status_code == 403
+
+    state["viewer"] = Viewer(1, "Root", True, True, "Bearer x")
+    archived = client.get(f"{BASE}/trash", params={"archived": "true"}).json()["items"]
+    assert [item["id"] for item in archived] == [solo["id"]]
+    assert archived[0]["purgedAt"]
+    assert client.post(f"{BASE}/trash/document/{solo['id']}/restore").status_code == 200
+    content = client.get(f"{BASE}/documents/{solo['id']}/content")
+    assert content.status_code == 200 and content.content == b"only here"

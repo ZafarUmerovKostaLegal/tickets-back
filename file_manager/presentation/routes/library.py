@@ -4,15 +4,13 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access import file_kind, has_level
-from starlette.concurrency import run_in_threadpool
 
-from infrastructure import blobs
 from infrastructure.database import get_session
-from infrastructure.models import AuditModel, DocumentModel, FavoriteModel, FolderModel, VersionModel
+from infrastructure.models import AuditModel, DocumentModel, FavoriteModel, FolderModel
 from presentation.common import (
     audit,
     directory,
@@ -24,7 +22,6 @@ from presentation.common import (
     require_matter,
 )
 from presentation.deps import Viewer, get_viewer
-from presentation.intake import blob_in_use
 
 router = APIRouter(tags=["file-manager"])
 
@@ -234,9 +231,13 @@ async def remove_favorite(
 
 @router.get("/trash")
 async def list_trash(
+    archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
+    """The trash; with ``archived`` (super admins) — items «deleted forever», which are still kept."""
+    if archived and not viewer.super_admin:
+        raise HTTPException(status_code=403, detail="Архив удалённого доступен только главному администратору")
     dirx, level_map, allowed = await _readable(session, viewer, "edit")
     if not allowed:
         return {"items": []}
@@ -245,6 +246,7 @@ async def list_trash(
             FolderModel.deleted_at.is_not(None),
             FolderModel.trash_root_id == FolderModel.id,
             FolderModel.matter_id.in_(allowed),
+            FolderModel.purged_at.is_not(None) if archived else FolderModel.purged_at.is_(None),
         )
     ))
     docs = list(await session.scalars(
@@ -252,6 +254,7 @@ async def list_trash(
             DocumentModel.deleted_at.is_not(None),
             DocumentModel.trash_root_id == DocumentModel.id,
             DocumentModel.matter_id.in_(allowed),
+            DocumentModel.purged_at.is_not(None) if archived else DocumentModel.purged_at.is_(None),
         )
     ))
     nested = dict((await session.execute(
@@ -272,12 +275,12 @@ async def list_trash(
 
     items = [
         {**base(folder.matter_id), "kind": "folder", "id": folder.id, "name": folder.name,
-         "deletedAt": iso(folder.deleted_at), "deletedBy": folder.deleted_by_name,
+         "deletedAt": iso(folder.deleted_at), "deletedBy": folder.deleted_by_name, "purgedAt": iso(folder.purged_at),
          "documents": int(nested.get(folder.id, 0))}
         for folder in folders
     ] + [
         {**base(doc.matter_id), "kind": "document", "id": doc.id, "name": doc.name,
-         "deletedAt": iso(doc.deleted_at), "deletedBy": doc.deleted_by_name,
+         "deletedAt": iso(doc.deleted_at), "deletedBy": doc.deleted_by_name, "purgedAt": iso(doc.purged_at),
          "fileKind": file_kind(doc.name), "sizeBytes": doc.size_bytes}
         for doc in docs
     ]
@@ -285,12 +288,20 @@ async def list_trash(
     return {"items": items}
 
 
-async def _trash_root(session: AsyncSession, kind: str, item_id: str) -> FolderModel | DocumentModel:
+async def _trash_root(
+    session: AsyncSession,
+    kind: str,
+    item_id: str,
+    *,
+    allow_purged: bool = False,
+) -> FolderModel | DocumentModel:
     model = FolderModel if kind == "folder" else DocumentModel if kind == "document" else None
     if model is None:
         raise HTTPException(status_code=400, detail="Неизвестный тип")
     row = await session.get(model, item_id)
     if row is None or row.deleted_at is None or row.trash_root_id != row.id:
+        raise HTTPException(status_code=404, detail="Элемент корзины не найден")
+    if row.purged_at is not None and not allow_purged:
         raise HTTPException(status_code=404, detail="Элемент корзины не найден")
     return row
 
@@ -302,7 +313,12 @@ async def restore_trash(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    root = await _trash_root(session, kind, item_id)
+    root = await _trash_root(session, kind, item_id, allow_purged=viewer.super_admin)
+    if root.purged_at is not None:
+        # Back from the archive of «deleted forever» items: first into the trash state, then restored as usual.
+        await session.execute(update(FolderModel).where(FolderModel.trash_root_id == root.id).values(purged_at=None))
+        await session.execute(update(DocumentModel).where(DocumentModel.trash_root_id == root.id).values(purged_at=None))
+        root.purged_at = None
     _, matter, _ = await require_matter(session, viewer, root.matter_id, "edit")
     folders = list(await session.scalars(select(FolderModel).where(FolderModel.trash_root_id == root.id)))
     docs = list(await session.scalars(select(DocumentModel).where(DocumentModel.trash_root_id == root.id)))
@@ -330,23 +346,16 @@ async def purge_trash(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
+    """«Удалить навсегда»: the item leaves the trash, but nothing is erased — rows and files stay."""
     root = await _trash_root(session, kind, item_id)
     _, matter, _ = await require_matter(session, viewer, root.matter_id, "manage")
-    doc_ids = list(await session.scalars(select(DocumentModel.id).where(DocumentModel.trash_root_id == root.id)))
-    shas: set[str] = set()
-    if doc_ids:
-        shas = {sha for sha in await session.scalars(
-            select(VersionModel.blob_sha).where(VersionModel.document_id.in_(doc_ids), VersionModel.blob_sha.is_not(None))
-        ) if sha}
-        await session.execute(delete(VersionModel).where(VersionModel.document_id.in_(doc_ids)))
-        await session.execute(delete(DocumentModel).where(DocumentModel.id.in_(doc_ids)))
-        await session.execute(delete(FavoriteModel).where(FavoriteModel.target_id.in_(doc_ids)))
-    await session.execute(delete(FolderModel).where(FolderModel.trash_root_id == root.id))
+    stamp = now()
+    docs = await session.execute(
+        update(DocumentModel).where(DocumentModel.trash_root_id == root.id).values(purged_at=stamp)
+    )
+    await session.execute(update(FolderModel).where(FolderModel.trash_root_id == root.id).values(purged_at=stamp))
+    root.purged_at = stamp
     audit(session, viewer, "purge", matter=matter, kind=kind, target_id=root.id, target_name=root.name,
-          detail=f"{len(doc_ids)} docs")
+          detail=f"{docs.rowcount or 0} docs hidden, files kept")
     await session.commit()
-    # Files on disk go too, unless another document still points to the same content.
-    for sha in shas:
-        if not await blob_in_use(session, sha):
-            await run_in_threadpool(lambda value=sha: blobs.blob_path(value).unlink(missing_ok=True))
     return {"ok": True}

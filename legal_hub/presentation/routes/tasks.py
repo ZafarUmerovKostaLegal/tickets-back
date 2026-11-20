@@ -20,6 +20,7 @@ from infrastructure.models import (
     LegalHubTaskCheckNoteModel,
     LegalHubTaskCommentModel,
     LegalHubTaskEventModel,
+    LegalHubDeletedFileModel,
     LegalHubTaskFileModel,
     LegalHubTaskModel,
 )
@@ -725,6 +726,15 @@ async def delete_file(
     item = await session.get(LegalHubTaskFileModel, file_id)
     if item is None or item.task_id != task_id:
         raise HTTPException(status_code=404, detail="Файл не найден")
+    # The attachment is kept (with its bytes) in legal_hub_deleted_files; only the task loses the link.
+    session.add(LegalHubDeletedFileModel(
+        id=str(uuid4()), source="task", original_id=item.id, name=item.name, content_type=item.content_type,
+        size_bytes=int(item.size_bytes or 0), content=item.content or b"", blob_sha=None, folder_id=None,
+        folder_path="", task_id=item.task_id, created_by_user_id=int(item.created_by_user_id or 0),
+        created_at=item.created_at, deleted_by_user_id=int(user.get("id") or 0),
+        deleted_by_name=str(user.get("name") or user.get("display_name") or user.get("email") or "")[:200],
+        deleted_at=datetime.now(timezone.utc),
+    ))
     await session.delete(item)
     await session.commit()
     return {"ok": True}

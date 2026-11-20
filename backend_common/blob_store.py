@@ -103,12 +103,6 @@ class BlobStore:
         with open(self.blob_path(sha), "rb") as fh:
             return fh.read()
 
-    def remove(self, sha: str) -> None:
-        try:
-            self.blob_path(sha).unlink(missing_ok=True)
-        except ValueError:
-            pass
-
     def free_bytes(self) -> int:
         return shutil.disk_usage(self.root()).free
 
