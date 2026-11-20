@@ -90,6 +90,13 @@ def build_csv_name_map(hikvision_users: Iterable[Mapping[str, Any]]) -> dict[str
             result[first_display] = exact_only[0]
             continue
 
+    # Full names as written on the terminal (unique only) — exports with a full "Name" column,
+    # so "Iroda Bekmurodova" is not swallowed by the "Iroda" first-name override.
+    for options in by_exact.values():
+        if len({emp for emp, _ in options}) == 1:
+            emp, name = options[0]
+            result.setdefault(name, (emp, name))
+
     # Apply manual overrides last.
     emp_to_name = {
         str(u.get("employee_no") or "").strip(): _norm_name(str(u.get("name") or ""))
@@ -112,7 +119,7 @@ def _parse_csv_time(raw: str) -> time | None:
     s = (raw or "").strip()
     if not s:
         return None
-    for fmt in ("%H:%M:%S", "%H:%M"):
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
         try:
             return datetime.strptime(s, fmt).time()
         except ValueError:
@@ -120,22 +127,79 @@ def _parse_csv_time(raw: str) -> time | None:
     return None
 
 
+_DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%Y.%m.%d")
+
+
 def _parse_csv_date(raw: str) -> date | None:
     s = (raw or "").strip()
     if not s:
         return None
-    try:
-        return date.fromisoformat(s[:10])
-    except ValueError:
+    head = s.split(" ")[0].split("T")[0]
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(head, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_csv_datetime(raw: str) -> tuple[date, time] | None:
+    """"2026-03-02 09:01:12", "02.03.2026 09:01", "2026-03-02T09:01:12+05:00"."""
+    s = (raw or "").strip()
+    if not s:
         return None
+    if "T" in s and s[:4].isdigit():
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(_OFFICE_TZ)
+            return dt.date(), dt.time().replace(microsecond=0)
+        except ValueError:
+            pass
+    parts = s.split(None, 1)
+    if len(parts) != 2:
+        return None
+    day = _parse_csv_date(parts[0])
+    tm = _parse_csv_time(parts[1])
+    if day is None or tm is None:
+        return None
+    return day, tm
+
+
+_ID_HEADERS = ("person id", "employee id", "employee no.", "employee no", "id", "табельный номер")
+_NAME_HEADERS = ("first name", "name", "person name", "employee name", "full name", "имя", "фио", "сотрудник")
+_TIME_HEADERS = ("time", "event time", "access time", "authentication time", "date time", "datetime", "время", "дата и время")
+
+
+def _header_cells(line: str) -> list[str]:
+    return [c.strip().strip('"').lower() for c in re.split(r"[,;\t]", line)]
 
 
 def _find_header_row(lines: list[str]) -> int:
     for i, line in enumerate(lines[:30]):
-        low = line.lower()
-        if "first name" in low and "date" in low and "time" in low:
+        cells = _header_cells(line)
+        has_who = any(c in _NAME_HEADERS or c in _ID_HEADERS for c in cells)
+        has_time = any(c in _TIME_HEADERS for c in cells)
+        if has_who and has_time:
             return i
     return -1
+
+
+def _sniff_delimiter(header_line: str) -> str:
+    counts = {d: header_line.count(d) for d in (",", ";", "\t")}
+    best = max(counts, key=lambda d: counts[d])
+    return best if counts[best] else ","
+
+
+def _id_variants(raw: str) -> list[str]:
+    s = (raw or "").strip()
+    if not s:
+        return []
+    out = [s]
+    if s.isdigit():
+        stripped = s.lstrip("0") or "0"
+        out.extend([stripped, stripped.zfill(8)])
+    return out
 
 
 def parse_transaction_csv_rows(
@@ -144,6 +208,12 @@ def parse_transaction_csv_rows(
     *,
     camera_ip: str,
 ) -> tuple[list[dict[str, Any]], CsvImportResult]:
+    """Hikvision / HCWebControl transaction export → camera_events rows.
+
+    Accepts the classic "First Name,Date,Week,Time" layout and richer ones: Person ID /
+    Employee No., a full Name (or First + Last Name), one combined date-time column,
+    comma / semicolon / tab delimiters and DD.MM.YYYY dates.
+    """
     result = CsvImportResult(camera_ip=camera_ip)
     result.name_map = {k: v[0] for k, v in name_map.items()}
 
@@ -151,25 +221,39 @@ def parse_transaction_csv_rows(
     raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     header_idx = _find_header_row(raw_lines)
     if header_idx < 0:
-        raise ValueError("CSV header not found (expected First Name,Date,Week,Time)")
+        raise ValueError("CSV header not found (expected a name / person ID column and a time column)")
+    delimiter = _sniff_delimiter(raw_lines[header_idx])
     body = "\n".join(raw_lines[header_idx:])
-    reader = csv.DictReader(io.StringIO(body))
+    reader = csv.DictReader(io.StringIO(body), delimiter=delimiter)
     if not reader.fieldnames:
         raise ValueError("CSV has no columns")
 
+    lowered = {(f or "").strip().strip('"').lower(): f for f in (reader.fieldnames or [])}
+
     def col(*names: str) -> str | None:
-        fields = list(reader.fieldnames or [])
-        lowered = { (f or "").strip().lower(): f for f in fields }
         for n in names:
-            if n.lower() in lowered:
-                return lowered[n.lower()]
+            if n in lowered:
+                return lowered[n]
         return None
 
-    name_col = col("First Name", "Name")
-    date_col = col("Date")
-    time_col = col("Time")
-    if not name_col or not date_col or not time_col:
-        raise ValueError("CSV must include First Name, Date, Time columns")
+    id_col = col(*_ID_HEADERS)
+    first_col = col("first name", "имя")
+    last_col = col("last name", "фамилия")
+    name_col = first_col or col("name", "person name", "employee name", "full name", "фио", "сотрудник")
+    date_col = col("date", "дата")
+    time_col = col("time", "время")
+    datetime_col = col("event time", "access time", "authentication time", "date time", "datetime", "дата и время")
+    if not name_col and not id_col:
+        raise ValueError("CSV must include a name or person ID column")
+    if not datetime_col and not time_col:
+        raise ValueError("CSV must include a time column")
+
+    # Case-insensitive lookups: full names first, then the first token.
+    by_name_cf = {k.casefold(): v for k, v in name_map.items()}
+    by_emp: dict[str, tuple[str, str]] = {}
+    for emp, display in name_map.values():
+        for key in _id_variants(emp):
+            by_emp.setdefault(key, (emp, display))
 
     by_key: dict[tuple[str, str, datetime, str], dict[str, Any]] = {}
     date_min: date | None = None
@@ -178,17 +262,44 @@ def parse_transaction_csv_rows(
 
     for row in reader:
         result.rows_read += 1
-        csv_name = _norm_name(str(row.get(name_col) or ""))
-        if not csv_name:
+        first = _norm_name(str(row.get(name_col) or "")) if name_col else ""
+        last = _norm_name(str(row.get(last_col) or "")) if last_col else ""
+        csv_name = _norm_name(f"{first} {last}") if last else first
+        raw_id = str(row.get(id_col) or "").strip() if id_col else ""
+        if not csv_name and not raw_id:
             continue
-        day = _parse_csv_date(str(row.get(date_col) or ""))
-        tm = _parse_csv_time(str(row.get(time_col) or ""))
+
+        day: date | None = None
+        tm: time | None = None
+        if datetime_col:
+            parsed = _parse_csv_datetime(str(row.get(datetime_col) or ""))
+            if parsed:
+                day, tm = parsed
+        if day is None and time_col:
+            raw_time = str(row.get(time_col) or "")
+            parsed = _parse_csv_datetime(raw_time)  # "Time" sometimes holds date + time
+            if parsed:
+                day, tm = parsed
+            elif date_col:
+                day = _parse_csv_date(str(row.get(date_col) or ""))
+                tm = _parse_csv_time(raw_time)
         if day is None or tm is None:
             continue
-        mapped = name_map.get(csv_name) or name_map.get(csv_name.split(" ")[0])
+
+        mapped: tuple[str, str] | None = None
+        if raw_id:
+            for key in _id_variants(raw_id):
+                if key in by_emp:
+                    mapped = by_emp[key]
+                    break
+            if mapped is None:
+                mapped = (raw_id, csv_name or f"#{raw_id}")
+        if mapped is None and csv_name:
+            mapped = by_name_cf.get(csv_name.casefold()) or by_name_cf.get(_first_token(csv_name).casefold())
         if not mapped:
+            label = csv_name or raw_id
             result.rows_unmapped += 1
-            result.unmapped_names[csv_name] = result.unmapped_names.get(csv_name, 0) + 1
+            result.unmapped_names[label] = result.unmapped_names.get(label, 0) + 1
             continue
         emp, display = mapped
         event_time = datetime.combine(day, tm, tzinfo=_OFFICE_TZ)
@@ -197,7 +308,7 @@ def parse_transaction_csv_rows(
             "camera_ip": camera_ip,
             "person_id": emp,
             "event_time": event_time,
-            "name": display[:256],
+            "name": (display or csv_name)[:256],
             "department": None,
             "checkpoint": _CSV_CHECKPOINT,
             "attendance_status": None,

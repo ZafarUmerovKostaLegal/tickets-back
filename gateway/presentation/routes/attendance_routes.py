@@ -88,6 +88,17 @@ ROLES_CAN_MANAGE_HIKVISION_MAPPINGS = {
 
 ROLES_CAN_VIEW_ATTENDANCE_RANGE = ROLES_CAN_MANAGE_HIKVISION_MAPPINGS
 
+# Loading camera history (CSV import, pulling days from the terminals) rewrites shared data.
+ROLES_CAN_MANAGE_CAMERA_DATA = ROLES_CAN_MANAGE_HIKVISION_MAPPINGS | {"IT отдел"}
+
+
+def _require_camera_data_manager(user: dict) -> None:
+    if (user.get("role") or "").strip() not in ROLES_CAN_MANAGE_CAMERA_DATA:
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators, partners, IT and office managers can load camera data",
+        )
+
 _RANGE_REPORT_HTTP_TIMEOUT_SEC = 300.0
 _HIKVISION_USERS_CACHE_TTL_SEC = 300.0
 _hikvision_users_cache: dict = {"expires_at": 0.0, "key": "", "payload": None}
@@ -555,6 +566,7 @@ async def trigger_camera_ingest_backfill(
     year: Optional[int] = Query(None),
     _: dict = Depends(get_current_user),
 ):
+    _require_camera_data_manager(_)
     settings = get_settings()
     base = (settings.attendance_service_url or "").rstrip("/")
     if not base:
@@ -581,6 +593,7 @@ async def import_camera_transaction_csv(
     _: dict = Depends(get_current_user),
 ):
     """Proxy: load historical Transaction CSV into attendance_camera_events."""
+    _require_camera_data_manager(_)
     settings = get_settings()
     base = (settings.attendance_service_url or "").rstrip("/")
     if not base:
