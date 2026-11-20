@@ -571,10 +571,12 @@ async def trigger_camera_ingest_backfill(
     base = (settings.attendance_service_url or "").rstrip("/")
     if not base:
         raise HTTPException(status_code=503, detail="Attendance service not configured")
+    # httpx sends None as an empty value ("year="), which the service rejects with 422 —
+    # forward only what was actually given.
     params = {
-        "date_from": date_from,
-        "date_to": date_to,
-        "year": year,
+        key: value
+        for key, value in (("date_from", date_from), ("date_to", date_to), ("year", year))
+        if value is not None and value != ""
     }
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
