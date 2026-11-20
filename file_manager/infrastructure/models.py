@@ -195,3 +195,24 @@ class UploadSessionModel(Base):
     allow_duplicate: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AddinClientModel(Base):
+    """One Kosta File add-in install (an Office app on a device) and who uses it."""
+
+    __tablename__ = "fm_addin_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    host: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    office_version: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    addin_version: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    auth_method: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    sso_status: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    sso_error: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

@@ -8,6 +8,7 @@ from sqlalchemy import inspect, text
 
 from infrastructure.database import Base, async_session_factory, engine
 from infrastructure import models as _models  # noqa: F401
+from presentation.routes.addin import router as addin_router
 from presentation.routes.admin import router as admin_router
 from presentation.routes.documents import router as documents_router
 from presentation.routes.library import router as library_router
@@ -66,6 +67,7 @@ app.include_router(mail_router, prefix=API_PREFIX)
 app.include_router(duplicates_router, prefix=API_PREFIX)
 app.include_router(uploads_router, prefix=API_PREFIX)
 app.include_router(preview_router, prefix=API_PREFIX)
+app.include_router(addin_router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["health"])
