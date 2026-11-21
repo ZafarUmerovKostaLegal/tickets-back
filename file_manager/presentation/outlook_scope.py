@@ -18,6 +18,12 @@ _OUTLOOK_ALLOWED: list[tuple[str, re.Pattern[str]]] = [
     ("DELETE", re.compile(r"^/favorites/[^/]+/[^/]+/?$")),
     ("POST", re.compile(r"^/mail/lookup/?$")),
     ("GET", re.compile(r"^/mail/suggestions/?$")),
+    # Server-side mail rules and the owner's auto-filing switch.
+    ("GET", re.compile(r"^/mail/rules/?$")),
+    ("POST", re.compile(r"^/mail/rules/?$")),
+    ("PATCH", re.compile(r"^/mail/rules/[^/]+/?$")),
+    ("DELETE", re.compile(r"^/mail/rules/[^/]+/?$")),
+    ("PUT", re.compile(r"^/mail/autofile/?$")),
     # Thread file update and attaching filed documents to a draft.
     ("GET", re.compile(r"^/documents/[^/]+/content/?$")),
     ("POST", re.compile(r"^/documents/[^/]+/(checkout|checkin)/?$")),

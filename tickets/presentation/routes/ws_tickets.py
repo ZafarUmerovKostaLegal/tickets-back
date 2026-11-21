@@ -53,6 +53,23 @@ def _comment_to_dict(c):
     }
 
 
+async def _comment_owner_denied(comment_repo, payload: dict) -> str | None:
+    """Edit/delete only by the comment author or a moderator role (identity injected by gateway)."""
+    try:
+        acting_user_id = int(payload.get("acting_user_id"))
+        comment_id = int(payload.get("comment_id"))
+    except (TypeError, ValueError):
+        return "Access denied to this comment"
+    comment = await comment_repo.get_by_id(comment_id)
+    if not comment:
+        return "Comment not found"
+    if payload.get("acting_can_moderate") is True:
+        return None
+    if int(comment.user_id) != acting_user_id:
+        return "You can only change your own comments"
+    return None
+
+
 @router.websocket("/ws/tickets")
 async def ws_tickets(websocket: WebSocket):
     settings = get_settings()
@@ -236,6 +253,12 @@ async def ws_tickets(websocket: WebSocket):
                                     "comment_created", ticket_uuid=tu, comment_id=comment.id
                                 )
                             continue
+
+                        if action in ("edit_comment", "delete_comment"):
+                            denied = await _comment_owner_denied(comment_repo, payload)
+                            if denied:
+                                await websocket.send_json(reply(error=denied))
+                                continue
 
                         if action == "edit_comment":
                             uc = UpdateCommentUseCase(comment_repo)

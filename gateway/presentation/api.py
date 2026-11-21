@@ -9,6 +9,7 @@ from backend_common.cors_origins import resolve_cors_origins
 from infrastructure.upstream_auth_context import IncomingAuthorizationMiddleware
 from infrastructure.config import get_settings
 from presentation.exception_handlers import register_exception_handlers
+from presentation.middleware.path_guard import PathGuardMiddleware
 from presentation.middleware.request_id import RequestIdMiddleware
 from presentation.middleware.security_headers import SecurityHeadersMiddleware
 from presentation.middleware.time_tracking_clients_rewrite import TimeTrackingClientsPathRewriteMiddleware
@@ -135,6 +136,8 @@ app.add_middleware(IncomingAuthorizationMiddleware)
 
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(RateLimitMiddleware, service_name="gateway")
+# Outermost: refuse dot-segment / internal-only paths before anything else sees them.
+app.add_middleware(PathGuardMiddleware)
 app.include_router(spa_auth_callback.router)
 app.include_router(ops.router)
 app.include_router(ops_databases.router)

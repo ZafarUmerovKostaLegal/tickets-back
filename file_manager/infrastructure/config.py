@@ -39,6 +39,21 @@ class Settings(BaseSettings):
         default=48,
         validation_alias=AliasChoices("FILE_MANAGER_UPLOAD_TTL_HOURS", "upload_session_ttl_hours"),
     )
+    # Server-side auto-filing of mail (Microsoft Graph, application permission Mail.Read + admin consent).
+    mail_autofile_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("FILE_MANAGER_MAIL_AUTOFILE", "mail_autofile_enabled"),
+    )
+    mail_autofile_interval_sec: int = Field(
+        default=300,
+        validation_alias=AliasChoices("FILE_MANAGER_MAIL_AUTOFILE_INTERVAL_SEC", "mail_autofile_interval_sec"),
+    )
+    graph_tenant_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_TENANT_ID", "AZURE_TENANT_ID"))
+    graph_client_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_ID", "AZURE_CLIENT_ID"))
+    graph_client_secret: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_SECRET", "AZURE_CLIENT_SECRET"))
+
+    def graph_ready(self) -> bool:
+        return bool(self.graph_tenant_id.strip() and self.graph_client_id.strip() and self.graph_client_secret.strip())
 
     @field_validator("auth_service_url", "time_tracking_service_url", mode="before")
     @classmethod

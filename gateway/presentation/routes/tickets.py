@@ -199,6 +199,17 @@ _WS_ACTIONS_WITH_TICKET_UUID = frozenset(
 
 _WS_PUBLIC_ACTIONS = frozenset({"list_statuses", "list_priorities"})
 
+# Comment edits/deletes carry only comment_id; the tickets service checks authorship against the
+# acting user that gateway injects (client-supplied acting_* fields are always overwritten).
+_WS_COMMENT_OWNER_ACTIONS = frozenset({"edit_comment", "delete_comment"})
+
+_WS_ALLOWED_ACTIONS = (
+    _WS_PUBLIC_ACTIONS
+    | _WS_ACTIONS_WITH_TICKET_UUID
+    | _WS_COMMENT_OWNER_ACTIONS
+    | frozenset({"create_ticket", "list_tickets"})
+)
+
 
 async def _ws_precheck_ticket_access(settings, ticket_uuid: str, ws_user: dict) -> str | None:
 
@@ -479,6 +490,21 @@ async def update_comment(
     await _get_ticket_and_check_access(ticket_uuid, current_user)
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10.0) as client:
+        existing = await client.get(f"{settings.tickets_service_url}/tickets/{ticket_uuid}/comments")
+    if existing.status_code == 404:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    existing.raise_for_status()
+    target = next(
+        (c for c in (existing.json() or []) if isinstance(c, dict) and _same_user_id(c.get("id"), comment_id)),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Comment or ticket not found")
+    if current_user["role"] not in ROLES_FULL_ACCESS and not _same_user_id(
+        target.get("user_id"), current_user.get("id")
+    ):
+        raise HTTPException(status_code=403, detail="You can only edit your own comments")
+    async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
             f"{settings.tickets_service_url}/tickets/{ticket_uuid}/comments/{comment_id}",
             json=body.model_dump(),
@@ -545,8 +571,16 @@ async def ws_tickets_proxy(websocket: WebSocket):
                     msg = await websocket.receive_text()
                     try:
                         data = json.loads(msg)
+                        if not isinstance(data, dict):
+                            raise TypeError("message must be an object")
                         action = data.get("action")
                         payload = dict(data.get("payload") or {})
+                        if action not in _WS_ALLOWED_ACTIONS:
+                            await websocket.send_json({
+                                "request_id": data.get("request_id"),
+                                "error": f"Unknown action: {action}",
+                            })
+                            continue
                         if action not in _WS_PUBLIC_ACTIONS and not ws_user:
                             await websocket.send_json({
                                 "request_id": data.get("request_id"),
@@ -575,10 +609,16 @@ async def ws_tickets_proxy(websocket: WebSocket):
                                 payload["user_id"] = ws_user["id"]
                             elif action == "list_tickets" and (ws_user.get("role") or "").strip() not in ROLES_FULL_ACCESS:
                                 payload["created_by_user_id"] = ws_user["id"]
+                            if action in _WS_COMMENT_OWNER_ACTIONS:
+                                payload["acting_user_id"] = ws_user["id"]
+                                payload["acting_can_moderate"] = (
+                                    (ws_user.get("role") or "").strip() in ROLES_FULL_ACCESS
+                                )
                         data = {**data, "payload": payload}
                         msg = json.dumps(data)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError, AttributeError, ValueError):
+                        await websocket.send_json({"error": "Invalid JSON"})
+                        continue
                     await backend_ws.send(msg)
 
             back_task = asyncio.create_task(forward_from_backend())

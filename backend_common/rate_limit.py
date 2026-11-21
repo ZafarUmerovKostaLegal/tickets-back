@@ -6,6 +6,7 @@ Not a substitute for edge WAF — defense-in-depth for API abuse and DoS amplifi
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import threading
@@ -58,13 +59,43 @@ _REPORTS_COUNT, _REPORTS_WINDOW = _parse_limit(
 )
 
 
+def _is_trusted_proxy(host: str) -> bool:
+    """Proxies we accept forwarding headers from: loopback / private / docker networks."""
+    try:
+        addr = ipaddress.ip_address((host or "").strip())
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private or addr.is_link_local
+
+
+def _valid_ip(value: str) -> str:
+    v = (value or "").strip()
+    try:
+        ipaddress.ip_address(v)
+    except ValueError:
+        return ""
+    return v
+
+
 def client_ip(request: Request) -> str:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    """Real client IP. Forwarding headers are honoured only when the TCP peer is our own proxy.
+
+    nginx appends the real address to X-Forwarded-For (``$proxy_add_x_forwarded_for``), so the
+    *first* entry is whatever the client chose to send. We take X-Real-IP (set by nginx to
+    ``$remote_addr``) or the right-most X-Forwarded-For entry instead, which a client cannot forge.
+    """
+    peer = (request.client.host if request.client and request.client.host else "") or ""
+    if peer and not _is_trusted_proxy(peer):
+        return peer
+    real_ip = _valid_ip(request.headers.get("x-real-ip") or "")
+    if real_ip:
+        return real_ip
+    forwarded = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
     if forwarded:
-        return forwarded
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+        last = _valid_ip(forwarded[-1])
+        if last:
+            return last
+    return peer or "unknown"
 
 
 def classify_path(path: str) -> tuple[str, int, int]:

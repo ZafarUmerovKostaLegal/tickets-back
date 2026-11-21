@@ -164,9 +164,10 @@ def _device_headers(request: Request) -> dict[str, str]:
     agent = request.headers.get("user-agent")
     if agent:
         out["User-Agent"] = agent[:512]
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    ip = forwarded or (request.headers.get("x-real-ip") or "").strip() or (request.client.host if request.client else "")
-    if ip:
+    from backend_common.rate_limit import client_ip
+
+    ip = client_ip(request)
+    if ip and ip != "unknown":
         out["X-Forwarded-For"] = ip
     return out
 

@@ -277,9 +277,13 @@ async def update_comment(
     ticket = await uc_ticket.execute(ticket_uuid)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    existing = await comment_repo.get_by_id(comment_id)
+    if not existing or existing.ticket_id != ticket.id:
+        # Checked before the write: a comment from another ticket must never be touched.
+        raise HTTPException(status_code=404, detail="Comment not found")
     uc = UpdateCommentUseCase(comment_repo)
     comment = await uc.execute(comment_id=comment_id, content=body.content)
-    if not comment or comment.ticket_id != ticket.id:
+    if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
     await session.commit()
     await notify_ticket_event(

@@ -42,19 +42,29 @@ async def _drop_legacy_integer_expense_tables(conn) -> None:
     dt = (row[0] or "").lower()
     if dt not in _LEGACY_INT_PK:
         return
+    # Never drop data: the legacy tables move intact (rows, indexes, FKs, sequences) into a
+    # timestamped backup schema, and fresh VARCHAR-id tables are created in "public".
+    from datetime import datetime, timezone
+
+    backup_schema = "expenses_legacy_backup_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     _log.warning(
-        "Обнаружен legacy expense_requests.id (%s). Удаляем таблицы расходов для пересоздания под VARCHAR id "
-        "(данные заявок будут удалены).",
+        "Обнаружен legacy expense_requests.id (%s). Старые таблицы расходов перенесены без удаления данных "
+        "в схему %s; в public создаются новые таблицы под VARCHAR id.",
         row[0],
+        backup_schema,
     )
-    for ddl in (
-        "DROP TABLE IF EXISTS expense_attachments CASCADE",
-        "DROP TABLE IF EXISTS expense_status_history CASCADE",
-        "DROP TABLE IF EXISTS expense_audit_logs CASCADE",
-        "DROP TABLE IF EXISTS expense_requests CASCADE",
-        "DROP TABLE IF EXISTS expense_kl_sequence CASCADE",
+    # Identifiers are constants plus a digits-only timestamp — nothing user-controlled.
+    create_schema_ddl = 'CREATE SCHEMA IF NOT EXISTS "' + backup_schema + '"'
+    await conn.execute(text(create_schema_ddl))
+    for table in (
+        "expense_attachments",
+        "expense_status_history",
+        "expense_audit_logs",
+        "expense_requests",
+        "expense_kl_sequence",
     ):
-        await conn.execute(text(ddl))
+        move_ddl = 'ALTER TABLE IF EXISTS public."' + table + '" SET SCHEMA "' + backup_schema + '"'
+        await conn.execute(text(move_ddl))
 
 
 @asynccontextmanager

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, JSON, LargeBinary, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.database import Base
@@ -220,3 +220,48 @@ class AddinClientModel(Base):
     ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class MailRuleModel(Base):
+    """«Mail from X → matter / folder». Personal rules act on their owner's mailbox,
+    shared rules (partners, admins) on every mailbox with auto-filing turned on."""
+
+    __tablename__ = "fm_mail_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, default="personal", index=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    owner_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    match: Mapped[str] = mapped_column(String(320), nullable=False)
+    matter_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    matter_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    matter_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    client_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    client_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MailboxModel(Base):
+    """A mailbox the server reads for auto-filing — only after its owner turned it on."""
+
+    __tablename__ = "fm_mailboxes"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Only mail that arrives after this moment is filed — the old mailbox is never scanned.
+    since: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    inbox_delta: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sent_delta: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    filed_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_filed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

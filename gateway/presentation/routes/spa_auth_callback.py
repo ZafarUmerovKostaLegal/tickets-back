@@ -26,10 +26,15 @@ async def spa_auth_callback_bridge(request: Request) -> HTMLResponse:
     req_host = (request.url.hostname or "").lower()
 
     home = f"{fe}/home"
-    fe_base_json = json.dumps(fe)
-    home_json = json.dumps(home)
-    fe_host_json = json.dumps(fe_host)
-    req_host_json = json.dumps(req_host)
+
+    def _js(value: str) -> str:
+        # JSON inside <script>: escape "<", ">" and "&" so a crafted Host header cannot close the tag.
+        return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+    fe_base_json = _js(fe)
+    home_json = _js(home)
+    fe_host_json = _js(fe_host)
+    req_host_json = _js(req_host)
 
 
     html = f"""<!DOCTYPE html>

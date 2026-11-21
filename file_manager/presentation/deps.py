@@ -20,6 +20,7 @@ class Viewer:
     authorization: str
     token_typ: str | None = None
     token_scope: str | None = None
+    email: str = ""
 
 
 async def _resolve_auth_header(request: Request, authorization: str | None) -> str:
@@ -82,4 +83,5 @@ async def get_viewer(
         authorization=auth,
         token_typ=str(token_typ) if token_typ else None,
         token_scope=str(token_scope) if token_scope else None,
+        email=str(data.get("email") or "").strip().lower()[:320],
     )
