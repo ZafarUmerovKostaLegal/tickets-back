@@ -48,6 +48,20 @@ class Settings(BaseSettings):
         default=300,
         validation_alias=AliasChoices("FILE_MANAGER_MAIL_AUTOFILE_INTERVAL_SEC", "mail_autofile_interval_sec"),
     )
+    # Teams meeting recordings → matter folders (same Azure app, Teams permissions + access policy).
+    meeting_recordings_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("FILE_MANAGER_MEETING_RECORDINGS", "meeting_recordings_enabled"),
+    )
+    meeting_recordings_interval_sec: int = Field(
+        default=300,
+        validation_alias=AliasChoices("FILE_MANAGER_MEETING_RECORDINGS_INTERVAL_SEC", "meeting_recordings_interval_sec"),
+    )
+    # A linked meeting is watched this long after it was linked or last produced a file.
+    meeting_watch_days: int = Field(
+        default=45,
+        validation_alias=AliasChoices("FILE_MANAGER_MEETING_WATCH_DAYS", "meeting_watch_days"),
+    )
     graph_tenant_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_TENANT_ID", "AZURE_TENANT_ID"))
     graph_client_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_ID", "AZURE_CLIENT_ID"))
     graph_client_secret: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_SECRET", "AZURE_CLIENT_SECRET"))
