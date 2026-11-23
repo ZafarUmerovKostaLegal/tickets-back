@@ -268,13 +268,15 @@ class MailboxModel(Base):
 
 
 class MeetingLinkModel(Base):
-    """A Teams meeting whose recordings (and transcripts) go into a matter folder.
+    """A Teams or Zoom meeting whose recordings (and transcripts) go into a matter folder.
 
-    One link per meeting chat; the person who linked it files the recordings in their name."""
+    One link per meeting (Teams: meeting chat id; Zoom: "zoom:<meeting occurrence UUID>");
+    the person who linked it files the recordings in their name."""
 
     __tablename__ = "fm_meeting_links"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(10), nullable=False, default="teams")
     chat_id: Mapped[str] = mapped_column(String(300), nullable=False, unique=True, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")

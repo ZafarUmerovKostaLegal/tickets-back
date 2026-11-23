@@ -29,6 +29,10 @@ _OUTLOOK_ALLOWED: list[tuple[str, re.Pattern[str]]] = [
     ("PUT", re.compile(r"^/meetings/link/?$")),
     ("DELETE", re.compile(r"^/meetings/link/?$")),
     ("POST", re.compile(r"^/meetings/link/check/?$")),
+    ("GET", re.compile(r"^/meetings/zoom/link/?$")),
+    ("PUT", re.compile(r"^/meetings/zoom/link/?$")),
+    ("DELETE", re.compile(r"^/meetings/zoom/link/?$")),
+    ("POST", re.compile(r"^/meetings/zoom/link/check/?$")),
     # Thread file update and attaching filed documents to a draft.
     ("GET", re.compile(r"^/documents/[^/]+/content/?$")),
     ("POST", re.compile(r"^/documents/[^/]+/(checkout|checkin)/?$")),

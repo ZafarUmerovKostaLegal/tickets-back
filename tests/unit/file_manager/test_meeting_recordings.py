@@ -166,3 +166,97 @@ def test_outlook_tokens_may_use_meeting_links():
     assert outlook_path_allowed("PUT", "/api/v1/files/meetings/link")
     assert outlook_path_allowed("POST", "/api/v1/files/meetings/link/check")
     assert not outlook_path_allowed("DELETE", "/api/v1/files/meetings")
+
+
+ZOOM_UUID = "aDYlohsHRtCd4ii1uC2+hA=="
+ZOOM_FILES = "https://us06web.zoom.us/rec/download"
+
+
+def _zoom(calls, participants=("iroda@kostalegal.com",)):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append((request.method, url))
+        if url.startswith("https://zoom.us/oauth/token"):
+            return httpx.Response(200, json={"access_token": "zoom-app", "expires_in": 3600})
+        if url == "https://api.zoom.us/v2/meetings/81234567890":
+            return httpx.Response(200, json={"id": 81234567890, "topic": "Acme: zoom call", "start_time": "2026-11-23T09:00:00Z"})
+        if "/recordings" in url and "api.zoom.us/v2/meetings/" in url:
+            start = "2026-11-23T09:01:00Z"
+            return httpx.Response(200, json={"topic": "Acme: zoom call", "host_email": "host@kostalegal.com", "recording_files": [
+                {"id": "v1", "file_type": "MP4", "recording_type": "gallery_view", "recording_start": start, "download_url": f"{ZOOM_FILES}/v1", "status": "completed"},
+                {"id": "v2", "file_type": "MP4", "recording_type": "shared_screen_with_speaker_view", "recording_start": start, "download_url": f"{ZOOM_FILES}/v2", "status": "completed"},
+                {"id": "a1", "file_type": "M4A", "recording_type": "audio_only", "recording_start": start, "download_url": f"{ZOOM_FILES}/a1", "status": "completed"},
+                {"id": "t1", "file_type": "TRANSCRIPT", "recording_type": "audio_transcript", "recording_start": start, "download_url": f"{ZOOM_FILES}/t1", "status": "completed"},
+            ]})
+        if "/past_meetings/" in url:
+            return httpx.Response(200, json={"participants": [{"user_email": e} for e in participants], "next_page_token": ""})
+        if url.startswith(ZOOM_FILES):
+            return httpx.Response(200, content=VTT.encode() if url.endswith("/t1") else MP4)
+        return httpx.Response(404, json={"message": "nope"})
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture()
+def zoom_env(env, monkeypatch):
+    client, state, Viewer, meetings, _, _ = env
+    monkeypatch.setenv("ZOOM_ACCOUNT_ID", "firm")
+    monkeypatch.setenv("ZOOM_S2S_CLIENT_ID", "s2s")
+    monkeypatch.setenv("ZOOM_S2S_CLIENT_SECRET", "secret")
+    import infrastructure.config as config
+    import infrastructure.zoom_api as zoom_api
+
+    config.get_settings.cache_clear()
+    zoom_api.reset_token_cache()
+    calls: list[tuple[str, str]] = []
+    holder = {"transport": _zoom(calls)}
+    original = zoom_api.meeting
+
+    async def meeting(*args, **kwargs):
+        kwargs.setdefault("transport", holder["transport"])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(zoom_api, "meeting", meeting)
+    yield client, state, Viewer, meetings, holder, calls
+
+
+def test_zoom_uuid_is_encoded_twice_when_zoom_wants_it():
+    ensure_service_in_path("file_manager")
+    from infrastructure.zoom_api import meeting_uuid_path
+
+    assert meeting_uuid_path("abc+def==") == "abc%2Bdef%3D%3D"
+    assert meeting_uuid_path("/ajXp112QmuoKj4854875==") == "%252FajXp112QmuoKj4854875%253D%253D"
+
+
+def test_zoom_recording_is_filed_once_with_one_view_and_transcript(zoom_env):
+    client, _, _, meetings, holder, calls = zoom_env
+    body = {"uuid": ZOOM_UUID, "meetingId": "81234567890", "matterId": "m1"}
+    saved = client.put(f"{BASE}/meetings/zoom/link", json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["link"]["topic"] == "Acme: zoom call"
+
+    summary = client.portal.call(lambda: meetings.run_once(transport=holder["transport"]))
+    assert summary == {"meetings": 1, "filed": 2, "errors": 0}
+    downloads = [url for _, url in calls if url.startswith(ZOOM_FILES)]
+    assert sorted(url.rsplit("/", 1)[1] for url in downloads) == ["t1", "v2"]
+    again = client.portal.call(lambda: meetings.run_once(transport=holder["transport"]))
+    assert again["filed"] == 0
+
+    names = sorted(doc["name"] for doc in client.get(f"{BASE}/matters/m1/browse").json()["documents"])
+    assert names == ["2026-11-23 14-01 — Запись — Acme zoom call.mp4", "2026-11-23 14-01 — Расшифровка — Acme zoom call.txt"]
+
+
+def test_zoom_recording_is_not_filed_for_someone_who_was_not_there(zoom_env):
+    client, state, Viewer, meetings, holder, calls = zoom_env
+    holder["transport"] = _zoom(calls, participants=("other@kostalegal.com",))
+    assert client.put(f"{BASE}/meetings/zoom/link", json={"uuid": ZOOM_UUID, "meetingId": "81234567890", "matterId": "m1"}).status_code == 200
+    summary = client.portal.call(lambda: meetings.run_once(transport=holder["transport"]))
+    assert summary["filed"] == 0
+    link = client.get(f"{BASE}/meetings/zoom/link", params={"uuid": ZOOM_UUID}).json()["link"]
+    assert link["enabled"] is False and "не участвовал" in link["lastError"]
+    assert not [url for _, url in calls if url.startswith(ZOOM_FILES)]
+
+    state["viewer"] = Viewer(9, "Other", False, False, "Bearer z", email="other@kostalegal.com")
+    foreign = client.get(f"{BASE}/meetings/zoom/link", params={"uuid": ZOOM_UUID}).json()["link"]
+    assert foreign["hidden"] is True and "matterName" not in foreign
+    assert client.delete(f"{BASE}/meetings/zoom/link", params={"uuid": ZOOM_UUID}).status_code == 403

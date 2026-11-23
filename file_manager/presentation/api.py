@@ -36,6 +36,9 @@ async def _ensure_schema(conn) -> None:
         if "purged_at" not in existing:
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN purged_at TIMESTAMP WITH TIME ZONE"
                                     if conn.dialect.name == "postgresql" else f"ALTER TABLE {table} ADD COLUMN purged_at DATETIME"))
+    links = await conn.run_sync(lambda sync: {col["name"] for col in inspect(sync).get_columns("fm_meeting_links")})
+    if "provider" not in links:
+        await conn.execute(text("ALTER TABLE fm_meeting_links ADD COLUMN provider VARCHAR(10) NOT NULL DEFAULT 'teams'"))
     if conn.dialect.name == "postgresql":
         # Files over 2 GB: sizes no longer fit into INTEGER.
         for table in ("fm_documents", "fm_versions"):

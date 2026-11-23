@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     graph_tenant_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_TENANT_ID", "AZURE_TENANT_ID"))
     graph_client_id: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_ID", "AZURE_CLIENT_ID"))
     graph_client_secret: str = Field(default="", validation_alias=AliasChoices("MICROSOFT_CLIENT_SECRET", "AZURE_CLIENT_SECRET"))
+    # Zoom cloud recordings: Server-to-Server OAuth app of the firm's Zoom account.
+    zoom_account_id: str = Field(default="", validation_alias=AliasChoices("ZOOM_ACCOUNT_ID"))
+    zoom_client_id: str = Field(default="", validation_alias=AliasChoices("ZOOM_S2S_CLIENT_ID"))
+    zoom_client_secret: str = Field(default="", validation_alias=AliasChoices("ZOOM_S2S_CLIENT_SECRET"))
 
     def graph_ready(self) -> bool:
         return bool(self.graph_tenant_id.strip() and self.graph_client_id.strip() and self.graph_client_secret.strip())

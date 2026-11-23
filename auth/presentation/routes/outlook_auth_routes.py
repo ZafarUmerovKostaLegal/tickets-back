@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from application.errors import UserAccessDenied
 from application.outlook_tokens import OutlookTokenService
 from application.ports import UserRepositoryPort
-from application.use_cases import GetCurrentUserUseCase
+from application.use_cases import GetCurrentUserUseCase, assert_user_can_authenticate
+from infrastructure.zoom_oauth import ZoomAuthError, zoom_identity
 from infrastructure.azure_ad import (
     AzureTokenExchangeError,
     acquire_token_by_code,
@@ -18,8 +22,8 @@ from infrastructure.database import get_session
 from infrastructure.jwt_service import JWTService
 from infrastructure.repositories import UserRepository
 from presentation.http_auth import access_token_from_request
-from presentation.routes.auth_routes import _claims_to_user_and_token
-from presentation.schemas import OutlookExchangeBody, OutlookRefreshBody, OutlookTokenResponse, UserResponse
+from presentation.routes.auth_routes import _apply_session_cookie, _claims_to_user_and_token, _remember_device
+from presentation.schemas import OutlookExchangeBody, OutlookRefreshBody, OutlookTokenResponse, TokenResponse, UserResponse
 from backend_common.rbac_ui_permissions import build_ui_permissions
 
 router = APIRouter(prefix="/auth/outlook", tags=["auth-outlook"])
@@ -131,6 +135,40 @@ async def outlook_exchange(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await session.commit()
     return _pair_response(pair)
+
+
+class ZoomBootstrapBody(BaseModel):
+    code: str = Field(min_length=1, max_length=2000)
+    codeVerifier: str = Field(min_length=43, max_length=128)
+
+
+@router.post("/zoom/bootstrap", response_model=TokenResponse)
+async def zoom_bootstrap(
+    body: ZoomBootstrapBody,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+):
+    """Kosta File in a Zoom meeting: the firm's Zoom account vouches for the e-mail of an existing Hub user."""
+    try:
+        identity = await zoom_identity(body.code, body.codeVerifier)
+    except ZoomAuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    user = await user_repo.get_by_email(identity.email)
+    if user is None:
+        raise HTTPException(status_code=403, detail="Нет пользователя Kosta Hub с почтой этой учётной записи Zoom")
+    try:
+        assert_user_can_authenticate(user)
+    except UserAccessDenied as exc:
+        raise HTTPException(status_code=403, detail="User blocked or archived") from exc
+    jti = str(uuid.uuid4())
+    await user_repo.register_session_jti(user.id, jti, max_sessions=get_settings().auth_max_concurrent_sessions)
+    token = JWTService().create_access_token(user.id, user.azure_oid, jti)
+    await _remember_device(request, token, session)
+    await session.commit()
+    _apply_session_cookie(response, token)
+    return TokenResponse(access_token=token)
 
 
 @router.post("/refresh", response_model=OutlookTokenResponse)

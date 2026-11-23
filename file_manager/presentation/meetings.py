@@ -1,15 +1,17 @@
-"""Teams meeting recordings → matter folders.
+"""Teams and Zoom meeting recordings → matter folders.
 
-Someone in a Teams meeting opens Kosta File in the meeting side panel and links the meeting to a matter
-folder. Every few minutes the server asks Graph for recordings (and transcripts) of linked meetings and
-files each new one into that folder, in the name of the person who linked the meeting.
+Someone in a meeting opens Kosta File in the meeting side panel (Teams app or Zoom App) and links the
+meeting to a matter folder. Every few minutes the server asks Graph / Zoom for recordings (and transcripts)
+of linked meetings and files each new one into that folder, in the name of the person who linked it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -17,8 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from application.meeting_files import recording_file_name, transcript_file_name, vtt_to_text
-from infrastructure import blobs
+from application.meeting_files import pick_zoom_files, recording_file_name, transcript_file_name, vtt_to_text
+from infrastructure import blobs, zoom_api
 from infrastructure.config import get_settings
 from infrastructure.database import async_session_factory
 from infrastructure.graph_mail import GraphError
@@ -30,6 +32,8 @@ from infrastructure.graph_meetings import (
     list_transcripts,
     meeting_for_chat,
 )
+from infrastructure.zoom_api import TooLarge as ZoomTooLarge
+from infrastructure.zoom_api import ZoomError
 from infrastructure.models import AclModel, FolderModel, MatterWorkspaceModel, MeetingLinkModel
 from infrastructure.tt_directory import Matter
 from presentation.common import next_doc_number, now
@@ -108,56 +112,106 @@ def _mark(link: MeetingLinkModel, file_id: str, filed: bool) -> None:
         link.last_filed_at = now()
 
 
-async def _file_recordings(session: AsyncSession, link: MeetingLinkModel, transport) -> int:
+DownloadTo = Callable[[Path, int], Awaitable[int]]
+_TOO_LARGE = (TooLarge, ZoomTooLarge)
+
+
+async def _file_video(session: AsyncSession, link: MeetingLinkModel, key: str, name: str, comment: str, download: DownloadTo) -> bool:
+    """Streams one recording to disk and files it; True when a new document or version appeared."""
+    part = blobs.part_path(f"meeting-{uuid4()}")
+    try:
+        try:
+            await download(part, get_settings().max_upload_bytes)
+        except _TOO_LARGE:
+            link.last_error = "Запись больше допустимого размера файла — сохраните её вручную"
+            _mark(link, key, False)
+            await session.commit()
+            return False
+        sha, size = await run_in_threadpool(blobs.adopt, part)
+    finally:
+        await run_in_threadpool(lambda: part.unlink(missing_ok=True))
+    head = await run_in_threadpool(blobs.read_head, sha)
+    status = await _file(session, link, name=name, content_type="video/mp4", sha=sha, size=size, head=head, comment=comment)
+    filed = status in ("created", "version")
+    _mark(link, key, filed)
+    await session.commit()
+    return filed
+
+
+async def _file_transcript(session: AsyncSession, link: MeetingLinkModel, key: str, name: str, comment: str, vtt: str) -> bool:
+    content = vtt_to_text(vtt, link.topic).encode("utf-8")
+    sha = digest(content)
+    await store_content(content)
+    status = await _file(
+        session, link, name=name, content_type="text/plain; charset=utf-8",
+        sha=sha, size=len(content), head=content[:65536], comment=comment,
+    )
+    filed = status in ("created", "version")
+    _mark(link, key, filed)
+    await session.commit()
+    return filed
+
+
+async def _file_teams(session: AsyncSession, link: MeetingLinkModel, transport) -> int:
     filed = 0
-    limit = get_settings().max_upload_bytes
     for recording in await list_recordings(link.organizer_id, link.meeting_id, transport=transport):
         key = f"rec:{recording.id}"
         if key in (link.filed_ids or []):
             continue
-        part = blobs.part_path(f"meeting-{uuid4()}")
-        try:
-            try:
-                size = await download_to(recording.content_url, part, limit, transport=transport)
-            except TooLarge:
-                link.last_error = "Запись больше допустимого размера файла — сохраните её вручную"
-                _mark(link, key, False)
-                continue
-            sha, size = await run_in_threadpool(blobs.adopt, part)
-        finally:
-            await run_in_threadpool(lambda: part.unlink(missing_ok=True))
-        head = await run_in_threadpool(blobs.read_head, sha)
-        status = await _file(
-            session, link,
-            name=recording_file_name(link.topic, recording.created_at or link.starts_at),
-            content_type="video/mp4", sha=sha, size=size, head=head,
-            comment="Запись встречи Teams",
+        filed += await _file_video(
+            session, link, key,
+            recording_file_name(link.topic, recording.created_at or link.starts_at),
+            "Запись встречи Teams",
+            lambda part, limit, url=recording.content_url: download_to(url, part, limit, transport=transport),
         )
-        _mark(link, key, status in ("created", "version"))
-        filed += status in ("created", "version")
-        await session.commit()
-    return filed
-
-
-async def _file_transcripts(session: AsyncSession, link: MeetingLinkModel, transport) -> int:
-    filed = 0
+    if not link.include_transcript:
+        return filed
     for transcript in await list_transcripts(link.organizer_id, link.meeting_id, transport=transport):
         key = f"tr:{transcript.id}"
         if key in (link.filed_ids or []):
             continue
-        text = vtt_to_text(await download_transcript(transcript.content_url, transport=transport), link.topic)
-        content = text.encode("utf-8")
-        sha = digest(content)
-        await store_content(content)
-        status = await _file(
-            session, link,
-            name=transcript_file_name(link.topic, transcript.created_at or link.starts_at),
-            content_type="text/plain; charset=utf-8", sha=sha, size=len(content), head=content[:65536],
-            comment="Расшифровка встречи Teams",
+        vtt = await download_transcript(transcript.content_url, transport=transport)
+        filed += await _file_transcript(
+            session, link, key,
+            transcript_file_name(link.topic, transcript.created_at or link.starts_at),
+            "Расшифровка встречи Teams", vtt,
         )
-        _mark(link, key, status in ("created", "version"))
-        filed += status in ("created", "version")
-        await session.commit()
+    return filed
+
+
+def zoom_uuid(link: MeetingLinkModel) -> str:
+    return link.chat_id.removeprefix("zoom:")
+
+
+async def _file_zoom(session: AsyncSession, link: MeetingLinkModel, transport) -> int:
+    recording = await zoom_api.recordings(zoom_uuid(link), transport=transport)
+    if recording is None:
+        return 0
+    link.topic = link.topic or recording.topic[:500]
+    owner = (link.user_email or "").lower()
+    if owner != recording.host_email and owner not in await zoom_api.participant_emails(zoom_uuid(link), transport=transport):
+        link.enabled = False
+        link.last_error = "Привязавший не участвовал во встрече — запись не сохранена, привязка выключена"
+        return 0
+    filed = 0
+    for item in pick_zoom_files(recording.files, link.include_transcript):
+        key = f"zoom:{item.id}"
+        if key in (link.filed_ids or []):
+            continue
+        if item.file_type == "TRANSCRIPT":
+            vtt = await zoom_api.download_text(item.download_url, transport=transport)
+            filed += await _file_transcript(
+                session, link, key,
+                transcript_file_name(link.topic, item.started_at or link.starts_at),
+                "Расшифровка встречи Zoom", vtt,
+            )
+            continue
+        filed += await _file_video(
+            session, link, key,
+            recording_file_name(link.topic, item.started_at or link.starts_at),
+            "Запись встречи Zoom",
+            lambda part, limit, url=item.download_url: zoom_api.download_to(url, part, limit, transport=transport),
+        )
     return filed
 
 
@@ -168,16 +222,16 @@ async def process_link(session: AsyncSession, link: MeetingLinkModel, *, transpo
         link.enabled = False
         link.last_error = "Нет доступа к matter — привязка выключена"
         return 0
+    if link.provider == "zoom":
+        link.last_error = ""
+        return await _file_zoom(session, link, transport)
     if not link.meeting_id or not link.organizer_id:
         meeting = await meeting_for_chat(link.chat_id, transport=transport)
         link.organizer_id, link.meeting_id = meeting.organizer_id, meeting.meeting_id
         link.topic = link.topic or meeting.topic[:500]
         link.starts_at = link.starts_at or meeting.starts_at
     link.last_error = ""
-    filed = await _file_recordings(session, link, transport)
-    if link.include_transcript:
-        filed += await _file_transcripts(session, link, transport)
-    return filed
+    return await _file_teams(session, link, transport)
 
 
 async def run_once(*, chat_id: str | None = None, transport: httpx.AsyncBaseTransport | None = None) -> dict:
@@ -185,8 +239,9 @@ async def run_once(*, chat_id: str | None = None, transport: httpx.AsyncBaseTran
     settings = get_settings()
     if not settings.meeting_recordings_enabled:
         return {"skipped": "disabled"}
-    if not settings.graph_ready() and transport is None:
-        return {"skipped": "graph-not-configured"}
+    ready = {"teams": settings.graph_ready() or transport is not None, "zoom": zoom_api.zoom_ready() or transport is not None}
+    if not any(ready.values()):
+        return {"skipped": "not-configured"}
     async with _run_lock:
         summary = {"meetings": 0, "filed": 0, "errors": 0}
         async with async_session_factory() as session:
@@ -197,13 +252,13 @@ async def run_once(*, chat_id: str | None = None, transport: httpx.AsyncBaseTran
             stamp = now()
             for link_id in ids:
                 link = await session.get(MeetingLinkModel, link_id)
-                if link is None or (not chat_id and not watched(link, stamp)):
+                if link is None or not ready.get(link.provider or "teams") or (not chat_id and not watched(link, stamp)):
                     continue
                 summary["meetings"] += 1
                 error = ""
                 try:
                     summary["filed"] += await process_link(session, link, transport=transport)
-                except GraphError as exc:
+                except (GraphError, ZoomError) as exc:
                     error = str(exc)
                 except Exception as exc:  # noqa: BLE001 — one meeting must never stop the others
                     _log.exception("meeting recording filing failed for %s", link_id)
@@ -235,8 +290,8 @@ async def _loop() -> None:
 def start_meetings_loop() -> None:
     global _task
     settings = get_settings()
-    if not settings.meeting_recordings_enabled or not settings.graph_ready():
-        _log.info("Teams recordings filing is off (FILE_MANAGER_MEETING_RECORDINGS or Graph credentials missing)")
+    if not settings.meeting_recordings_enabled or not (settings.graph_ready() or zoom_api.zoom_ready()):
+        _log.info("meeting recordings filing is off (FILE_MANAGER_MEETING_RECORDINGS, Graph or Zoom credentials missing)")
         return
     if _task is None or _task.done():
         _task = asyncio.create_task(_loop(), name="meeting-recordings")

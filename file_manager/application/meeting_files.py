@@ -73,3 +73,34 @@ def vtt_to_text(vtt: str, topic: str = "") -> str:
     head = [f"Расшифровка встречи: {topic.strip()}", ""] if topic.strip() else []
     body = [f"[{when}] {who}: {text}" if who else f"[{when}] {text}" for when, who, text in lines]
     return "\n".join([*head, *body]).strip() + "\n"
+
+
+_ZOOM_VIEWS = (
+    "shared_screen_with_speaker_view",
+    "shared_screen_with_speaker_view(cc)",
+    "shared_screen_with_gallery_view",
+    "speaker_view",
+    "active_speaker",
+    "gallery_view",
+    "shared_screen",
+)
+
+
+def pick_zoom_files(files, include_transcript: bool) -> list:
+    """One MP4 per recording segment (the most useful view) and, if wanted, the transcript.
+
+    Zoom stores the same segment in several views (speaker, gallery, screen…): filing all of them would
+    put several copies of one meeting into the matter."""
+    done = [f for f in files if f.status in ("", "completed") and f.download_url]
+    by_start: dict[object, list] = {}
+    for item in done:
+        if item.file_type == "MP4":
+            by_start.setdefault(item.started_at, []).append(item)
+
+    def rank(item) -> int:
+        return _ZOOM_VIEWS.index(item.recording_type) if item.recording_type in _ZOOM_VIEWS else len(_ZOOM_VIEWS)
+
+    picked = [min(group, key=rank) for group in by_start.values()]
+    if include_transcript:
+        picked += [f for f in done if f.file_type == "TRANSCRIPT"]
+    return picked
