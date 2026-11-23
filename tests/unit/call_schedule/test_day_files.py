@@ -44,7 +44,7 @@ def day_files_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-    asyncio.get_event_loop().run_until_complete(_prepare())
+    asyncio.run(_prepare())
 
     from presentation.api import app
     from presentation import deps
@@ -71,7 +71,7 @@ def day_files_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides.clear()
     get_settings.cache_clear()
-    asyncio.get_event_loop().run_until_complete(engine.dispose())
+    asyncio.run(engine.dispose())
     _purge_call_schedule_modules()
 
 

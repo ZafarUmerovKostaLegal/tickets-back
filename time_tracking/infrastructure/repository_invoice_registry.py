@@ -109,7 +109,7 @@ _SYSTEM_STATUS_LABELS = {
     "viewed": "Оплата в пути",
     "partial_paid": "Частично оплачен",
     "paid": "Оплачен",
-    "client_paid": "Оплачен клиентом",
+    "client_paid": "Оплачен",
     "send_to_olga": "Ольге направить",
     "client_review": "На согласовании с Клиентом",
     "awaiting_client": "Жду подтверждения от клиента",

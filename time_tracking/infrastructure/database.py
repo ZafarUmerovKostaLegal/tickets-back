@@ -9,14 +9,10 @@ def make_async_url(url: str) -> str:
     return url
 
 
-engine = create_async_engine(
-    make_async_url(get_settings().database_url),
-    echo=False,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-    pool_recycle=1800,
-)
+_database_url = make_async_url(get_settings().database_url)
+_pool_options = {} if _database_url.startswith("sqlite") else {"pool_size": 5, "max_overflow": 10, "pool_pre_ping": True, "pool_recycle": 1800}
+
+engine = create_async_engine(_database_url, echo=False, **_pool_options)
 
 async_session_factory = async_sessionmaker(
     engine,
