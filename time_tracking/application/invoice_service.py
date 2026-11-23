@@ -1862,6 +1862,7 @@ _REGISTRY_STATUS_KEYS = {
     "Жду подтверждения от клиента": "awaiting_client",
     "Отправлен": "sent",
     "Выставлен": "issued",
+    "Оплата в пути": "viewed",
     "Просмотрен": "viewed",
     "Частично оплачен": "partial_paid",
     "Оплачен": "paid",

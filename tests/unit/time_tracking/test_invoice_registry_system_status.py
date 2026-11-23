@@ -39,7 +39,7 @@ def test_system_status_labels():
 
     assert _system_status(_invoice(status="draft")) == "Черновик"
     assert _system_status(_invoice(status="sent")) == "Отправлен"
-    assert _system_status(_invoice(status="viewed")) == "Просмотрен"
+    assert _system_status(_invoice(status="viewed")) == "Оплата в пути"
     assert _system_status(_invoice(status="canceled", amount_paid=Decimal("1000"))) == "Отменён"
 
 
