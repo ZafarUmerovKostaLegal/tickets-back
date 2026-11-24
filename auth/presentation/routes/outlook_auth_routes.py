@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import uuid
 from typing import Optional
 
@@ -12,18 +11,20 @@ from application.errors import UserAccessDenied
 from application.outlook_tokens import OutlookTokenService
 from application.ports import UserRepositoryPort
 from application.use_cases import GetCurrentUserUseCase, assert_user_can_authenticate
-from infrastructure.zoom_oauth import ZoomAuthError, zoom_identity
 from infrastructure.azure_ad import (
     AzureTokenExchangeError,
     acquire_token_by_code,
     resolve_profile_picture_from_tokens,
+    verify_office_sso_token,
 )
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.jwt_service import JWTService
 from infrastructure.repositories import UserRepository
 from presentation.http_auth import access_token_from_request
-from presentation.routes.auth_routes import _apply_session_cookie, _claims_to_user_and_token, _remember_device
+from application.use_cases import AzureLoginUseCase
+from domain.roles import Role
+from presentation.routes.auth_routes import _apply_session_cookie, _claims_to_user_and_token, _remember_device, get_login_use_case
 from presentation.schemas import OutlookExchangeBody, OutlookRefreshBody, OutlookTokenResponse, TokenResponse, UserResponse
 from backend_common.rbac_ui_permissions import build_ui_permissions
 
@@ -138,73 +139,37 @@ async def outlook_exchange(
     return _pair_response(pair)
 
 
-class ZoomBootstrapBody(BaseModel):
-    code: str = Field(min_length=1, max_length=2000)
-    codeVerifier: str = Field(min_length=43, max_length=128)
+class SsoBody(BaseModel):
+    token: str = Field(min_length=20, max_length=12000)
 
 
-@router.post("/zoom/bootstrap", response_model=TokenResponse)
-async def zoom_bootstrap(
-    body: ZoomBootstrapBody,
+@router.post("/sso", response_model=TokenResponse)
+async def office_sso(
+    body: SsoBody,
     request: Request,
     response: Response,
+    uc: AzureLoginUseCase = Depends(get_login_use_case),
     session: AsyncSession = Depends(get_session),
-    user_repo: UserRepositoryPort = Depends(get_user_repo),
 ):
-    """Kosta File in a Zoom meeting: the firm's Zoom account vouches for the e-mail of an existing Hub user."""
+    """Office / Teams single sign-on: the host vouches for the signed-in work account."""
     try:
-        identity = await zoom_identity(body.code, body.codeVerifier)
-    except ZoomAuthError as exc:
-        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
-    user = await user_repo.get_by_email(identity.email)
-    if user is None:
-        raise HTTPException(status_code=403, detail="Нет пользователя Kosta Hub с почтой этой учётной записи Zoom")
+        claims = verify_office_sso_token(body.token)
+    except AzureTokenExchangeError as exc:
+        raise HTTPException(status_code=401, detail=exc.detail) from exc
+    email = str(
+        claims.get("preferred_username") or claims.get("upn") or claims.get("email") or claims.get("unique_name") or ""
+    ).strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Missing email in SSO token")
+    display_name = str(claims.get("name") or email).strip() or None
     try:
-        assert_user_can_authenticate(user)
+        _, hub_token = await uc.execute(str(claims["oid"]).strip(), email, display_name, None, Role.EMPLOYEE.value)
     except UserAccessDenied as exc:
         raise HTTPException(status_code=403, detail="User blocked or archived") from exc
-    jti = str(uuid.uuid4())
-    await user_repo.register_session_jti(user.id, jti, max_sessions=get_settings().auth_max_concurrent_sessions)
-    token = JWTService().create_access_token(user.id, user.azure_oid, jti)
-    await _remember_device(request, token, session)
+    await _remember_device(request, hub_token, session)
     await session.commit()
-    _apply_session_cookie(response, token)
-    return TokenResponse(access_token=token)
-
-
-_RELAY_TTL_SEC = 300
-_RELAY_MAX = 500
-_relay: dict[str, tuple[float, dict]] = {}
-
-
-class RelayBody(BaseModel):
-    state: str = Field(min_length=40, max_length=200, pattern=r"^tr\.[A-Za-z0-9_-]+$")
-    code: str = Field(default="", max_length=4000)
-    error: str = Field(default="", max_length=500)
-
-
-def _relay_prune(now: float) -> None:
-    for key in [k for k, (at, _) in _relay.items() if now - at > _RELAY_TTL_SEC]:
-        _relay.pop(key, None)
-
-
-@router.post("/relay", status_code=204)
-async def relay_put(body: RelayBody):
-    now = time.monotonic()
-    _relay_prune(now)
-    if len(_relay) >= _RELAY_MAX:
-        raise HTTPException(status_code=429, detail="Too many pending sign-ins")
-    _relay[body.state] = (now, {"code": body.code, "error": body.error, "state": body.state})
-    return Response(status_code=204)
-
-
-@router.get("/relay")
-async def relay_take(state: str):
-    _relay_prune(time.monotonic())
-    entry = _relay.pop(state, None)
-    if entry is None:
-        return Response(status_code=204)
-    return entry[1]
+    _apply_session_cookie(response, hub_token)
+    return TokenResponse(access_token=hub_token)
 
 
 @router.post("/refresh", response_model=OutlookTokenResponse)

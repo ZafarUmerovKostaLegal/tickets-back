@@ -169,3 +169,39 @@ def test_graph_access_token_is_accepted_without_local_signature_check():
 def test_graph_access_token_sanity_checks(kwargs, error):
     with pytest.raises(AzureTokenExchangeError, match=error):
         azure_ad.verify_azure_access_token(_graph_token(**kwargs), settings=_settings())
+
+
+OFFICE_CLIENT = "ea5a67f6-b6f3-4338-b240-c655ddc3cc8e"
+
+
+def test_office_sso_token_for_our_app_is_accepted(monkeypatch, rsa_keypair):
+    private_key, public_key = rsa_keypair
+    _patch_jwks(monkeypatch, public_key)
+    for aud in (CLIENT, f"api://tickets.kostalegal.com/{CLIENT}"):
+        token = _mint(private_key, aud=aud, azp=OFFICE_CLIENT, extra={"scp": "access_as_user"})
+        claims = azure_ad.verify_office_sso_token(token)
+        assert claims["oid"] == OID
+
+
+@pytest.mark.parametrize(
+    "aud,scp",
+    [
+        ("00000003-0000-0000-c000-000000000000", "access_as_user"),
+        ("api://evil.example/other-app", "access_as_user"),
+        (CLIENT, "User.Read"),
+    ],
+)
+def test_office_sso_token_for_other_audience_or_scope_is_refused(monkeypatch, rsa_keypair, aud, scp):
+    private_key, public_key = rsa_keypair
+    _patch_jwks(monkeypatch, public_key)
+    token = _mint(private_key, aud=aud, azp=OFFICE_CLIENT, extra={"scp": scp})
+    with pytest.raises(AzureTokenExchangeError):
+        azure_ad.verify_office_sso_token(token)
+
+
+def test_office_sso_token_from_other_tenant_is_refused(monkeypatch, rsa_keypair):
+    private_key, public_key = rsa_keypair
+    _patch_jwks(monkeypatch, public_key)
+    token = _mint(private_key, aud=CLIENT, tid="99999999-9999-9999-9999-999999999999", azp=OFFICE_CLIENT, extra={"scp": "access_as_user"})
+    with pytest.raises(AzureTokenExchangeError):
+        azure_ad.verify_office_sso_token(token)

@@ -33,13 +33,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTH_OUTLOOK_REDIRECT_URI", "OUTLOOK_ADDIN_REDIRECT_URI"),
         description="Outlook add-in OAuth redirect on Hub domain (/outlook-addin/).",
     )
-    zoom_account_id: str = Field(default="", validation_alias=AliasChoices("ZOOM_ACCOUNT_ID"))
-    zoom_app_client_id: str = Field(default="", validation_alias=AliasChoices("ZOOM_APP_CLIENT_ID"))
-    zoom_app_client_secret: str = Field(default="", validation_alias=AliasChoices("ZOOM_APP_CLIENT_SECRET"))
-    zoom_app_redirect_uri: str = Field(
-        default="https://tickets.kostalegal.com/outlook-addin/zoom.html",
-        validation_alias=AliasChoices("ZOOM_APP_REDIRECT_URI"),
-    )
     outlook_access_expire_minutes: int = Field(
         default=10,
         ge=1,

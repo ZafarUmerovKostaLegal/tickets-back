@@ -15,9 +15,7 @@ from presentation.routes.library import router as library_router
 from presentation.routes.duplicates import router as duplicates_router
 from presentation.routes.mail import router as mail_router
 from presentation.routes.mail_rules import router as mail_rules_router
-from presentation.routes.meetings import router as meetings_router
 from presentation.autofile import start_autofile_loop, stop_autofile_loop
-from presentation.meetings import start_meetings_loop, stop_meetings_loop
 from presentation.routes.matters import router as matters_router
 from presentation.routes.preview import router as preview_router
 from presentation.routes.uploads import purge_stale_uploads, router as uploads_router
@@ -36,9 +34,6 @@ async def _ensure_schema(conn) -> None:
         if "purged_at" not in existing:
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN purged_at TIMESTAMP WITH TIME ZONE"
                                     if conn.dialect.name == "postgresql" else f"ALTER TABLE {table} ADD COLUMN purged_at DATETIME"))
-    links = await conn.run_sync(lambda sync: {col["name"] for col in inspect(sync).get_columns("fm_meeting_links")})
-    if "provider" not in links:
-        await conn.execute(text("ALTER TABLE fm_meeting_links ADD COLUMN provider VARCHAR(10) NOT NULL DEFAULT 'teams'"))
     if conn.dialect.name == "postgresql":
         # Files over 2 GB: sizes no longer fit into INTEGER.
         for table in ("fm_documents", "fm_versions"):
@@ -53,10 +48,8 @@ async def lifespan(_: FastAPI):
     async with async_session_factory() as session:
         await purge_stale_uploads(session)
     start_autofile_loop()
-    start_meetings_loop()
     yield
     await stop_autofile_loop()
-    await stop_meetings_loop()
 
 
 app = FastAPI(
@@ -81,7 +74,6 @@ app.include_router(library_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(mail_router, prefix=API_PREFIX)
 app.include_router(mail_rules_router, prefix=API_PREFIX)
-app.include_router(meetings_router, prefix=API_PREFIX)
 app.include_router(duplicates_router, prefix=API_PREFIX)
 app.include_router(uploads_router, prefix=API_PREFIX)
 app.include_router(preview_router, prefix=API_PREFIX)

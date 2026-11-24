@@ -206,6 +206,55 @@ def verify_azure_id_token(id_token: str | None, *, settings=None) -> dict[str, A
     return claims
 
 
+SSO_SCOPE = "access_as_user"
+
+
+def _sso_audience_ok(aud: Any, client_id: str) -> bool:
+    for value in _normalize_audiences(aud):
+        if value == client_id or (value.startswith("api://") and value.endswith(f"/{client_id}")):
+            return True
+    return False
+
+
+def verify_office_sso_token(token: str | None, *, settings=None) -> dict[str, Any]:
+    """Verify the SSO token Office or Teams issues to Kosta (aud = our app, scope access_as_user)."""
+    settings = settings or get_settings()
+    raw = (token or "").strip()
+    if not raw:
+        raise AzureTokenExchangeError("SSO token required")
+    tenant_id = (settings.azure_tenant_id or "").strip()
+    client_id = (settings.azure_client_id or "").strip()
+    if not tenant_id or not client_id:
+        raise AzureTokenExchangeError("Azure AD is not configured")
+    try:
+        signing_key = _get_jwks_client(tenant_id).get_signing_key_from_jwt(raw)
+        claims = jwt.decode(
+            raw,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer=list(azure_issuer_values(tenant_id)),
+            options={
+                "require": ["exp", "iat", "iss", "aud"],
+                "verify_aud": False,
+                "verify_iss": True,
+                "verify_exp": True,
+            },
+        )
+    except Exception as exc:
+        raise AzureTokenExchangeError("SSO token invalid") from exc
+    if not isinstance(claims, dict):
+        raise AzureTokenExchangeError("SSO token invalid")
+    _assert_tenant_and_issuer(claims, tenant_id=tenant_id)
+    if not _sso_audience_ok(claims.get("aud"), client_id):
+        raise AzureTokenExchangeError("SSO token audience mismatch")
+    scopes = str(claims.get("scp") or "").split()
+    if SSO_SCOPE not in scopes:
+        raise AzureTokenExchangeError("SSO token scope mismatch")
+    if not str(claims.get("oid") or "").strip():
+        raise AzureTokenExchangeError("SSO token has no oid")
+    return claims
+
+
 def _is_graph_access_token(token: str) -> bool:
     """Graph tokens carry a `nonce` header and are signed for Graph only: nobody else can verify them."""
     try:
