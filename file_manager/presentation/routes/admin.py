@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,22 +9,29 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.access import ACL_LEVELS, REQUEST_LEVELS, has_level, normalize_template
+from application.access import ACL_LEVELS, REQUEST_LEVELS, has_level, is_partner, normalize_template
 from infrastructure.database import get_session
 from infrastructure.models import (
     AccessRequestModel,
     AclModel,
     AuditModel,
     DocumentModel,
+    DocumentAclModel,
+    DocumentPolicyModel,
+    FolderAclModel,
+    FolderModel,
+    FolderPolicyModel,
     SettingModel,
     VersionModel,
 )
 from infrastructure.tt_directory import invalidate_access, project_assignees
 from presentation.common import (
     TEMPLATE_KEY,
+    acl_level,
     audit,
     directory,
     iso,
+    matter_closed,
     matter_level,
     now,
     require_manager,
@@ -42,6 +49,8 @@ class AclIn(BaseModel):
     userName: str = Field(default="", max_length=200)
     level: str = Field(max_length=16)
     note: str = Field(default="", max_length=500)
+    until: datetime | None = None
+    suspendedUntil: datetime | None = None
 
 
 class AccessRequestIn(BaseModel):
@@ -67,6 +76,8 @@ def _acl_out(row: AclModel) -> dict:
         "note": row.note,
         "grantedBy": row.granted_by_name,
         "grantedAt": iso(row.granted_at),
+        "until": iso(row.until),
+        "suspendedUntil": iso(row.suspended_until),
     }
 
 
@@ -97,13 +108,15 @@ async def matter_security(
     inherited = await project_assignees(viewer.authorization, matter.id)
     acl = list(await session.scalars(select(AclModel).where(AclModel.matter_id == matter.id)))
     acl_by_user = {row.user_id: row for row in acl}
+    closed = matter_closed(dirx, matter)
+    base_level = "read" if closed else "edit"
     effective: dict[int, dict] = {}
     for member in inherited:
         row = acl_by_user.get(member["userId"])
         effective[member["userId"]] = {
             **member,
             "source": "both" if row else "timeTracking",
-            "level": row.level if row else ("read" if dirx.matters[matter.id].archived else "edit"),
+            "level": row.level if row else base_level,
         }
     for row in acl:
         if row.user_id in effective:
@@ -115,14 +128,138 @@ async def matter_security(
             "source": "acl",
             "level": row.level,
         }
+    for user_id, item in effective.items():
+        row = acl_by_user.get(user_id)
+        working = acl_level(row) if row else None
+        if row is not None and working is None:
+            working = base_level if item["source"] == "both" else "none"
+        item["until"] = iso(row.until) if row else None
+        item["suspendedUntil"] = iso(row.suspended_until) if row else None
+        item["effective"] = working or item["level"]
+        item["partner"] = is_partner(None, item.get("position"))
+
+    folders = list(await session.scalars(
+        select(FolderModel).where(FolderModel.matter_id == matter.id, FolderModel.deleted_at.is_(None))
+    ))
+    folder_rules = list(await session.scalars(select(FolderAclModel).where(FolderAclModel.matter_id == matter.id)))
+    breaks = set(await session.scalars(select(FolderPolicyModel.folder_id).where(
+        FolderPolicyModel.matter_id == matter.id, FolderPolicyModel.inherit.is_(False),
+    )))
+    per_folder: dict[str, dict[str, int]] = {}
+    for rule in folder_rules:
+        bucket = per_folder.setdefault(rule.folder_id, {"entries": 0, "deny": 0, "temporary": 0})
+        bucket["entries"] += 1
+        if rule.level == "deny":
+            bucket["deny"] += 1
+        if rule.until is not None or rule.suspended_until is not None:
+            bucket["temporary"] += 1
+    docs_per_folder = dict((await session.execute(
+        select(DocumentModel.folder_id, func.count(DocumentModel.id))
+        .where(DocumentModel.matter_id == matter.id, DocumentModel.deleted_at.is_(None))
+        .group_by(DocumentModel.folder_id)
+    )).all())
+    doc_counts: dict[str, dict[str, int]] = {}
+    for rule in await session.scalars(select(DocumentAclModel).where(DocumentAclModel.matter_id == matter.id)):
+        bucket = doc_counts.setdefault(rule.document_id, {"entries": 0, "deny": 0, "temporary": 0})
+        bucket["entries"] += 1
+        if rule.level == "deny":
+            bucket["deny"] += 1
+        if rule.until is not None or rule.suspended_until is not None:
+            bucket["temporary"] += 1
+    restricted_docs = set(await session.scalars(select(DocumentPolicyModel.document_id).where(
+        DocumentPolicyModel.matter_id == matter.id, DocumentPolicyModel.restricted.is_(True),
+    )))
+    special_ids = set(doc_counts) | restricted_docs
+    special_docs = list(await session.scalars(select(DocumentModel).where(
+        DocumentModel.id.in_(special_ids), DocumentModel.deleted_at.is_(None),
+    ))) if special_ids else []
+    pending = int(await session.scalar(select(func.count(AccessRequestModel.id)).where(
+        AccessRequestModel.matter_id == matter.id, AccessRequestModel.status == "pending",
+    )) or 0)
     client = dirx.clients.get(matter.client_id)
     return {
         "matter": {"id": matter.id, "name": matter.name, "code": matter.code,
-                   "clientName": client.name if client else ""},
+                   "clientName": client.name if client else "", "closed": closed},
         "inherited": inherited,
         "acl": [_acl_out(row) for row in acl],
         "effective": sorted(effective.values(), key=lambda item: item["name"].lower()),
+        "folders": [
+            {
+                "id": folder.id,
+                "parentId": folder.parent_id,
+                "name": folder.name,
+                "documents": int(docs_per_folder.get(folder.id, 0)),
+                "inherit": folder.id not in breaks,
+                **per_folder.get(folder.id, {"entries": 0, "deny": 0, "temporary": 0}),
+            }
+            for folder in sorted(folders, key=lambda item: item.name.lower())
+        ],
+        "documents": [
+            {
+                "id": doc.id,
+                "name": doc.name,
+                "folderId": doc.folder_id,
+                "createdBy": doc.created_by_name,
+                "restricted": doc.id in restricted_docs,
+                **doc_counts.get(doc.id, {"entries": 0, "deny": 0, "temporary": 0}),
+            }
+            for doc in sorted(special_docs, key=lambda item: item.name.lower())
+        ],
+        "pendingRequests": pending,
     }
+
+
+@router.get("/security/overview")
+async def security_overview(
+    session: AsyncSession = Depends(get_session),
+    viewer: Viewer = Depends(get_viewer),
+):
+    """Per matter: explicit rules, ethical walls, temporary entries, folder rules and pending requests."""
+    await require_manager(viewer)
+    stamp = now()
+    out: dict[str, dict[str, int]] = {}
+
+    def bucket(matter_id: str) -> dict[str, int]:
+        return out.setdefault(matter_id, {"rules": 0, "walls": 0, "temporary": 0, "suspended": 0,
+                                          "folderRules": 0, "folders": 0, "documents": 0, "pending": 0})
+
+    for row in await session.scalars(select(AclModel)):
+        item = bucket(row.matter_id)
+        item["rules"] += 1
+        if row.level == "deny":
+            item["walls"] += 1
+        if row.until is not None:
+            item["temporary"] += 1
+        if acl_level(row) == "deny" and row.level != "deny":
+            item["suspended"] += 1
+    seen_folders: dict[str, set[str]] = {}
+    for row in await session.scalars(select(FolderAclModel)):
+        item = bucket(row.matter_id)
+        item["folderRules"] += 1
+        seen_folders.setdefault(row.matter_id, set()).add(row.folder_id)
+        if row.until is not None:
+            item["temporary"] += 1
+        suspended = row.suspended_until
+        if suspended is not None and (suspended if suspended.tzinfo else suspended.replace(tzinfo=stamp.tzinfo)) > stamp:
+            item["suspended"] += 1
+    for matter_id, folder_ids in seen_folders.items():
+        bucket(matter_id)["folders"] = len(folder_ids)
+    special: dict[str, set[str]] = {}
+    for row in await session.scalars(select(DocumentAclModel)):
+        special.setdefault(row.matter_id, set()).add(row.document_id)
+        if row.until is not None:
+            bucket(row.matter_id)["temporary"] += 1
+    for row in await session.scalars(select(DocumentPolicyModel).where(DocumentPolicyModel.restricted.is_(True))):
+        special.setdefault(row.matter_id, set()).add(row.document_id)
+    for matter_id, doc_ids in special.items():
+        bucket(matter_id)["documents"] = len(doc_ids)
+    for matter_id, count in (await session.execute(
+        select(AccessRequestModel.matter_id, func.count(AccessRequestModel.id))
+        .where(AccessRequestModel.status == "pending")
+        .group_by(AccessRequestModel.matter_id)
+    )).all():
+        bucket(matter_id)["pending"] = int(count)
+    return {"matters": out}
 
 
 @router.put("/matters/{matter_id}/security")
@@ -144,6 +281,8 @@ async def set_matter_acl(
     row.level = body.level
     row.user_name = body.userName.strip()[:200] or row.user_name
     row.note = body.note.strip()[:500]
+    row.until = body.until
+    row.suspended_until = body.suspendedUntil
     row.granted_by_name = viewer.name
     row.granted_at = now()
     audit(session, viewer, "acl_set", matter=matter, kind="user", target_id=str(body.userId),

@@ -56,3 +56,37 @@ def test_file_kind_and_safe_name():
     assert access.file_kind("scan.pdf") == "pdf"
     assert access.safe_name("C:\\tmp\\evil/../a.pdf") == "a.pdf"
     assert access.safe_name("") == "file"
+
+
+def test_effective_grant_handles_temporary_and_suspended_entries():
+    from datetime import datetime, timedelta, timezone
+
+    from application.access import effective_grant
+
+    at = datetime(2026, 11, 24, 12, tzinfo=timezone.utc)
+    assert effective_grant("read", None, None, at) == "read"
+    assert effective_grant("edit", at + timedelta(days=1), None, at) == "edit"
+    assert effective_grant("edit", at - timedelta(minutes=1), None, at) is None
+    assert effective_grant("edit", None, at + timedelta(hours=1), at) == "deny"
+    assert effective_grant("edit", None, (at - timedelta(hours=1)).replace(tzinfo=None), at) == "edit"
+    assert effective_grant(None, None, None, at) is None
+
+
+def test_folder_levels_inherit_until_a_folder_breaks_the_chain():
+    from application.access import folder_levels
+
+    parents = {"a": None, "a1": "a", "a1x": "a1", "a2": "a", "b": None}
+    assert folder_levels(parents, {"a": "read"}, set()) == {"a": "read", "a1": "read", "a1x": "read", "a2": "read"}
+    assert folder_levels(parents, {"a": "read", "a1": "edit"}, set())["a1x"] == "edit"
+    assert folder_levels(parents, {"a": "read"}, {"a1"}) == {"a": "read", "a2": "read"}
+    closed = folder_levels(parents, {"a": "deny", "a1": "edit"}, set())
+    assert closed["a1x"] == "deny" and closed["a2"] == "deny"
+    assert folder_levels(parents, {"a": "deny", "a1": "edit"}, {"a1"})["a1x"] == "edit"
+
+
+def test_folder_levels_own_resets_inherited_access():
+    from application.access import folder_levels
+
+    parents = {"a": None, "a1": "a", "a1x": "a1"}
+    levels = folder_levels(parents, {"a": "read", "a1": "own"}, set())
+    assert levels == {"a": "read", "a1": "own", "a1x": "own"}

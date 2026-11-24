@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models import DocumentModel, MatterWorkspaceModel, VersionModel
-from presentation.common import audit, ensure_not_locked
+from presentation.common import audit, ensure_not_locked, my_folder_levels, scope_clause
 from presentation.deps import Viewer
 from presentation.versioning import current_digest, find_mail_document, find_same_content, set_fingerprint
 
@@ -46,9 +46,13 @@ async def file_into_matter(
     ``store`` writes the blob and is only awaited when a version is actually created.
     ``target`` forces a new version of that document (check-in of a large file)."""
     existing: DocumentModel | None = target
+    folder_map = await my_folder_levels(session, viewer, {matter.id})
+    visible = scope_clause(viewer, folder_map)
+    editable = scope_clause(viewer, folder_map, "edit")
     if existing is None and is_mail:
         existing = await find_mail_document(session, matter.id, kind=kind, message_id=mail_message_id,
-                                            conversation_id=mail_conversation_id, name=name)
+                                            conversation_id=mail_conversation_id, name=name,
+                                            scope=visible)
         if existing is not None and kind != "thread":
             return "exists", existing
     if existing is None:
@@ -56,6 +60,7 @@ async def file_into_matter(
             DocumentModel.matter_id == matter.id,
             DocumentModel.deleted_at.is_(None),
             func.lower(DocumentModel.name) == name.lower(),
+            *editable,
         )
         query = query.where(DocumentModel.folder_id.is_(None) if folder_id is None else DocumentModel.folder_id == folder_id)
         existing = await session.scalar(query.limit(1))
@@ -75,7 +80,7 @@ async def file_into_matter(
               target_name=doc.name, detail=f"v{doc.current_version}")
     else:
         if not is_mail and not allow_duplicate:
-            twin = await find_same_content(session, matter.id, sha)
+            twin = await find_same_content(session, matter.id, sha, visible)
             if twin is not None:
                 return "duplicate", twin
         doc = DocumentModel(

@@ -30,6 +30,7 @@ from presentation.common import (
     folder_in_matter,
     iso,
     live_document,
+    require_document_edit,
     matter_folders,
     now,
     require_matter,
@@ -83,7 +84,7 @@ async def get_document(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, level = await require_matter(session, viewer, doc.matter_id, "read")
     versions = list(await session.scalars(
         select(VersionModel).where(VersionModel.document_id == doc.id).order_by(VersionModel.version.desc())
@@ -99,6 +100,7 @@ async def get_document(
     return {
         "document": doc_out(doc, dirx, favorites),
         "level": level,
+        "canManageAccess": level == "manage" or doc.created_by_user_id == viewer.user_id,
         "path": crumbs(folders, doc.folder_id),
         "versions": [_version_out(row) for row in versions],
         "activity": [_audit_out(row) for row in activity],
@@ -113,7 +115,7 @@ async def document_content(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     _, matter, _ = await require_matter(session, viewer, doc.matter_id, "read")
     wanted = version or doc.current_version
     row = await session.scalar(
@@ -182,7 +184,7 @@ async def document_link(
 ):
     """Short-lived signed URL: the browser downloads large files itself (straight to disk, resumable),
     instead of pulling gigabytes through JavaScript memory."""
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     _, matter, _ = await require_matter(session, viewer, doc.matter_id, "read")
     wanted = version or doc.current_version
     exists = await session.scalar(
@@ -234,8 +236,9 @@ async def update_document(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     ensure_not_locked(doc, viewer)
     if body.name is not None:
         name = safe_name(body.name, "")
@@ -270,8 +273,9 @@ async def checkout_document(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     if doc.checked_out_by_user_id not in (None, viewer.user_id):
         raise HTTPException(status_code=409, detail=f"Документ уже взят: {doc.checked_out_by_name}")
     doc.checked_out_by_user_id = viewer.user_id
@@ -296,8 +300,9 @@ async def checkin_document(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     if doc.checked_out_by_user_id is None:
         raise HTTPException(status_code=400, detail="Документ не взят на редактирование")
     if doc.checked_out_by_user_id != viewer.user_id and not viewer.manager:
@@ -346,8 +351,9 @@ async def discard_checkout(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     if doc.checked_out_by_user_id is None:
         return {"document": doc_out(doc, dirx)}
     if doc.checked_out_by_user_id != viewer.user_id and not viewer.manager:
@@ -367,8 +373,9 @@ async def restore_version(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     ensure_not_locked(doc, viewer)
     source = await session.scalar(
         select(VersionModel).where(VersionModel.document_id == doc.id, VersionModel.version == version).limit(1)
@@ -413,8 +420,9 @@ async def delete_document(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     _, matter, level = await require_matter(session, viewer, doc.matter_id, "edit")
+    await require_document_edit(session, viewer, doc)
     ensure_not_locked(doc, viewer)
     doc.deleted_at = now()
     doc.deleted_by_name = viewer.name

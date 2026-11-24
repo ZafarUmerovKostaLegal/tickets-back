@@ -102,7 +102,7 @@ async def current_digest(session: AsyncSession, doc: DocumentModel) -> str:
     return row.sha256 if row else ""
 
 
-async def find_same_content(session: AsyncSession, matter_id: str, sha: str) -> DocumentModel | None:
+async def find_same_content(session: AsyncSession, matter_id: str, sha: str, scope: tuple = ()) -> DocumentModel | None:
     """A live document of the matter whose current version has exactly this content."""
     return await session.scalar(
         select(DocumentModel)
@@ -112,6 +112,7 @@ async def find_same_content(session: AsyncSession, matter_id: str, sha: str) -> 
             DocumentFingerprintModel.sha256 == sha,
             DocumentFingerprintModel.version == DocumentModel.current_version,
             DocumentModel.deleted_at.is_(None),
+            *scope,
         )
         .order_by(DocumentModel.created_at.asc())
         .limit(1)
@@ -126,6 +127,7 @@ async def find_mail_document(
     message_id: str,
     conversation_id: str,
     name: str,
+    scope: tuple = (),
 ) -> DocumentModel | None:
     """
     The document this letter already lives in within the matter:
@@ -133,7 +135,7 @@ async def find_mail_document(
     an attachment by Message-ID + file name.
     """
     mid = normalize_message_id(message_id)
-    live = (DocumentModel.matter_id == matter_id, DocumentModel.deleted_at.is_(None))
+    live = (DocumentModel.matter_id == matter_id, DocumentModel.deleted_at.is_(None), *scope)
     if kind == "thread":
         if not conversation_id.strip():
             return None

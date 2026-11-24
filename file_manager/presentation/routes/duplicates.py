@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database import get_session
 from infrastructure.models import DocumentFingerprintModel, DocumentModel
-from presentation.common import crumbs, doc_out, matter_folders, require_matter
+from presentation.common import crumbs, doc_out, matter_folders, doc_scope, require_matter
 from presentation.deps import Viewer, get_viewer
 from presentation.versioning import backfill_fingerprints
 
@@ -34,7 +34,7 @@ async def matter_duplicates(
         select(DocumentModel, DocumentFingerprintModel)
         .join(DocumentFingerprintModel, DocumentFingerprintModel.document_id == DocumentModel.id)
         .where(DocumentModel.matter_id == matter.id, DocumentModel.deleted_at.is_(None),
-               DocumentFingerprintModel.version == DocumentModel.current_version)
+               DocumentFingerprintModel.version == DocumentModel.current_version, *(await doc_scope(session, viewer, "read", {matter.id})))
         .order_by(DocumentModel.created_at.asc(), DocumentModel.doc_number.asc())
     )).all()
 

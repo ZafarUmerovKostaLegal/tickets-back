@@ -12,6 +12,8 @@ from application.access import file_kind, has_level
 from infrastructure.database import get_session
 from infrastructure.models import AuditModel, DocumentModel, FavoriteModel, FolderModel
 from presentation.common import (
+    doc_scope,
+    document_allowed,
     audit,
     directory,
     doc_out,
@@ -66,7 +68,8 @@ async def recent_documents(
     docs = {
         doc.id: doc
         for doc in await session.scalars(
-            select(DocumentModel).where(DocumentModel.id.in_([item[0] for item in order]), DocumentModel.deleted_at.is_(None))
+            select(DocumentModel).where(DocumentModel.id.in_([item[0] for item in order]), DocumentModel.deleted_at.is_(None),
+                                        *(await doc_scope(session, viewer)))
         )
     }
     favorites = await favorite_ids(session, viewer.user_id)
@@ -93,6 +96,7 @@ async def checked_out_documents(
     query = select(DocumentModel).where(
         DocumentModel.deleted_at.is_(None),
         DocumentModel.checked_out_by_user_id.is_not(None),
+        *(await doc_scope(session, viewer)),
     )
     if scope != "all" or not viewer.manager:
         query = query.where(DocumentModel.checked_out_by_user_id == viewer.user_id)
@@ -119,7 +123,8 @@ async def search_documents(
     if not allowed:
         return {"documents": [], "total": 0}
     text = q.strip()
-    query = select(DocumentModel).where(DocumentModel.deleted_at.is_(None), DocumentModel.matter_id.in_(allowed))
+    query = select(DocumentModel).where(DocumentModel.deleted_at.is_(None), DocumentModel.matter_id.in_(allowed),
+                                        *(await doc_scope(session, viewer)))
     if text:
         like = f"%{text.lower()}%"
         terms = [func.lower(DocumentModel.name).like(like), func.lower(DocumentModel.description).like(like),
@@ -183,7 +188,8 @@ async def list_favorites(
     documents: list[dict] = []
     if doc_ids:
         for doc in await session.scalars(
-            select(DocumentModel).where(DocumentModel.id.in_(doc_ids), DocumentModel.deleted_at.is_(None))
+            select(DocumentModel).where(DocumentModel.id.in_(doc_ids), DocumentModel.deleted_at.is_(None),
+                                        *(await doc_scope(session, viewer)))
         ):
             if doc.matter_id in allowed:
                 documents.append(doc_out(doc, dirx, favorites))
@@ -254,6 +260,7 @@ async def list_trash(
             DocumentModel.deleted_at.is_not(None),
             DocumentModel.trash_root_id == DocumentModel.id,
             DocumentModel.matter_id.in_(allowed),
+            *(await doc_scope(session, viewer)),
             DocumentModel.purged_at.is_not(None) if archived else DocumentModel.purged_at.is_(None),
         )
     ))
@@ -314,6 +321,8 @@ async def restore_trash(
     viewer: Viewer = Depends(get_viewer),
 ):
     root = await _trash_root(session, kind, item_id, allow_purged=viewer.super_admin)
+    if isinstance(root, DocumentModel) and not await document_allowed(session, viewer, root, "edit"):
+        raise HTTPException(status_code=404, detail="Элемент корзины не найден")
     if root.purged_at is not None:
         # Back from the archive of «deleted forever» items: first into the trash state, then restored as usual.
         await session.execute(update(FolderModel).where(FolderModel.trash_root_id == root.id).values(purged_at=None))

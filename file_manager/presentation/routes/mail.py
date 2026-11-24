@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access import has_level, safe_name
 from infrastructure.database import get_session
 from infrastructure.models import DocumentModel, EmailFilingModel, FolderModel, VersionModel
-from presentation.common import audit, crumbs, directory, folder_in_matter, iso, levels, matter_closed, now, require_matter
+from presentation.common import (
+    audit, crumbs, directory, folder_in_matter, iso, levels, matter_closed, now, doc_scope, require_matter,
+)
 from presentation.deps import Viewer, get_viewer
 from presentation.versioning import version_head, subject_from_eml
 
@@ -189,7 +191,7 @@ async def lookup_filings(
     rows = (await session.execute(
         select(EmailFilingModel, DocumentModel)
         .join(DocumentModel, DocumentModel.id == EmailFilingModel.document_id)
-        .where(or_(*terms), DocumentModel.deleted_at.is_(None))
+        .where(or_(*terms), DocumentModel.deleted_at.is_(None), *(await doc_scope(session, viewer)))
         .order_by(EmailFilingModel.filed_at.desc())
         .limit(300)
     )).all()
@@ -313,6 +315,7 @@ async def organize_mail_folder(
             DocumentModel.matter_id == matter.id,
             DocumentModel.folder_id == folder.id,
             DocumentModel.deleted_at.is_(None),
+            *(await doc_scope(session, viewer, "edit", {matter.id})),
         ).limit(2000))
         if is_mail_document(doc.name)
     ]

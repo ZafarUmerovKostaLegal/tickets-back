@@ -22,7 +22,16 @@ from infrastructure import blobs
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.models import UploadSessionModel
-from presentation.common import doc_out, folder_in_matter, live_document, next_doc_number, now, require_matter
+from presentation.common import (
+    doc_out,
+    ensure_folder_open,
+    folder_in_matter,
+    live_document,
+    next_doc_number,
+    now,
+    require_document_edit,
+    require_matter,
+)
 from presentation.deps import Viewer, get_viewer
 from presentation.intake import file_into_matter
 
@@ -85,8 +94,10 @@ async def start_upload(
     settings = get_settings()
     _, matter, _ = await require_matter(session, viewer, matter_id, "edit")
     folder = await folder_in_matter(session, matter.id, body.folderId)
+    await ensure_folder_open(session, viewer, folder)
     if body.documentId:
-        doc = await live_document(session, body.documentId)
+        doc = await live_document(session, body.documentId, viewer)
+        await require_document_edit(session, viewer, doc)
         if doc.matter_id != matter.id:
             raise HTTPException(status_code=400, detail="Документ из другого дела")
     if body.size > settings.max_upload_bytes:
@@ -193,7 +204,9 @@ async def complete_upload(
         raise HTTPException(status_code=409, detail={"message": "Файл загружен не полностью", "received": on_disk})
     dirx, matter, _ = await require_matter(session, viewer, row.matter_id, "edit")
     folder = await folder_in_matter(session, matter.id, row.folder_id)
-    target = await live_document(session, row.document_id) if row.document_id else None
+    target = await live_document(session, row.document_id, viewer) if row.document_id else None
+    if target is not None:
+        await require_document_edit(session, viewer, target)
     # Hash + move into the store (seconds for gigabytes; runs off the event loop).
     async with blobs.gate.slot("finish"):
         sha, size = await run_in_threadpool(blobs.adopt, blobs.part_path(row.id))

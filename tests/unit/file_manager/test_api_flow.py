@@ -70,12 +70,28 @@ def test_matter_workflow(env):
     assert client.post(f"{base}/documents/{doc['id']}/checkout").status_code == 200
 
     state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
-    locked = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
-                         files={"files": ("SPA.docx", b"v3", "application/octet-stream")})
-    assert locked.status_code == 409
-    assert client.get(f"{base}/documents/{doc['id']}/content").content == b"v2-longer"
-    assert client.get(f"{base}/documents/{doc['id']}/content?version=1").content == b"v1"
+    hidden = client.get(f"{base}/matters/m1/browse", params={"folderId": folder_id}).json()
+    assert hidden["documents"] == []
+    assert next(f for f in hidden["folders"] if f["id"] == folder_id)["documents"] == 0
+    assert client.get(f"{base}/documents/{doc['id']}").status_code == 404
+    assert client.get(f"{base}/documents/{doc['id']}/content").status_code == 404
+    assert client.get(f"{base}/search?q=spa").json()["documents"] == []
+    mine = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                       files={"files": ("SPA.docx", b"v2-longer", "application/octet-stream")})
+    assert mine.status_code == 201, mine.text
+    own = mine.json()["results"][0]
+    assert own["status"] == "created" and own["document"]["id"] != doc["id"]
+    listed = client.get(f"{base}/matters/m1/browse", params={"folderId": folder_id}).json()["documents"]
+    assert [d["id"] for d in listed] == [own["document"]["id"]]
+    assert client.delete(f"{base}/folders/{folder_id}").status_code == 403
     assert client.get(f"{base}/matters/m2/browse").status_code == 403
+
+    state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer x")
+    everything = client.get(f"{base}/matters/m1/browse", params={"folderId": folder_id}).json()["documents"]
+    assert {d["id"] for d in everything} == {doc["id"], own["document"]["id"]}
+    assert client.get(f"{base}/documents/{own['document']['id']}/content").content == b"v2-longer"
+
+    state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
 
     tree = client.get(f"{base}/clients").json()
     assert [m["id"] for m in tree["clients"][0]["matters"]] == ["m1"]
@@ -103,13 +119,179 @@ def test_matter_workflow(env):
     assert [d["id"] for d in found] == [doc["id"]]
     assert client.delete(f"{base}/folders/{folder_id}").status_code == 200
     trash = client.get(f"{base}/trash").json()["items"]
-    assert trash[0]["kind"] == "folder" and trash[0]["documents"] == 1
+    assert trash[0]["kind"] == "folder" and trash[0]["documents"] == 2
     assert client.post(f"{base}/trash/folder/{folder_id}/restore").status_code == 200
     assert client.get(f"{base}/documents/{doc['id']}").status_code == 200
 
     stats = client.get(f"{base}/stats").json()
-    assert stats["documents"] == 1 and stats["deniedDay"] >= 2
+    assert stats["documents"] == 2 and stats["deniedDay"] >= 2
     security = client.get(f"{base}/matters/m1/security").json()
     assert security["effective"][0]["level"] == "deny"
     audit = client.get(f"{base}/audit?action=denied").json()
     assert audit["total"] >= 2
+
+
+def test_folder_access_inheritance_and_temporary_entries(env):
+    from datetime import datetime, timedelta, timezone
+
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    partner = Viewer(1, "Partner P", True, False, "Bearer x")
+    lawyer = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    outsider = Viewer(3, "Outsider O", False, False, "Bearer z")
+
+    browse = client.get(f"{base}/matters/m1/browse").json()
+    corr = next(f["id"] for f in browse["folders"] if f["name"] == "Correspondence")
+    emails = next(f["id"] for f in browse["folders"] if f["name"] == "Emails")
+    drafts = next(f["id"] for f in browse["folders"] if f["name"] == "Drafts")
+    letter = client.post(f"{base}/matters/m1/documents", data={"folderId": emails},
+                         files={"files": ("letter.pdf", b"partner letter", "application/pdf")}).json()["documents"][0]
+
+    state["viewer"] = lawyer
+    assert client.get(f"{base}/documents/{letter['id']}").status_code == 404
+    assert client.get(f"{base}/folders/{corr}/access").status_code == 403
+
+    state["viewer"] = partner
+    assert client.put(f"{base}/folders/{corr}/access",
+                      json={"userId": 2, "userName": "Lawyer L", "level": "read"}).status_code == 200
+    access = client.get(f"{base}/folders/{emails}/access").json()
+    row = next(m for m in access["members"] if m["userId"] == 2)
+    assert row["inherited"]["folderId"] == corr and row["effective"] == "read" and row["entry"] is None
+
+    state["viewer"] = lawyer
+    assert client.get(f"{base}/documents/{letter['id']}").status_code == 200
+    assert client.patch(f"{base}/documents/{letter['id']}", json={"description": "x"}).status_code == 403
+
+    state["viewer"] = partner
+    assert client.put(f"{base}/folders/{emails}/inherit", json={"inherit": False}).json() == {"inherit": False}
+    state["viewer"] = lawyer
+    assert client.get(f"{base}/documents/{letter['id']}").status_code == 404
+
+    state["viewer"] = partner
+    client.put(f"{base}/folders/{emails}/inherit", json={"inherit": True})
+    soon = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    client.put(f"{base}/folders/{drafts}/access",
+               json={"userId": 2, "userName": "Lawyer L", "level": "edit", "suspendedUntil": soon})
+    state["viewer"] = lawyer
+    names = {f["name"] for f in client.get(f"{base}/matters/m1/browse").json()["folders"]}
+    assert "Drafts" not in names and "Emails" in names
+    assert client.get(f"{base}/matters/m1/browse", params={"folderId": drafts}).status_code == 403
+
+    state["viewer"] = outsider
+    state["tt"] = set()
+    assert client.get(f"{base}/matters/m1/browse").status_code == 403
+    state["viewer"] = partner
+    later = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    client.put(f"{base}/folders/{emails}/access",
+               json={"userId": 3, "userName": "Outsider O", "level": "read", "until": later})
+    state["viewer"] = outsider
+    guest = client.get(f"{base}/matters/m1/browse").json()
+    assert {f["name"] for f in guest["folders"]} == {"Correspondence", "Emails"}
+    assert client.get(f"{base}/documents/{letter['id']}").status_code == 200
+    assert client.post(f"{base}/matters/m1/documents", data={"folderId": emails},
+                       files={"files": ("x.txt", b"x", "text/plain")}).status_code == 403
+
+    state["viewer"] = partner
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    client.put(f"{base}/folders/{emails}/access",
+               json={"userId": 3, "userName": "Outsider O", "level": "read", "until": past})
+    state["viewer"] = outsider
+    assert client.get(f"{base}/matters/m1/browse").status_code == 403
+
+
+def test_security_overview_and_temporary_matter_rules(env):
+    from datetime import datetime, timedelta, timezone
+
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    browse = client.get(f"{base}/matters/m1/browse").json()
+    drafts = next(f["id"] for f in browse["folders"] if f["name"] == "Drafts")
+    soon = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    assert client.put(f"{base}/matters/m1/security", json={
+        "userId": 2, "userName": "Lawyer L", "level": "edit", "suspendedUntil": soon,
+    }).status_code == 200
+    client.put(f"{base}/matters/m1/security", json={"userId": 5, "userName": "Guest G", "level": "read", "until": soon})
+    client.put(f"{base}/folders/{drafts}/access", json={"userId": 2, "userName": "Lawyer L", "level": "deny"})
+
+    data = client.get(f"{base}/matters/m1/security").json()
+    lawyer = next(m for m in data["effective"] if m["userId"] == 2)
+    assert lawyer["effective"] == "deny" and lawyer["suspendedUntil"]
+    guest = next(m for m in data["effective"] if m["userId"] == 5)
+    assert guest["until"] and guest["effective"] == "read"
+    folder = next(f for f in data["folders"] if f["id"] == drafts)
+    assert folder["entries"] == 1 and folder["deny"] == 1 and folder["inherit"] is True
+    assert data["matter"]["closed"] is False and data["pendingRequests"] == 0
+
+    summary = client.get(f"{base}/security/overview").json()["matters"]["m1"]
+    assert summary == {"rules": 2, "walls": 0, "temporary": 1, "suspended": 1, "folderRules": 1, "folders": 1,
+                       "documents": 0, "pending": 0}
+
+    state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    assert client.get(f"{base}/matters/m1/browse").status_code == 403
+    assert client.get(f"{base}/security/overview").status_code == 403
+
+
+def test_document_access_entries_and_confidential_mode(env):
+    from datetime import datetime, timedelta, timezone
+
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    partner = Viewer(1, "Partner P", True, False, "Bearer x")
+    lawyer = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    junior = Viewer(3, "Junior J", False, False, "Bearer z")
+
+    def upload(folder_id: str, name: str, body: bytes) -> dict:
+        response = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                               files={"files": (name, body, "application/octet-stream")})
+        return response.json()["documents"][0]
+
+    def names_in(folder_id: str) -> set[str]:
+        rows = client.get(f"{base}/matters/m1/browse", params={"folderId": folder_id}).json()["documents"]
+        return {row["name"] for row in rows}
+
+    browse = client.get(f"{base}/matters/m1/browse").json()
+    agr = next(f["id"] for f in browse["folders"] if f["name"] == "Agreements")
+    spa = upload(agr, "SPA.docx", b"spa")
+    memo = upload(agr, "Memo.docx", b"memo")
+    client.put(f"{base}/folders/{agr}/access", json={"userId": 3, "userName": "Junior J", "level": "read"})
+
+    state["viewer"] = lawyer
+    assert client.get(f"{base}/documents/{spa['id']}/access").status_code == 403
+    assert client.get(f"{base}/documents/{spa['id']}").status_code == 404
+
+    state["viewer"] = partner
+    assert client.put(f"{base}/documents/{spa['id']}/access",
+                      json={"userId": 2, "userName": "Lawyer L", "level": "edit"}).status_code == 200
+    assert client.put(f"{base}/documents/{memo['id']}/restricted", json={"restricted": True}).json() == {"restricted": True}
+    later = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    client.put(f"{base}/documents/{spa['id']}/access",
+               json={"userId": 3, "userName": "Junior J", "level": "deny", "until": later})
+    info = client.get(f"{base}/documents/{spa['id']}/access").json()
+    by_id = {m["userId"]: m for m in info["members"]}
+    assert by_id[2]["effective"] == "edit" and by_id[3]["effective"] == "deny" and by_id[1]["owner"] is True
+    assert client.put(f"{base}/documents/{spa['id']}/access",
+                      json={"userId": 1, "userName": "Partner P", "level": "deny"}).status_code == 400
+
+    listing = client.get(f"{base}/matters/m1/browse", params={"folderId": agr}).json()["documents"]
+    assert next(d for d in listing if d["id"] == memo["id"])["access"]["restricted"] is True
+
+    state["viewer"] = lawyer
+    assert client.get(f"{base}/documents/{spa['id']}").status_code == 200
+    assert client.patch(f"{base}/documents/{spa['id']}", json={"description": "ok"}).status_code == 200
+    assert names_in(agr) == {"SPA.docx"}
+
+    state["viewer"] = junior
+    assert names_in(agr) == set()
+    assert client.get(f"{base}/documents/{memo['id']}").status_code == 404
+
+    state["viewer"] = partner
+    client.put(f"{base}/documents/{memo['id']}/restricted", json={"restricted": False})
+    client.delete(f"{base}/documents/{spa['id']}/access/3")
+    state["viewer"] = junior
+    assert names_in(agr) == {"SPA.docx", "Memo.docx"}
+    assert client.patch(f"{base}/documents/{memo['id']}", json={"description": "x"}).status_code == 403
+
+    state["viewer"] = partner
+    data = client.get(f"{base}/matters/m1/security").json()
+    assert [d["name"] for d in data["documents"]] == ["SPA.docx"]
+    assert client.get(f"{base}/security/overview").json()["matters"]["m1"]["documents"] == 1

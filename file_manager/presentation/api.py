@@ -17,6 +17,8 @@ from presentation.routes.mail import router as mail_router
 from presentation.routes.mail_rules import router as mail_rules_router
 from presentation.autofile import start_autofile_loop, stop_autofile_loop
 from presentation.routes.matters import router as matters_router
+from presentation.routes.document_access import router as document_access_router
+from presentation.routes.folder_access import router as folder_access_router
 from presentation.routes.preview import router as preview_router
 from presentation.routes.uploads import purge_stale_uploads, router as uploads_router
 
@@ -34,6 +36,11 @@ async def _ensure_schema(conn) -> None:
         if "purged_at" not in existing:
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN purged_at TIMESTAMP WITH TIME ZONE"
                                     if conn.dialect.name == "postgresql" else f"ALTER TABLE {table} ADD COLUMN purged_at DATETIME"))
+    acl_columns = await conn.run_sync(lambda sync: {col["name"] for col in inspect(sync).get_columns("fm_acl")})
+    stamp_type = "TIMESTAMP WITH TIME ZONE" if conn.dialect.name == "postgresql" else "DATETIME"
+    for column in ("until", "suspended_until"):
+        if column not in acl_columns:
+            await conn.execute(text(f"ALTER TABLE fm_acl ADD COLUMN {column} {stamp_type}"))
     if conn.dialect.name == "postgresql":
         # Files over 2 GB: sizes no longer fit into INTEGER.
         for table in ("fm_documents", "fm_versions"):
@@ -72,6 +79,8 @@ app.include_router(matters_router, prefix=API_PREFIX)
 app.include_router(documents_router, prefix=API_PREFIX)
 app.include_router(library_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
+app.include_router(folder_access_router, prefix=API_PREFIX)
+app.include_router(document_access_router, prefix=API_PREFIX)
 app.include_router(mail_router, prefix=API_PREFIX)
 app.include_router(mail_rules_router, prefix=API_PREFIX)
 app.include_router(duplicates_router, prefix=API_PREFIX)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 LEVELS: tuple[str, ...] = ("none", "read", "edit", "manage")
 ACL_LEVELS: frozenset[str] = frozenset({"read", "edit", "manage", "deny"})
 REQUEST_LEVELS: frozenset[str] = frozenset({"read", "edit"})
@@ -78,6 +80,65 @@ def resolve_matter_level(
     if matter_closed and level_rank(level) > level_rank("read"):
         return "read"
     return level
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def effective_grant(
+    level: str | None,
+    until: datetime | None,
+    suspended_until: datetime | None,
+    at: datetime,
+) -> str | None:
+    """
+    What an ACL entry means right now: ``deny`` while it is suspended, nothing once a temporary
+    grant has expired, otherwise its level.
+    """
+    if not level:
+        return None
+    suspended = _aware(suspended_until)
+    if suspended is not None and suspended > at:
+        return "deny"
+    ends = _aware(until)
+    if ends is not None and ends <= at:
+        return None
+    return level
+
+
+def folder_levels(
+    parents: dict[str, str | None],
+    entries: dict[str, str],
+    breaks: set[str],
+) -> dict[str, str]:
+    """
+    Effective folder level of one user for every folder of a matter.
+    The nearest folder with an entry wins; a folder that stops inheriting ignores its parents.
+    ``deny`` anywhere up the inherited chain closes the folder; ``own`` brings back the default
+    (only the files the person uploaded).
+    """
+    out: dict[str, str] = {}
+    for folder_id in parents:
+        result: str | None = None
+        current: str | None = folder_id
+        seen: set[str] = set()
+        while current and current not in seen:
+            seen.add(current)
+            level = entries.get(current)
+            if level == "deny":
+                result = "deny"
+                break
+            if level and result is None:
+                result = level
+            if current in breaks:
+                break
+            current = parents.get(current)
+        if result:
+            out[folder_id] = result
+    return out
 
 
 def normalize_template(raw: object) -> list[str]:

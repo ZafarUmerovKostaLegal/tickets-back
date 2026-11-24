@@ -10,8 +10,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access import has_level, safe_name
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
-from infrastructure.models import DocumentModel, FolderModel, MatterWorkspaceModel
+from infrastructure.models import (
+    DocumentAclModel,
+    DocumentModel,
+    DocumentPolicyModel,
+    FolderAclModel,
+    FolderModel,
+    FolderPolicyModel,
+    MatterWorkspaceModel,
+)
 from presentation.common import (
+    base_matter_level,
+    doc_scope,
+    document_allowed,
+    ensure_folder_open,
+    my_folder_levels,
+    scope_clause,
     audit,
     crumbs,
     directory,
@@ -47,6 +61,65 @@ class FolderPatch(BaseModel):
     moveToRoot: bool = False
 
 
+def visible_folders(folders: list[FolderModel], folder_map: dict[str, str], *, folder_only: bool,
+                    extra: set[str] | None = None) -> list[FolderModel]:
+    """Closed folders disappear; people let in only through folder permissions see just those folders
+    (and the folders above them, to get there)."""
+    by_id = {item.id: item for item in folders}
+    if not folder_only:
+        return [item for item in folders if folder_map.get(item.id) != "deny"]
+    keep: set[str] = set()
+    for item in folders:
+        if folder_map.get(item.id) not in ("read", "edit") and item.id not in (extra or set()):
+            continue
+        current: str | None = item.id
+        while current and current not in keep:
+            keep.add(current)
+            parent = by_id.get(current)
+            current = parent.parent_id if parent else None
+    return [item for item in folders if item.id in keep and folder_map.get(item.id) != "deny"]
+
+
+async def custom_access_folders(session: AsyncSession, matter_id: str) -> tuple[dict[str, int], set[str]]:
+    counts = dict((await session.execute(
+        select(FolderAclModel.folder_id, func.count(FolderAclModel.user_id))
+        .where(FolderAclModel.matter_id == matter_id)
+        .group_by(FolderAclModel.folder_id)
+    )).all())
+    breaks = set(await session.scalars(select(FolderPolicyModel.folder_id).where(
+        FolderPolicyModel.matter_id == matter_id, FolderPolicyModel.inherit.is_(False),
+    )))
+    return {key: int(value) for key, value in counts.items()}, breaks
+
+
+async def _docs_meta(session: AsyncSession, ids: list[str]) -> tuple[dict[str, int], set[str]]:
+    if not ids:
+        return {}, set()
+    counts = dict((await session.execute(
+        select(DocumentAclModel.document_id, func.count(DocumentAclModel.user_id))
+        .where(DocumentAclModel.document_id.in_(ids))
+        .group_by(DocumentAclModel.document_id)
+    )).all())
+    restricted = set(await session.scalars(select(DocumentPolicyModel.document_id).where(
+        DocumentPolicyModel.document_id.in_(ids), DocumentPolicyModel.restricted.is_(True),
+    )))
+    return {key: int(value) for key, value in counts.items()}, restricted
+
+
+def _doc_access(viewer: Viewer, folder_map, meta: tuple[dict[str, int], set[str]], doc: DocumentModel) -> dict:
+    counts, restricted = meta
+    mine = doc.created_by_user_id == viewer.user_id
+    level = "edit" if viewer.manager or mine else (
+        getattr(folder_map, "docs", {}).get(doc.id) or folder_map.get(doc.folder_id or "") or "own"
+    )
+    return {
+        "restricted": doc.id in restricted,
+        "entries": counts.get(doc.id, 0) if viewer.manager or mine else 0,
+        "mine": mine,
+        "level": level,
+    }
+
+
 @router.get("/clients")
 async def list_clients(
     session: AsyncSession = Depends(get_session),
@@ -57,7 +130,7 @@ async def list_clients(
     level_map, tt, acl = await levels(session, viewer, dirx)
     counts = dict((await session.execute(
         select(DocumentModel.matter_id, func.count(DocumentModel.id))
-        .where(DocumentModel.deleted_at.is_(None))
+        .where(DocumentModel.deleted_at.is_(None), *(await doc_scope(session, viewer)))
         .group_by(DocumentModel.matter_id)
     )).all())
     provisioned = set(await session.scalars(select(MatterWorkspaceModel.matter_id)))
@@ -140,9 +213,24 @@ async def browse_matter(
     await ensure_provisioned(session, viewer, matter)
     folder = await folder_in_matter(session, matter.id, folderId)
     folders = await matter_folders(session, matter.id)
+    folder_map = await my_folder_levels(session, viewer, {matter.id})
+    if not viewer.manager:
+        if folder is not None and folder_map.get(folder.id) == "deny":
+            raise HTTPException(status_code=403, detail="Доступ к этой папке закрыт")
+        base_level, _ = await base_matter_level(session, viewer, dirx, matter)
+        extra: set[str] = set()
+        if base_level == "none":
+            granted = [did for did, lvl in folder_map.docs.items() if lvl in ("read", "edit")]
+            if granted:
+                extra = {fid for fid in await session.scalars(
+                    select(DocumentModel.folder_id).where(DocumentModel.id.in_(granted))
+                ) if fid}
+        folders = visible_folders(folders, folder_map, folder_only=base_level == "none", extra=extra)
+    scope = scope_clause(viewer, folder_map)
     doc_query = select(DocumentModel).where(
         DocumentModel.matter_id == matter.id,
         DocumentModel.deleted_at.is_(None),
+        *scope,
     )
     if folder is None:
         doc_query = doc_query.where(DocumentModel.folder_id.is_(None))
@@ -151,11 +239,13 @@ async def browse_matter(
     docs = list(await session.scalars(doc_query.order_by(DocumentModel.name.asc())))
     per_folder = dict((await session.execute(
         select(DocumentModel.folder_id, func.count(DocumentModel.id))
-        .where(DocumentModel.matter_id == matter.id, DocumentModel.deleted_at.is_(None))
+        .where(DocumentModel.matter_id == matter.id, DocumentModel.deleted_at.is_(None), *scope)
         .group_by(DocumentModel.folder_id)
     )).all())
     favorites = await favorite_ids(session, viewer.user_id)
     client = dirx.clients.get(matter.client_id)
+    custom = await custom_access_folders(session, matter.id) if viewer.manager else ({}, set())
+    meta = await _docs_meta(session, [doc.id for doc in docs])
     return {
         "matter": {
             "id": matter.id,
@@ -176,10 +266,18 @@ async def browse_matter(
                 "documents": int(per_folder.get(item.id, 0)),
                 "createdAt": iso(item.created_at),
                 "favorite": ("folder", item.id) in favorites,
+                "access": {
+                    "level": folder_map.get(item.id),
+                    "entries": custom[0].get(item.id, 0),
+                    "inherit": item.id not in custom[1],
+                },
             }
             for item in folders
         ],
-        "documents": [doc_out(doc, dirx, favorites) for doc in docs],
+        "documents": [
+            {**doc_out(doc, dirx, favorites), "access": _doc_access(viewer, folder_map, meta, doc)}
+            for doc in docs
+        ],
     }
 
 
@@ -207,6 +305,7 @@ async def create_folder(
     if not name or name in {".", ".."}:
         raise HTTPException(status_code=400, detail="Укажите название папки")
     parent = await folder_in_matter(session, matter.id, body.parentId)
+    await ensure_folder_open(session, viewer, parent)
     parent_id = parent.id if parent else None
     if await _sibling_name_taken(session, matter.id, parent_id, name):
         raise HTTPException(status_code=409, detail="Папка с таким названием уже есть")
@@ -287,6 +386,8 @@ async def delete_folder(
     docs = list(await session.scalars(
         select(DocumentModel).where(DocumentModel.folder_id.in_(subtree), DocumentModel.deleted_at.is_(None))
     ))
+    if not viewer.manager and not all([await document_allowed(session, viewer, doc, "edit") for doc in docs]):
+        raise HTTPException(status_code=403, detail="В папке есть документы других сотрудников — удалить её может партнёр")
     for doc in docs:
         ensure_not_locked(doc, viewer)
     stamp = now()
@@ -336,6 +437,7 @@ async def upload_documents(
     """
     dirx, matter, _ = await require_matter(session, viewer, matter_id, "edit")
     folder = await folder_in_matter(session, matter.id, folderId)
+    await ensure_folder_open(session, viewer, folder)
     is_mail = bool(mailMessageId.strip() or mailConversationId.strip())
     kind = mailKind if mailKind in FILING_KINDS else "email"
     if is_mail:

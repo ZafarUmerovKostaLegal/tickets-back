@@ -95,6 +95,68 @@ class AclModel(Base):
     note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Temporary access: the entry stops working after ``until``.
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Temporary suspension: access is closed until this moment, then the entry works again.
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FolderAclModel(Base):
+    """Folder permission of one user; applies to subfolders unless they stop inheriting."""
+
+    __tablename__ = "fm_folder_acl"
+
+    folder_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DocumentAclModel(Base):
+    """Permission of one user on one document; wins over folder permissions."""
+
+    __tablename__ = "fm_document_acl"
+
+    document_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    granted_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DocumentPolicyModel(Base):
+    """Confidential documents: folder permissions do not open them, only explicit document entries."""
+
+    __tablename__ = "fm_document_policy"
+
+    document_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    restricted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FolderPolicyModel(Base):
+    """Folders that stop inheriting permissions from their parent folder."""
+
+    __tablename__ = "fm_folder_policy"
+
+    folder_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    matter_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    inherit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AccessRequestModel(Base):

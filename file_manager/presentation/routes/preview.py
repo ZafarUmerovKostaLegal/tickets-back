@@ -31,7 +31,7 @@ router = APIRouter(tags=["preview"])
 
 
 async def readable_version(session: AsyncSession, viewer: Viewer, document_id: str, version: int | None) -> tuple[DocumentModel, VersionModel]:
-    doc = await live_document(session, document_id)
+    doc = await live_document(session, document_id, viewer)
     await require_matter(session, viewer, doc.matter_id, "read")
     wanted = version or doc.current_version
     row = await session.scalar(
