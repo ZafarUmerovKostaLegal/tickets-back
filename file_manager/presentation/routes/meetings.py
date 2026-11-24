@@ -93,6 +93,24 @@ async def _link(session: AsyncSession, chat_id: str) -> MeetingLinkModel | None:
     return await session.scalar(select(MeetingLinkModel).where(MeetingLinkModel.chat_id == chat_id).limit(1))
 
 
+@router.get("/meetings/links")
+async def my_links(session: AsyncSession = Depends(get_session), viewer: Viewer = Depends(get_viewer)):
+    rows = (
+        await session.execute(
+            select(MeetingLinkModel)
+            .where(MeetingLinkModel.user_id == viewer.user_id)
+            .order_by(MeetingLinkModel.updated_at.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    links = []
+    for row in rows:
+        out = _link_out(row, viewer)
+        out["provider"] = row.provider or "teams"
+        links.append(out)
+    return {"links": links, "serverReady": _ready(), "zoomReady": zoom_api.zoom_ready()}
+
+
 @router.get("/meetings/link")
 async def get_link(
     chatId: str = Query(min_length=3, max_length=300),

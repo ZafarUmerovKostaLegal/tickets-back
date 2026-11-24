@@ -25,6 +25,7 @@ _OUTLOOK_ALLOWED: list[tuple[str, re.Pattern[str]]] = [
     ("DELETE", re.compile(r"^/mail/rules/[^/]+/?$")),
     ("PUT", re.compile(r"^/mail/autofile/?$")),
     # Teams meeting side panel: link the meeting to a matter folder for its recordings.
+    ("GET", re.compile(r"^/meetings/links/?$")),
     ("GET", re.compile(r"^/meetings/link/?$")),
     ("PUT", re.compile(r"^/meetings/link/?$")),
     ("DELETE", re.compile(r"^/meetings/link/?$")),

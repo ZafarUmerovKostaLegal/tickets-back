@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Optional
 
@@ -169,6 +170,41 @@ async def zoom_bootstrap(
     await session.commit()
     _apply_session_cookie(response, token)
     return TokenResponse(access_token=token)
+
+
+_RELAY_TTL_SEC = 300
+_RELAY_MAX = 500
+_relay: dict[str, tuple[float, dict]] = {}
+
+
+class RelayBody(BaseModel):
+    state: str = Field(min_length=40, max_length=200, pattern=r"^tr\.[A-Za-z0-9_-]+$")
+    code: str = Field(default="", max_length=4000)
+    error: str = Field(default="", max_length=500)
+
+
+def _relay_prune(now: float) -> None:
+    for key in [k for k, (at, _) in _relay.items() if now - at > _RELAY_TTL_SEC]:
+        _relay.pop(key, None)
+
+
+@router.post("/relay", status_code=204)
+async def relay_put(body: RelayBody):
+    now = time.monotonic()
+    _relay_prune(now)
+    if len(_relay) >= _RELAY_MAX:
+        raise HTTPException(status_code=429, detail="Too many pending sign-ins")
+    _relay[body.state] = (now, {"code": body.code, "error": body.error, "state": body.state})
+    return Response(status_code=204)
+
+
+@router.get("/relay")
+async def relay_take(state: str):
+    _relay_prune(time.monotonic())
+    entry = _relay.pop(state, None)
+    if entry is None:
+        return Response(status_code=204)
+    return entry[1]
 
 
 @router.post("/refresh", response_model=OutlookTokenResponse)

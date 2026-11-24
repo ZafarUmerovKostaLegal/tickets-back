@@ -142,6 +142,17 @@ def test_only_participants_link_and_owner_controls_the_link(env):
     assert client.get(f"{BASE}/meetings/link", params={"chatId": CHAT}).json()["link"]["id"] == link["id"]
 
 
+def test_my_links_lists_only_my_meetings(env):
+    client, state, Viewer, *_ = env
+    assert client.put(f"{BASE}/meetings/link", json={"chatId": CHAT, "matterId": "m1"}).status_code == 200
+    mine = client.get(f"{BASE}/meetings/links").json()
+    assert [row["chatId"] for row in mine["links"]] == [CHAT]
+    assert mine["links"][0]["provider"] == "teams" and mine["serverReady"] is True
+
+    state["viewer"] = Viewer(9, "Outsider", False, False, "Bearer z", email="someone@kostalegal.com")
+    assert client.get(f"{BASE}/meetings/links").json()["links"] == []
+
+
 def test_recording_and_transcript_are_filed_once(env):
     client, _, _, meetings, transport, calls = env
     assert client.put(f"{BASE}/meetings/link", json={"chatId": CHAT, "matterId": "m1"}).status_code == 200
@@ -164,6 +175,7 @@ def test_outlook_tokens_may_use_meeting_links():
     from presentation.outlook_scope import outlook_path_allowed
 
     assert outlook_path_allowed("PUT", "/api/v1/files/meetings/link")
+    assert outlook_path_allowed("GET", "/api/v1/files/meetings/links")
     assert outlook_path_allowed("POST", "/api/v1/files/meetings/link/check")
     assert not outlook_path_allowed("DELETE", "/api/v1/files/meetings")
 
