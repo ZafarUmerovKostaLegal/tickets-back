@@ -222,3 +222,40 @@ def test_autofile_updates_one_document_per_conversation_and_marks_messages(env):
 
     assert ("t1", {"categories": ["Red", "Saved to Kosta"]}) in patches
     assert {mid for mid, _ in patches} == {"t1", "t2", "t3"}
+
+
+def test_conversation_is_read_from_the_viewers_own_mailbox(env, monkeypatch):
+    client, state, Viewer, _ = env
+    import infrastructure.graph_mail as graph_mail
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        seen.append(url)
+        if "oauth2/v2.0/token" in url:
+            return httpx.Response(200, json={"access_token": "app-token", "expires_in": 3600})
+        flt = request.url.params.get("$filter", "")
+        if flt.startswith("internetMessageId"):
+            return httpx.Response(200, json={"value": [{"id": "x", "conversationId": "conv-real"}]})
+        if "conv-real" in flt:
+            return httpx.Response(200, json={"value": [
+                {"id": "b", "subject": "Re: Deal", "receivedDateTime": "2026-11-20T10:00:00Z", "body": {"contentType": "html", "content": "<p>2</p>"},
+                 "from": {"emailAddress": {"address": "iroda@kostalegal.com", "name": "Iroda"}}, "toRecipients": [{"emailAddress": {"address": "ivan@client.com"}}]},
+                {"id": "a", "subject": "Deal", "receivedDateTime": "2026-11-19T10:00:00Z", "body": {"contentType": "html", "content": "<p>1</p>"},
+                 "from": {"emailAddress": {"address": "ivan@client.com", "name": "Ivan"}}},
+                {"id": "d", "subject": "draft", "isDraft": True, "receivedDateTime": "2026-11-21T10:00:00Z"},
+            ]})
+        return httpx.Response(200, json={"value": []})
+
+    real_client = graph_mail._client
+    monkeypatch.setattr(graph_mail, "_client", lambda transport=None: real_client(httpx.MockTransport(handler)))
+
+    data = client.post(f"{BASE}/mail/conversation", json={"conversationId": "office-id", "messageId": "m2@client.com"}).json()
+    assert data["mailbox"] == "iroda@kostalegal.com"
+    assert [m["graphId"] for m in data["messages"]] == ["a", "b"]
+    assert data["messages"][1]["to"] == [{"email": "ivan@client.com", "name": ""}]
+    assert all("/users/iroda%40kostalegal.com/messages" in url or "oauth2" in url for url in seen)
+
+    state["viewer"] = Viewer(9, "No Mail", False, False, "Bearer z", email="")
+    assert client.post(f"{BASE}/mail/conversation", json={"conversationId": "c"}).status_code == 400

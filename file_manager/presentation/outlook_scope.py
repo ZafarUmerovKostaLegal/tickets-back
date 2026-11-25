@@ -17,6 +17,7 @@ _OUTLOOK_ALLOWED: list[tuple[str, re.Pattern[str]]] = [
     ("PUT", re.compile(r"^/favorites/?$")),
     ("DELETE", re.compile(r"^/favorites/[^/]+/[^/]+/?$")),
     ("POST", re.compile(r"^/mail/lookup/?$")),
+    ("POST", re.compile(r"^/mail/conversation/?$")),
     ("GET", re.compile(r"^/mail/suggestions/?$")),
     # Server-side mail rules and the owner's auto-filing switch.
     ("GET", re.compile(r"^/mail/rules/?$")),

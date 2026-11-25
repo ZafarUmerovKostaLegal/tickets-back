@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.access import has_level, safe_name
 from infrastructure.database import get_session
+from infrastructure.graph_mail import GraphError, read_conversation
+from infrastructure.config import get_settings
 from infrastructure.models import DocumentModel, EmailFilingModel, FolderModel, VersionModel
 from presentation.common import (
     audit, crumbs, directory, folder_in_matter, iso, levels, matter_closed, now, doc_scope, require_matter,
@@ -221,6 +223,33 @@ async def lookup_filings(
             "filedAt": iso(filing.filed_at),
         })
     return {"filings": out}
+
+
+class ConversationIn(BaseModel):
+    conversationId: str = Field(default="", max_length=500)
+    messageId: str = Field(default="", max_length=500)
+
+
+@router.post("/mail/conversation")
+async def my_conversation(
+    body: ConversationIn,
+    viewer: Viewer = Depends(get_viewer),
+):
+    """
+    The whole conversation from the viewer's own mailbox (read by the server through Microsoft Graph),
+    for the add-in when it has no Microsoft token of its own. Other people's mailboxes are never read.
+    """
+    if not viewer.email:
+        raise HTTPException(status_code=400, detail="У вашей учётной записи нет почты")
+    if not get_settings().graph_ready():
+        raise HTTPException(status_code=503, detail="Чтение почты сервером не настроено")
+    if not body.conversationId.strip() and not body.messageId.strip():
+        raise HTTPException(status_code=400, detail="Не указано письмо")
+    try:
+        messages = await read_conversation(viewer.email, body.conversationId, body.messageId)
+    except GraphError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"mailbox": viewer.email, "messages": messages}
 
 
 @router.get("/mail/suggestions")

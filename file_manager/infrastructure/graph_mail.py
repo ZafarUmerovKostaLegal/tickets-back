@@ -169,6 +169,82 @@ async def read_delta(
     return page
 
 
+def _people(rows: Any) -> list[dict[str, str]]:
+    out = []
+    for row in rows or []:
+        address = ((row or {}).get("emailAddress") or {})
+        out.append({"email": str(address.get("address") or ""), "name": str(address.get("name") or "")})
+    return out
+
+
+async def read_conversation(
+    mailbox: str,
+    conversation_id: str,
+    internet_message_id: str = "",
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """
+    Every message of one conversation in this mailbox with its HTML body, oldest first.
+    The conversation is found by its id or, failing that, through the message's Internet-Message-ID.
+    """
+    token = await app_token(transport)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Prefer": 'outlook.body-content-type="html"',
+    }
+    select = "id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isDraft"
+    base = f"{GRAPH}/users/{quote(mailbox)}/messages"
+
+    async def fetch(filter_expr: str, fields: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        url = f"{base}?$filter={quote(filter_expr)}&$select={fields}&$top=50"
+        async with _client(transport) as client:
+            while url and len(rows) < limit:
+                response = await client.get(url, headers=headers)
+                if response.status_code >= 400:
+                    raise GraphError(_explain(response))
+                body = response.json()
+                rows.extend(body.get("value") or [])
+                url = str(body.get("@odata.nextLink") or "")
+        return rows
+
+    def quoted(value: str) -> str:
+        return value.replace("'", "''")
+
+    rows = await fetch(f"conversationId eq '{quoted(conversation_id)}'", select) if conversation_id.strip() else []
+    if not rows and internet_message_id.strip():
+        mid = internet_message_id.strip()
+        if not mid.startswith("<"):
+            mid = f"<{mid}>"
+        found = await fetch(f"internetMessageId eq '{quoted(mid)}'", "id,conversationId")
+        real = str((found[0] if found else {}).get("conversationId") or "")
+        if real and real != conversation_id:
+            rows = await fetch(f"conversationId eq '{quoted(real)}'", select)
+    messages = []
+    for row in rows:
+        if row.get("isDraft"):
+            continue
+        sender = ((row.get("from") or {}).get("emailAddress") or {})
+        body = row.get("body") or {}
+        messages.append({
+            "graphId": str(row.get("id") or ""),
+            "internetMessageId": str(row.get("internetMessageId") or ""),
+            "conversationId": str(row.get("conversationId") or ""),
+            "subject": str(row.get("subject") or ""),
+            "fromEmail": str(sender.get("address") or ""),
+            "fromName": str(sender.get("name") or ""),
+            "received": str(row.get("receivedDateTime") or ""),
+            "to": _people(row.get("toRecipients")),
+            "cc": _people(row.get("ccRecipients")),
+            "bodyType": str(body.get("contentType") or "html").lower(),
+            "body": str(body.get("content") or ""),
+        })
+    messages.sort(key=lambda item: item["received"])
+    return messages
+
+
 async def mark_saved(
     mailbox: str,
     message: GraphMessage,
