@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.mail_rules import MailFacts, message_file_name, pick_rule
 from infrastructure.config import get_settings
 from infrastructure.database import async_session_factory
-from infrastructure.graph_mail import GraphError, GraphMessage, download_mime, read_delta
+from infrastructure.graph_mail import GraphError, GraphMessage, download_mime, mark_saved, read_delta
 from infrastructure.models import AclModel, EmailFilingModel, FolderModel, MailboxModel, MailRuleModel, MatterWorkspaceModel
 from infrastructure.tt_directory import Matter
 from presentation.common import next_doc_number, now
@@ -119,9 +119,9 @@ async def file_message(
         mail_message_id=message.internet_message_id,
         mail_conversation_id=message.conversation_id,
     )
-    if status == "created":
+    if status in ("created", "version"):
         subject = " ".join(message.subject.split())[:500]
-        if subject and not (doc.description or "").strip():
+        if subject and (status == "version" or not (doc.description or "").strip()):
             doc.description = subject
         session.add(new_email_filing(
             viewer, doc,
@@ -164,8 +164,11 @@ async def process_mailbox(
             content = await download_mime(box.email, message.id, transport=transport)
             if not content or len(content) > limit:
                 continue
-            if await file_message(session, box, rule, message, content) == "created":
+            status = await file_message(session, box, rule, message, content)
+            if status in ("created", "version"):
                 filed += 1
+            if status in ("created", "version", "exists", "unchanged"):
+                await mark_saved(box.email, message, transport=transport)
         setattr(box, attr, page.delta_link)
         await session.commit()
     return filed

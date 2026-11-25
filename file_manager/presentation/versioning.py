@@ -119,6 +119,33 @@ async def find_same_content(session: AsyncSession, matter_id: str, sha: str, sco
     )
 
 
+async def find_conversation_document(
+    session: AsyncSession,
+    matter_id: str,
+    conversation_id: str,
+    scope: tuple = (),
+) -> DocumentModel | None:
+    """
+    The letter of this conversation already filed in the matter (the most recently updated one):
+    a new message of the same correspondence becomes its next version instead of a new document.
+    """
+    conversation = (conversation_id or "").strip()
+    if not conversation:
+        return None
+    filed = select(EmailFilingModel.document_id).where(
+        EmailFilingModel.matter_id == matter_id,
+        EmailFilingModel.kind == "email",
+        EmailFilingModel.conversation_id == conversation,
+    )
+    return await session.scalar(
+        select(DocumentModel)
+        .where(DocumentModel.matter_id == matter_id, DocumentModel.deleted_at.is_(None),
+               DocumentModel.id.in_(filed), *scope)
+        .order_by(DocumentModel.updated_at.desc())
+        .limit(1)
+    )
+
+
 async def find_mail_document(
     session: AsyncSession,
     matter_id: str,

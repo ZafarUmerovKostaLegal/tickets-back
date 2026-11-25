@@ -19,7 +19,8 @@ from infrastructure.config import get_settings
 GRAPH = "https://graph.microsoft.com/v1.0"
 TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 FOLDERS = {"in": "inbox", "out": "sentitems"}
-_SELECT = "id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isDraft"
+_SELECT = "id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isDraft,categories"
+SAVED_CATEGORY = "Saved to Kosta"
 
 _token: dict[str, Any] = {"value": "", "expires": datetime.min.replace(tzinfo=timezone.utc)}
 _token_lock = asyncio.Lock()
@@ -38,6 +39,7 @@ class GraphMessage:
     sender: str
     recipients: tuple[str, ...]
     received_at: datetime | None
+    categories: tuple[str, ...] = ()
 
 
 @dataclass
@@ -118,6 +120,7 @@ def _parse(row: dict) -> GraphMessage | None:
         sender=_address(row.get("from")),
         recipients=recipients,
         received_at=received,
+        categories=tuple(str(item) for item in (row.get("categories") or []) if item),
     )
 
 
@@ -164,6 +167,31 @@ async def read_delta(
     # Huge backlog: keep what we have and continue from the next page on the following run.
     page.delta_link = url
     return page
+
+
+async def mark_saved(
+    mailbox: str,
+    message: GraphMessage,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """
+    Put the "Saved to Kosta" category on the message, like the Outlook add-in does.
+    Needs the Mail.ReadWrite application permission; without it the badge is simply skipped.
+    """
+    if SAVED_CATEGORY in message.categories:
+        return True
+    try:
+        token = await app_token(transport)
+        async with _client(transport) as client:
+            response = await client.patch(
+                f"{GRAPH}/users/{quote(mailbox)}/messages/{quote(message.id)}",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"categories": [*message.categories, SAVED_CATEGORY]},
+            )
+    except (GraphError, httpx.HTTPError):
+        return False
+    return response.status_code < 400
 
 
 async def download_mime(mailbox: str, message_id: str, *, transport: httpx.AsyncBaseTransport | None = None) -> bytes:

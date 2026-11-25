@@ -170,3 +170,55 @@ def test_one_broken_mailbox_does_not_stop_the_others(env):
 
     summary = client.portal.call(lambda: autofile.run_once(transport=httpx.MockTransport(handler)))
     assert summary == {"mailboxes": 2, "filed": 1, "errors": 1}
+
+
+def test_autofile_updates_one_document_per_conversation_and_marks_messages(env):
+    client, _, _, autofile = env
+    client.post(f"{BASE}/mail/rules", json={"match": "client.com", "matterId": "m1"})
+    client.put(f"{BASE}/mail/autofile", json={"enabled": True})
+    patches: list[tuple[str, dict]] = []
+
+    def eml(mid: str) -> bytes:
+        return (f"Message-ID: <{mid}@client.com>\r\nFrom: ivan@client.com\r\nSubject: Contract\r\n\r\nBody {mid}").encode()
+
+    def transport_for(inbox):
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "oauth2/v2.0/token" in url:
+                return httpx.Response(200, json={"access_token": "app-token", "expires_in": 3600})
+            if request.method == "PATCH":
+                import json as _json
+                patches.append((url.rsplit("/", 1)[-1], _json.loads(request.content)))
+                return httpx.Response(200, json={})
+            if url.endswith("/$value"):
+                mid = url.rsplit("/", 2)[-2]
+                return httpx.Response(200, content=eml(mid))
+            if "messages/delta" in url or url.endswith("delta-in") or url.endswith("delta-out"):
+                rows = inbox if ("inbox" in url or url.endswith("delta-in")) else []
+                return httpx.Response(200, json={"value": rows, "@odata.deltaLink": "https://graph/delta-" + ("in" if rows is inbox else "out")})
+            return httpx.Response(404, json={})
+        return httpx.MockTransport(handler)
+
+    first = _msg("t1", "ivan@client.com")
+    first["conversationId"] = "conv-deal"
+    first["categories"] = ["Red"]
+    reply = _msg("t2", "ivan@client.com", subject="Re: Contract")
+    reply["conversationId"] = "conv-deal"
+    other = _msg("t3", "ivan@client.com", subject="Invoice")
+
+    summary = client.portal.call(lambda: autofile.run_once(transport=transport_for([first])))
+    assert summary["filed"] == 1
+    summary = client.portal.call(lambda: autofile.run_once(transport=transport_for([reply, other])))
+    assert summary["filed"] == 2
+
+    found = client.post(f"{BASE}/mail/lookup", json={"messageIds": ["t1@client.com", "t2@client.com", "t3@client.com"]}).json()["filings"]
+    doc_of = {row["messageId"]: row["documentId"] for row in found}
+    assert doc_of["t1@client.com"] == doc_of["t2@client.com"]  # the reply joined the first letter
+    assert doc_of["t3@client.com"] != doc_of["t1@client.com"]  # an unrelated letter stays separate
+    thread_doc = doc_of["t2@client.com"]
+    detail = client.get(f"{BASE}/documents/{thread_doc}").json()
+    assert detail["document"]["version"] == 2 and detail["document"]["description"] == "Re: Contract"
+    assert client.get(f"{BASE}/documents/{thread_doc}/content").content == eml("t2")
+
+    assert ("t1", {"categories": ["Red", "Saved to Kosta"]}) in patches
+    assert {mid for mid, _ in patches} == {"t1", "t2", "t3"}

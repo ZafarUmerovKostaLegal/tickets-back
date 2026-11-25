@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from infrastructure.models import DocumentModel, MatterWorkspaceModel, VersionModel
 from presentation.common import audit, ensure_not_locked, my_folder_levels, scope_clause
 from presentation.deps import Viewer
-from presentation.versioning import current_digest, find_mail_document, find_same_content, set_fingerprint
+from presentation.versioning import (
+    current_digest,
+    find_conversation_document,
+    find_mail_document,
+    find_same_content,
+    set_fingerprint,
+)
 
 
 async def file_into_matter(
@@ -55,6 +61,11 @@ async def file_into_matter(
                                             scope=visible)
         if existing is not None and kind != "thread":
             return "exists", existing
+        if existing is None and kind == "email":
+            # A reply in a correspondence that is already filed: one document, the newest letter on top.
+            existing = await find_conversation_document(session, matter.id, mail_conversation_id, editable)
+            if existing is not None and existing.checked_out_by_user_id not in (None, viewer.user_id):
+                existing = None
     if existing is None:
         query = select(DocumentModel).where(
             DocumentModel.matter_id == matter.id,

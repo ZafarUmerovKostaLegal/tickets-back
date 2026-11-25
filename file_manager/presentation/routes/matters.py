@@ -494,7 +494,7 @@ async def upload_documents(
     if is_mail:
         subject = " ".join(mailSubject.split())[:500]
         for status, doc in results:
-            if status != "created":
+            if status not in ("created", "version"):
                 continue
             # The subject is what people look for — keep it as the document description.
             if subject and not (doc.description or "").strip():
