@@ -41,7 +41,7 @@ def test_heartbeat_upserts_and_managers_see_who_is_online(env):
 
     state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer y")
     data = client.get(f"{BASE}/admin/addin-clients").json()
-    assert data["summary"] == {"online": 2, "onlineUsers": 1, "users": 1, "installs": 2, "ssoProblems": 1}
+    assert data["summary"] == {"online": 2, "onlineUsers": 1, "users": 1, "installs": 2, "ssoProblems": 1, "signinFailures": 0}
     word = next(c for c in data["clients"] if c["clientId"] == "word-abcdef12")
     assert word["host"] == "unknown"
     assert word["authMethod"] == "dialog"
@@ -67,3 +67,28 @@ def test_quiet_installs_are_offline_and_bad_ids_ignored(env):
     assert data["summary"]["online"] == 0
     assert [c["clientId"] for c in data["clients"]] == ["word-abcdef12"]
     assert models.AddinClientModel.__tablename__ == "fm_addin_clients"
+
+
+def test_failed_sign_ins_are_reported_anonymously_and_throttled(env):
+    client, state, Viewer = env
+    import presentation.routes.addin as addin
+
+    addin._failure_hits.clear()
+    body = {"clientId": "outlook-mobile01", "email": "Iroda@Kostalegal.com", "host": "outlook", "platform": "ios",
+            "officeVersion": "4.2501", "addinVersion": "1.3.1", "error": "Dialog: 12011"}
+    headers = {"X-Forwarded-For": "10.9.9.9"}
+    assert client.post(f"{BASE}/addin/signin-failure", json=body, headers=headers).json() == {"ok": True}
+    assert client.post(f"{BASE}/addin/signin-failure", json={**body, "email": "not an email", "clientId": "../x"},
+                       headers=headers).json() == {"ok": True}
+
+    state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer y")
+    data = client.get(f"{BASE}/admin/addin-clients").json()
+    assert data["summary"]["signinFailures"] == 2
+    latest, first = data["failures"][0], data["failures"][1]
+    assert first["email"] == "iroda@kostalegal.com" and first["platform"] == "ios" and first["error"] == "Dialog: 12011"
+    assert latest["email"] == "" and latest["clientId"] == ""
+
+    for _ in range(addin.FAILURE_PER_IP):
+        client.post(f"{BASE}/addin/signin-failure", json=body, headers=headers)
+    assert client.post(f"{BASE}/addin/signin-failure", json=body, headers=headers).json() == {"ok": False}
+    addin._failure_hits.clear()

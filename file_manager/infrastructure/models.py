@@ -284,6 +284,24 @@ class AddinClientModel(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class AddinSigninFailureModel(Base):
+    """A Kosta File sign-in that did not succeed (reported before the user has any session)."""
+
+    __tablename__ = "fm_addin_signin_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    email: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    host: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    office_version: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    addin_version: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    error: Mapped[str] = mapped_column(String(1500), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class MailRuleModel(Base):
     """«Mail from X → matter / folder». Personal rules act on their owner's mailbox,
     shared rules (partners, admins) on every mailbox with auto-filing turned on."""
