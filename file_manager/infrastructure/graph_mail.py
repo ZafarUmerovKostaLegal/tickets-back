@@ -7,6 +7,7 @@ auto-filing on, so the existing mailbox is never scanned.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -245,6 +246,54 @@ async def read_conversation(
     return messages
 
 
+_log = logging.getLogger(__name__)
+SAVED_COLOR = "preset4"
+_category_ready: set[str] = set()
+_warned: set[tuple[str, str]] = set()
+
+
+def _warn_once(mailbox: str, what: str, detail: str) -> None:
+    key = (mailbox.lower(), what)
+    if key in _warned:
+        return
+    _warned.add(key)
+    _log.warning("Saved to Kosta badge, %s for %s: %s", what, mailbox, detail)
+
+
+async def ensure_saved_category(
+    mailbox: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """
+    The green "Saved to Kosta" category in the mailbox's category list (without it Outlook shows the tag uncoloured).
+    Needs the MailboxSettings.ReadWrite application permission.
+    """
+    key = mailbox.lower()
+    if key in _category_ready:
+        return True
+    try:
+        token = await app_token(transport)
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        url = f"{GRAPH}/users/{quote(mailbox)}/outlook/masterCategories"
+        async with _client(transport) as client:
+            listed = await client.get(url, headers=headers)
+            if listed.status_code >= 400:
+                _warn_once(mailbox, "categories not readable", _explain(listed))
+                return False
+            names = {str(row.get("displayName") or "").lower() for row in listed.json().get("value") or []}
+            if SAVED_CATEGORY.lower() not in names:
+                created = await client.post(url, headers=headers, json={"displayName": SAVED_CATEGORY, "color": SAVED_COLOR})
+                if created.status_code >= 400 and created.status_code != 409:
+                    _warn_once(mailbox, "category not created", _explain(created))
+                    return False
+    except (GraphError, httpx.HTTPError) as exc:
+        _warn_once(mailbox, "category check failed", str(exc))
+        return False
+    _category_ready.add(key)
+    return True
+
+
 async def mark_saved(
     mailbox: str,
     message: GraphMessage,
@@ -252,9 +301,10 @@ async def mark_saved(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> bool:
     """
-    Put the "Saved to Kosta" category on the message, like the Outlook add-in does.
-    Needs the Mail.ReadWrite application permission; without it the badge is simply skipped.
+    Put the green "Saved to Kosta" category on the message, like the Outlook add-in does.
+    Needs the Mail.ReadWrite application permission; without it the badge is skipped and the reason logged.
     """
+    await ensure_saved_category(mailbox, transport=transport)
     if SAVED_CATEGORY in message.categories:
         return True
     try:
@@ -265,9 +315,13 @@ async def mark_saved(
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 json={"categories": [*message.categories, SAVED_CATEGORY]},
             )
-    except (GraphError, httpx.HTTPError):
+    except (GraphError, httpx.HTTPError) as exc:
+        _warn_once(mailbox, "message not tagged", str(exc))
         return False
-    return response.status_code < 400
+    if response.status_code >= 400:
+        _warn_once(mailbox, "message not tagged", _explain(response))
+        return False
+    return True
 
 
 async def download_mime(mailbox: str, message_id: str, *, transport: httpx.AsyncBaseTransport | None = None) -> bytes:

@@ -177,6 +177,9 @@ def test_autofile_updates_one_document_per_conversation_and_marks_messages(env):
     client.post(f"{BASE}/mail/rules", json={"match": "client.com", "matterId": "m1"})
     client.put(f"{BASE}/mail/autofile", json={"enabled": True})
     patches: list[tuple[str, dict]] = []
+    created: list[dict] = []
+    from infrastructure import graph_mail
+    graph_mail._category_ready.clear()
 
     def eml(mid: str) -> bytes:
         return (f"Message-ID: <{mid}@client.com>\r\nFrom: ivan@client.com\r\nSubject: Contract\r\n\r\nBody {mid}").encode()
@@ -186,6 +189,12 @@ def test_autofile_updates_one_document_per_conversation_and_marks_messages(env):
             url = str(request.url)
             if "oauth2/v2.0/token" in url:
                 return httpx.Response(200, json={"access_token": "app-token", "expires_in": 3600})
+            if url.endswith("/outlook/masterCategories"):
+                import json as _json
+                if request.method == "POST":
+                    created.append(_json.loads(request.content))
+                    return httpx.Response(201, json={})
+                return httpx.Response(200, json={"value": [{"displayName": "Red"}]})
             if request.method == "PATCH":
                 import json as _json
                 patches.append((url.rsplit("/", 1)[-1], _json.loads(request.content)))
@@ -222,6 +231,7 @@ def test_autofile_updates_one_document_per_conversation_and_marks_messages(env):
 
     assert ("t1", {"categories": ["Red", "Saved to Kosta"]}) in patches
     assert {mid for mid, _ in patches} == {"t1", "t2", "t3"}
+    assert created == [{"displayName": "Saved to Kosta", "color": "preset4"}]  # once per mailbox, green
 
 
 def test_conversation_is_read_from_the_viewers_own_mailbox(env, monkeypatch):
