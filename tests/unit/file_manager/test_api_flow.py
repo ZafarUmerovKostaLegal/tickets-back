@@ -159,6 +159,12 @@ def test_folder_access_inheritance_and_temporary_entries(env):
     assert row["inherited"]["folderId"] == corr and row["effective"] == "read" and row["entry"] is None
     assert [d["name"] for d in access["documents"]] == ["letter.pdf"]
     assert row["files"] == {letter["id"]: "read"}
+    assert row["fileRules"] == {}
+    client.put(f"{base}/documents/{letter['id']}/access", json={"userId": 2, "userName": "Lawyer L", "level": "edit"})
+    again = client.get(f"{base}/folders/{emails}/access").json()
+    granted = next(m for m in again["members"] if m["userId"] == 2)
+    assert granted["fileRules"] == {letter["id"]: "edit"} and granted["files"][letter["id"]] == "edit"
+    assert client.delete(f"{base}/documents/{letter['id']}/access/2").status_code == 200
     mx = client.get(f"{base}/matters/m1/access-matrix").json()
     assert mx["folderCells"][f"2:{emails}"] == "read" and mx["folderRules"][f"2:{corr}"]["level"] == "read"
     assert any(d["id"] == letter["id"] and d["folderId"] == emails for d in mx["documents"])

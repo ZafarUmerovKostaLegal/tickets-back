@@ -207,6 +207,7 @@ async def folder_access(
             **member,
             "partner": partner,
             "files": files,
+            "fileRules": dict(own_docs),
             "entry": mine,
             "inherited": {"level": inherited[0], "folderId": inherited[1], "folderName": by_id[inherited[1]].name}
             if inherited else None,
