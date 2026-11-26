@@ -166,6 +166,7 @@ def _request_to_out(
     comments_count: int | None = None,
     last_comment=None,
     entry_count: int | None = None,
+    priority_event=None,
 ) -> dict:
     sigs = [
         {
@@ -202,6 +203,60 @@ def _request_to_out(
         ec = int(entry_count)
         out["entryCount"] = ec
         out["isEmpty"] = ec == 0
+    if priority_event is not None:
+        out["priorityChangedAt"] = priority_event.at.isoformat()
+        out["priorityChangedBy"] = priority_event.actor_auth_user_id
+    return out
+
+
+_EVENT_KINDS = frozenset({"submitted", "resubmitted", "priority", "signed", "unsigned", "confirmed", "reopened", "reset"})
+
+
+async def list_partner_confirmation_history(
+    session: AsyncSession,
+    viewer: dict,
+    request_id: str,
+    *,
+    authorization: str | None,
+) -> list[dict]:
+    """Who did what with the report and when; older reports start with an «created» line from the request itself."""
+    rid = (request_id or "").strip()
+    conf_repo = PartnerReportConfirmationRepository(session)
+    req = await conf_repo.get_request_by_id(rid, load_signatures=True)
+    if not req or not await _viewer_can_access_confirmation_request(session, viewer, req, authorization=authorization):
+        raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
+    events = [e for e in await conf_repo.list_events(rid) if e.kind in _EVENT_KINDS]
+    out = [{
+        "id": e.id,
+        "kind": e.kind,
+        "from": e.from_value,
+        "to": e.to_value,
+        "actorAuthUserId": e.actor_auth_user_id,
+        "at": e.at.isoformat(),
+    } for e in events]
+    if not any(e.kind == "submitted" for e in events):
+        out.insert(0, {
+            "id": f"created-{req.id}",
+            "kind": "submitted",
+            "from": "",
+            "to": "",
+            "actorAuthUserId": req.submitted_by_auth_user_id,
+            "at": req.created_at.isoformat(),
+            "legacy": True,
+        })
+        logged_sigs = {e.to_value for e in events if e.kind == "signed"}
+        for sig in req.signatures or []:
+            if str(sig.partner_auth_user_id) not in logged_sigs:
+                out.append({
+                    "id": f"sig-{sig.id}",
+                    "kind": "signed",
+                    "from": "",
+                    "to": str(sig.partner_auth_user_id),
+                    "actorAuthUserId": sig.partner_auth_user_id,
+                    "at": sig.confirmed_at.isoformat(),
+                    "legacy": True,
+                })
+        out.sort(key=lambda row: row["at"])
     return out
 
 
@@ -481,7 +536,7 @@ async def revoke_partner_report_confirmation_signature(
         raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
 
     project_id = req.project_id
-    removed = await conf_repo.remove_signature(rid, partner_id)
+    removed = await conf_repo.remove_signature(rid, partner_id, actor_auth_user_id=vid)
     if not removed:
         raise HTTPException(status_code=404, detail="Подпись этого партнёра не найдена")
     await conf_repo.mark_pending_partners(rid)
@@ -527,7 +582,7 @@ async def set_partner_confirmation_review_priority(
             status_code=403,
             detail="Приоритет может менять только отправитель отчёта или администратор",
         )
-    ok = await conf_repo.set_review_priority(rid, priority)
+    ok = await conf_repo.set_review_priority(rid, priority, actor_auth_user_id=vid)
     if not ok:
         raise HTTPException(status_code=404, detail="Запрос на подтверждение не найден")
     await session.commit()
@@ -616,11 +671,13 @@ async def list_pending_partner_confirmations(
     entry_counts: dict[str, int] = {}
     if include_entry_counts:
         entry_counts = await _entry_counts_for_request_rows(session, page_rows)
+    priority_events = await conf_repo.last_priority_change_by_request_ids([m.id for m in page_rows])
     items = [
         _request_to_out(
             m,
             partners_by_request.get(m.id, []),
             entry_count=entry_counts.get(m.id) if include_entry_counts else None,
+            priority_event=priority_events.get(m.id),
         )
         for m in page_rows
     ]

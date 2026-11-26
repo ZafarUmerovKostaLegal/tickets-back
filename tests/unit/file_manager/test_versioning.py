@@ -135,7 +135,7 @@ def test_duplicates_report_and_cleanup(env):
     _, b = _upload(client, emails, "B.docx", b"twin", allowDuplicate="true")
     _upload(client, emails, "C.docx", b"single")
     _, old = _upload(client, emails, "old.eml", b"Message-ID: <m@x>\r\n\r\n1")
-    _, again = _upload(client, agreements, "old copy.eml", b"Message-ID: <m@x>\r\n\r\n2")
+    _, again = _upload(client, agreements, "old copy.eml", b"Message-ID: <m@x>\r\n\r\n2", allowDuplicate="true")
 
     groups = client.get(f"{BASE}/matters/m1/duplicates").json()["groups"]
     by_reason = {g["reason"]: {d["id"] for d in g["documents"]} for g in groups}

@@ -153,6 +153,25 @@ class ReportPartnerConfirmationSignatureModel(Base):
     )
 
 
+class ReportPartnerConfirmationEventModel(Base):
+    """History of one report under partner review: submitted, priority changed, signed, confirmed, reset."""
+
+    __tablename__ = "tt_report_partner_confirmation_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tt_report_partner_confirmation_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    from_value: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    to_value: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    actor_auth_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class ReportPartnerConfirmationCommentModel(Base):
     __tablename__ = "tt_report_partner_confirmation_comments"
 

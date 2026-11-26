@@ -23,6 +23,7 @@ from infrastructure.models import (
     FolderAclModel,
     FolderModel,
     FolderPolicyModel,
+    UploadSessionModel,
     VersionModel,
 )
 from presentation.common import (
@@ -437,6 +438,7 @@ async def erase_trash(
         ):
             await session.execute(delete(model).where(column.in_(doc_ids)))
         await session.execute(delete(FavoriteModel).where(FavoriteModel.target_id.in_(doc_ids)))
+        await session.execute(delete(UploadSessionModel).where(UploadSessionModel.document_id.in_(doc_ids)))
         await session.execute(delete(DocumentModel).where(DocumentModel.id.in_(doc_ids)))
     if folder_ids:
         await session.execute(delete(FolderAclModel).where(FolderAclModel.folder_id.in_(folder_ids)))

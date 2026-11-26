@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from infrastructure.models_reports import (
     ReportPartnerConfirmationCommentModel,
+    ReportPartnerConfirmationEventModel,
     ReportPartnerConfirmationRequestModel,
     ReportPartnerConfirmationSignatureModel,
     ReportSnapshotRowModel,
@@ -41,6 +42,63 @@ def project_id_from_snapshot_row(row: ReportSnapshotRowModel) -> str | None:
 class PartnerReportConfirmationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
+
+    def log_event(
+        self,
+        request_id: str,
+        kind: str,
+        *,
+        from_value: str = "",
+        to_value: str = "",
+        actor_auth_user_id: int | None = None,
+    ) -> None:
+        """One line of the report's history (kept until the request itself is deleted)."""
+        self._s.add(ReportPartnerConfirmationEventModel(
+            id=str(uuid.uuid4()),
+            request_id=request_id,
+            kind=kind[:24],
+            from_value=(from_value or "")[:40],
+            to_value=(to_value or "")[:40],
+            actor_auth_user_id=actor_auth_user_id,
+            at=_now_utc(),
+        ))
+
+    async def list_events(self, request_id: str) -> list[ReportPartnerConfirmationEventModel]:
+        q = (
+            select(ReportPartnerConfirmationEventModel)
+            .where(ReportPartnerConfirmationEventModel.request_id == request_id)
+            .order_by(ReportPartnerConfirmationEventModel.at.asc())
+        )
+        return list((await self._s.execute(q)).scalars().all())
+
+    async def last_priority_change_by_request_ids(
+        self, request_ids: list[str]
+    ) -> dict[str, ReportPartnerConfirmationEventModel]:
+        """Latest priority change (or submission, which sets the priority) per request."""
+        if not request_ids:
+            return {}
+        q = (
+            select(ReportPartnerConfirmationEventModel)
+            .where(
+                ReportPartnerConfirmationEventModel.request_id.in_(request_ids),
+                ReportPartnerConfirmationEventModel.kind.in_(("priority", "submitted", "resubmitted")),
+            )
+            .order_by(ReportPartnerConfirmationEventModel.at.asc())
+        )
+        out: dict[str, ReportPartnerConfirmationEventModel] = {}
+        for event in (await self._s.execute(q)).scalars().all():
+            out[event.request_id] = event
+        return out
+
+    async def _signature_counts(self, request_ids: list[str]) -> dict[str, int]:
+        if not request_ids:
+            return {}
+        q = (
+            select(ReportPartnerConfirmationSignatureModel.request_id, func.count())
+            .where(ReportPartnerConfirmationSignatureModel.request_id.in_(request_ids))
+            .group_by(ReportPartnerConfirmationSignatureModel.request_id)
+        )
+        return {str(rid): int(n) for rid, n in (await self._s.execute(q)).all()}
 
     async def snapshot_has_project_row(self, snapshot_id: str, project_id: str) -> bool:
         pid = (project_id or "").strip()
@@ -108,6 +166,18 @@ class PartnerReportConfirmationRepository:
         row = (await self._s.execute(q)).scalars().one_or_none()
         now = _now_utc()
         if row:
+            old_priority = (row.review_priority or _DEFAULT_REVIEW_PRIORITY).strip().lower()
+            self.log_event(
+                row.id, "resubmitted",
+                from_value=(row.status or "")[:40], to_value=_DEFAULT_REVIEW_PRIORITY,
+                actor_auth_user_id=submitted_by_auth_user_id,
+            )
+            if old_priority != _DEFAULT_REVIEW_PRIORITY:
+                self.log_event(
+                    row.id, "priority",
+                    from_value=old_priority, to_value=_DEFAULT_REVIEW_PRIORITY,
+                    actor_auth_user_id=submitted_by_auth_user_id,
+                )
             await self._s.execute(
                 delete(ReportPartnerConfirmationSignatureModel).where(
                     ReportPartnerConfirmationSignatureModel.request_id == row.id
@@ -136,6 +206,7 @@ class PartnerReportConfirmationRepository:
         )
         self._s.add(m)
         await self._s.flush()
+        self.log_event(m.id, "submitted", to_value=_DEFAULT_REVIEW_PRIORITY, actor_auth_user_id=submitted_by_auth_user_id)
         return m
 
     async def invalidate_all_for_snapshot_project(self, snapshot_id: str, project_id: str) -> int:
@@ -148,6 +219,11 @@ class PartnerReportConfirmationRepository:
         ids = [str(x) for x in (await self._s.execute(q)).scalars().all()]
         if not ids:
             return 0
+        await self._reset_after_edit(ids)
+        return len(ids)
+
+    async def _reset_after_edit(self, ids: list[str]) -> None:
+        signed = await self._signature_counts(ids)
         await self._s.execute(
             delete(ReportPartnerConfirmationSignatureModel).where(
                 ReportPartnerConfirmationSignatureModel.request_id.in_(ids)
@@ -157,10 +233,11 @@ class PartnerReportConfirmationRepository:
         for rid in ids:
             row = await self.get_request_by_id(rid)
             if row:
+                if row.status == _STATUS_CONFIRMED or signed.get(rid):
+                    self.log_event(rid, "reset", from_value=(row.status or "")[:40], to_value=_STATUS_PENDING)
                 row.status = _STATUS_PENDING
                 row.updated_at = now
                 self._s.add(row)
-        return len(ids)
 
     async def invalidate_for_project_covering_date(
         self, project_id: str, work_date: date
@@ -186,18 +263,7 @@ class PartnerReportConfirmationRepository:
         ids = [str(x) for x in (await self._s.execute(q)).scalars().all()]
         if not ids:
             return 0
-        await self._s.execute(
-            delete(ReportPartnerConfirmationSignatureModel).where(
-                ReportPartnerConfirmationSignatureModel.request_id.in_(ids)
-            )
-        )
-        now = _now_utc()
-        for rid in ids:
-            row = await self.get_request_by_id(rid)
-            if row:
-                row.status = _STATUS_PENDING
-                row.updated_at = now
-                self._s.add(row)
+        await self._reset_after_edit(ids)
         return len(ids)
 
     async def add_signature(
@@ -211,6 +277,7 @@ class PartnerReportConfirmationRepository:
             confirmed_at=now,
         )
         self._s.add(sig)
+        self.log_event(request_id, "signed", to_value=str(partner_auth_user_id), actor_auth_user_id=partner_auth_user_id)
         return sig
 
     async def list_signature_partner_ids(self, request_id: str) -> list[int]:
@@ -229,7 +296,9 @@ class PartnerReportConfirmationRepository:
         )
         return (await self._s.execute(q)).scalar_one_or_none() is not None
 
-    async def remove_signature(self, request_id: str, partner_auth_user_id: int) -> bool:
+    async def remove_signature(
+        self, request_id: str, partner_auth_user_id: int, actor_auth_user_id: int | None = None
+    ) -> bool:
         """Удаляет одну подпись партнёра SQL DELETE (без ORM-состояния в relationship)."""
         rid = (request_id or "").strip()
         if not rid:
@@ -243,24 +312,36 @@ class PartnerReportConfirmationRepository:
                 )
             )
         )
+        removed = int(result.rowcount or 0) > 0
+        if removed:
+            self.log_event(rid, "unsigned", to_value=str(partner_auth_user_id), actor_auth_user_id=actor_auth_user_id)
         await self._s.flush()
         req = await self.get_request_by_id(rid, load_signatures=False)
         if req is not None:
             self._s.expire(req, ["signatures", "status", "updated_at"])
-        return int(result.rowcount or 0) > 0
+        return removed
 
     async def mark_pending_partners(self, request_id: str) -> None:
         row = await self.get_request_by_id(request_id)
         if not row:
             return
+        if row.status == _STATUS_CONFIRMED:
+            self.log_event(request_id, "reopened", from_value=_STATUS_CONFIRMED, to_value=_STATUS_PENDING)
         row.status = _STATUS_PENDING
         row.updated_at = _now_utc()
         self._s.add(row)
 
-    async def set_review_priority(self, request_id: str, review_priority: str) -> bool:
+    async def set_review_priority(
+        self, request_id: str, review_priority: str, actor_auth_user_id: int | None = None
+    ) -> bool:
         row = await self.get_request_by_id(request_id)
         if not row:
             return False
+        old = (row.review_priority or _DEFAULT_REVIEW_PRIORITY).strip().lower()
+        if old != review_priority:
+            self.log_event(
+                request_id, "priority", from_value=old, to_value=review_priority, actor_auth_user_id=actor_auth_user_id,
+            )
         row.review_priority = review_priority
         row.updated_at = _now_utc()
         self._s.add(row)
@@ -270,6 +351,8 @@ class PartnerReportConfirmationRepository:
         row = await self.get_request_by_id(request_id)
         if not row:
             return
+        if row.status != _STATUS_CONFIRMED:
+            self.log_event(request_id, "confirmed", from_value=(row.status or "")[:40], to_value=_STATUS_CONFIRMED)
         row.status = _STATUS_CONFIRMED
         row.updated_at = _now_utc()
         self._s.add(row)

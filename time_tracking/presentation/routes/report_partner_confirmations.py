@@ -15,6 +15,7 @@ from application.partner_report_confirmation_service import (
     delete_partner_report_confirmation,
     list_confirmed_partner_confirmations,
     list_partner_confirmation_comments,
+    list_partner_confirmation_history,
     list_pending_partner_confirmations,
     revoke_partner_report_confirmation_signature,
     set_partner_confirmation_review_priority,
@@ -263,6 +264,19 @@ async def partner_report_confirmation_confirmed(
         date_to=dt,
         before=bf,
     )
+
+
+@router.get("/partner-confirmations/{request_id}/history")
+async def partner_report_confirmation_history(
+    request_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: dict = Depends(require_bearer_user),
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    rid = (request_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="request_id required")
+    return await list_partner_confirmation_history(session, viewer, rid, authorization=authorization)
 
 
 @router.get("/partner-confirmations/{request_id}/comments")

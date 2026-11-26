@@ -179,7 +179,10 @@ async def lookup_filings(
     session: AsyncSession = Depends(get_session),
     viewer: Viewer = Depends(get_viewer),
 ):
-    """Filings of these messages (and of their thread) in matters the viewer can read."""
+    """
+    Filings of these messages (and of their thread) in matters the viewer can read — also those filed by
+    colleagues into documents the viewer cannot open (``visible: false``): the letter is filed only once.
+    """
     ids = sorted({normalize_message_id(raw) for raw in body.messageIds} - {""})
     conversation = body.conversationId.strip()
     if not ids and not conversation:
@@ -192,10 +195,19 @@ async def lookup_filings(
     rows = (await session.execute(
         select(EmailFilingModel, DocumentModel)
         .join(DocumentModel, DocumentModel.id == EmailFilingModel.document_id)
-        .where(or_(*terms), DocumentModel.deleted_at.is_(None), *(await doc_scope(session, viewer)))
+        .where(or_(*terms), DocumentModel.deleted_at.is_(None))
         .order_by(EmailFilingModel.filed_at.desc())
         .limit(300)
     )).all()
+    if not rows:
+        return {"filings": []}
+    scope = await doc_scope(session, viewer)
+    visible_ids = set(await session.scalars(
+        select(DocumentModel.id).where(DocumentModel.id.in_([doc.id for _, doc in rows]), *scope)
+    )) if scope else {doc.id for _, doc in rows}
+    # Someone else's filing the viewer cannot open is shown only for the very message they have open —
+    # never the rest of the thread (letters they may not have received).
+    rows = [(filing, doc) for filing, doc in rows if doc.id in visible_ids or (filing.message_id and filing.message_id in ids)]
     if not rows:
         return {"filings": []}
     dirx = await directory(viewer)
@@ -220,6 +232,7 @@ async def lookup_filings(
             "version": doc.current_version,
             "filedBy": filing.filed_by_name,
             "filedAt": iso(filing.filed_at),
+            "visible": doc.id in visible_ids,
         })
     return {"filings": out}
 

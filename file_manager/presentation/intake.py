@@ -25,6 +25,18 @@ from presentation.versioning import (
 )
 
 
+def eml_message_id(head: bytes) -> str:
+    """Message-ID from the headers of an .eml (they are at the very start of the file)."""
+    from email.parser import BytesHeaderParser
+
+    from presentation.routes.mail import normalize_message_id
+
+    try:
+        return normalize_message_id(str(BytesHeaderParser().parsebytes(head).get("Message-ID") or ""))
+    except Exception:  # noqa: BLE001 — not a letter after all
+        return ""
+
+
 async def file_into_matter(
     session: AsyncSession,
     viewer: Viewer,
@@ -55,10 +67,20 @@ async def file_into_matter(
     folder_map = await my_folder_levels(session, viewer, {matter.id})
     visible = scope_clause(viewer, folder_map)
     editable = scope_clause(viewer, folder_map, "edit")
+    if existing is None and not is_mail and not allow_duplicate and name.lower().endswith(".eml"):
+        # A letter dragged into the Hub: the same Message-ID filed by anyone in the matter means it is already there.
+        header_id = eml_message_id(head)
+        if header_id:
+            filed = await find_mail_document(session, matter.id, kind="email", message_id=header_id,
+                                             conversation_id="", name=name)
+            if filed is not None:
+                return "exists", filed
     if existing is None and is_mail:
+        # One copy of a letter (or attachment) per matter, whoever filed it first: colleagues who also got
+        # the message do not file their own copy — a partner opens access to the existing one when needed.
         existing = await find_mail_document(session, matter.id, kind=kind, message_id=mail_message_id,
                                             conversation_id=mail_conversation_id, name=name,
-                                            scope=visible)
+                                            scope=() if kind != "thread" else visible)
         if existing is not None and kind != "thread":
             return "exists", existing
         if existing is None and kind == "email":

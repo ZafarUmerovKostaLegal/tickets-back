@@ -46,8 +46,10 @@ async def test_invalidate_for_project_covering_date_query_and_reset():
 
     id_result = MagicMock()
     id_result.scalars.return_value.all.return_value = ["req-1"]
+    counts_result = MagicMock()
+    counts_result.all.return_value = [("req-1", 2)]
     del_result = MagicMock()
-    session.execute = AsyncMock(side_effect=[id_result, del_result])
+    session.execute = AsyncMock(side_effect=[id_result, counts_result, del_result])
 
     row = MagicMock()
     row.status = "fully_confirmed"
@@ -56,5 +58,8 @@ async def test_invalidate_for_project_covering_date_query_and_reset():
     n = await repo.invalidate_for_project_covering_date("p1", date(2026, 6, 10))
     assert n == 1
     assert row.status == "pending_partners"
-    assert session.execute.await_count == 2
+    assert session.execute.await_count == 3
     session.add.assert_called()
+    kinds = [call.args[0].kind for call in session.add.call_args_list
+             if type(call.args[0]).__name__ == "ReportPartnerConfirmationEventModel"]
+    assert kinds == ["reset"]

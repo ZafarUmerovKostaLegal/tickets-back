@@ -337,3 +337,117 @@ def test_erase_deletes_for_good_and_frees_unshared_files(env):
     assert {item["id"] for item in client.get(f"{base}/trash").json()["items"]} == set()
     actions = [row["action"] for row in client.get(f"{base}/audit?action=erase").json()["items"]]
     assert actions == ["erase", "erase"]
+
+
+def _eml_with_attachment() -> bytes:
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = "info@kostalegal.com"
+    msg["To"] = "zumerov@kostalegal.com"
+    msg["Subject"] = "Test"
+    msg["Message-ID"] = "<att-test-1@kostalegal.com>"
+    msg.set_content("See attached")
+    msg.add_attachment(b"%PDF-1.4 contract body", maintype="application", subtype="pdf", filename="contract.pdf")
+    return bytes(msg)
+
+
+def test_email_attachment_is_saved_into_the_matter_once(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    folder_id = next(f["id"] for f in client.get(f"{base}/matters/m1/browse").json()["folders"] if f["name"] == "Agreements")
+    letter = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                         files={"files": ("Test.eml", _eml_with_attachment(), "message/rfc822")}).json()["documents"][0]
+
+    preview = client.get(f"{base}/documents/{letter['id']}/email").json()
+    assert preview["attachments"][0]["name"] == "contract.pdf" and preview["attachments"][0]["saved"] is None
+
+    saved = client.post(f"{base}/documents/{letter['id']}/email/0/save", json={}).json()
+    assert saved["status"] == "created" and saved["folderId"] == folder_id and saved["folderPath"] == "Agreements"
+    assert saved["document"]["name"] == "contract.pdf"
+    assert client.get(f"{base}/documents/{saved['document']['id']}/content").content == b"%PDF-1.4 contract body"
+
+    again = client.post(f"{base}/documents/{letter['id']}/email/0/save", json={}).json()
+    assert again["status"] == "exists" and again["document"]["id"] == saved["document"]["id"]
+
+    info = client.get(f"{base}/documents/{letter['id']}/email").json()["attachments"][0]["saved"]
+    assert info["documentId"] == saved["document"]["id"] and info["folderPath"] == "Agreements"
+    assert info["savedBy"] == "Partner P" and info["visible"] is True
+
+    state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    state["tt"] = {"m1"}
+    hidden = client.get(f"{base}/documents/{letter['id']}/email")
+    if hidden.status_code == 200:
+        assert hidden.json()["attachments"][0]["saved"]["visible"] is False
+
+
+def test_a_letter_to_several_people_is_filed_once_per_matter(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    letter = _eml_with_attachment()
+    form = {"mailMessageId": "<att-test-1@kostalegal.com>", "mailConversationId": "conv-1", "mailKind": "email",
+            "mailFrom": "info@kostalegal.com", "mailSubject": "Test"}
+
+    def file_as(user_id: int, name: str) -> dict:
+        state["viewer"] = Viewer(user_id, name, False, False, "Bearer e")
+        res = client.post(f"{base}/matters/m1/documents", data=form,
+                          files={"files": (f"{name}.eml", letter, "message/rfc822")})
+        assert res.status_code == 201, res.text
+        return res.json()["results"][0]
+
+    first = file_as(2, "Lawyer L")
+    assert first["status"] == "created"
+    second = file_as(5, "Iroda T")
+    third = file_as(6, "Bekzod K")
+    assert second["status"] == "exists" and third["status"] == "exists"
+    assert second["document"]["id"] == third["document"]["id"] == first["document"]["id"]
+
+    state["viewer"] = Viewer(5, "Iroda T", False, False, "Bearer e")
+    found = client.post(f"{base}/mail/lookup", json={"messageIds": ["att-test-1@kostalegal.com"]}).json()["filings"]
+    assert len(found) == 1 and found[0]["documentId"] == first["document"]["id"]
+    assert found[0]["visible"] is False and found[0]["filedBy"] == "Lawyer L"
+
+    dragged = client.post(f"{base}/matters/m1/documents", files={"files": ("copy.eml", letter, "message/rfc822")}).json()
+    assert dragged["results"][0]["status"] == "exists"
+
+    state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer x")
+    docs = client.get(f"{base}/search?q=eml").json()["documents"]
+    assert len([d for d in docs if d["name"].endswith(".eml")]) == 1
+
+
+def test_attachment_never_becomes_a_version_of_another_file(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    folder_id = next(f["id"] for f in client.get(f"{base}/matters/m1/browse").json()["folders"] if f["name"] == "Agreements")
+    other = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                        files={"files": ("contract.pdf", b"another contract", "application/pdf")}).json()["documents"][0]
+    letter = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                         files={"files": ("Test.eml", _eml_with_attachment(), "message/rfc822")}).json()["documents"][0]
+    saved = client.post(f"{base}/documents/{letter['id']}/email/0/save", json={}).json()
+    assert saved["status"] == "created" and saved["document"]["id"] != other["id"]
+    assert saved["document"]["name"] == "contract (2).pdf"
+    assert client.get(f"{base}/documents/{other['id']}/content").content == b"another contract"
+    again = client.post(f"{base}/documents/{letter['id']}/email/0/save", json={}).json()
+    assert again["status"] == "exists" and again["document"]["id"] == saved["document"]["id"]
+    preview = client.get(f"{base}/documents/{letter['id']}/email").json()["attachments"][0]
+    assert preview["saved"]["documentId"] == saved["document"]["id"]
+
+
+def test_lookup_hides_other_peoples_thread_letters(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+
+    def file_letter(mid: str, user: tuple[int, str]) -> None:
+        state["viewer"] = Viewer(user[0], user[1], False, False, "Bearer e")
+        body = _eml_with_attachment().replace(b"att-test-1", mid.encode())
+        res = client.post(f"{base}/matters/m1/documents", data={
+            "mailMessageId": f"<{mid}@kostalegal.com>", "mailConversationId": "conv-x", "mailKind": "email",
+        }, files={"files": (f"{mid}.eml", body, "message/rfc822")})
+        assert res.status_code == 201, res.text
+
+    file_letter("first", (2, "Lawyer L"))
+    file_letter("private-reply", (2, "Lawyer L"))
+    state["viewer"] = Viewer(5, "Iroda T", False, False, "Bearer e")
+    found = client.post(f"{base}/mail/lookup", json={"messageIds": ["first@kostalegal.com"], "conversationId": "conv-x"}).json()["filings"]
+    assert [row["messageId"] for row in found] == ["first@kostalegal.com"]
+    assert found[0]["visible"] is False

@@ -58,6 +58,6 @@ def test_email_preview_and_attachments(env):
     preview = client.get(f"{BASE}/documents/{doc['id']}/email").json()
     assert preview["subject"] == "SPA — final" and "anna@buyer.com" in preview["from"]
     assert "<b>SPA</b>" in preview["html"] and preview["text"].strip() == "Plain body"
-    assert preview["attachments"] == [{"index": 0, "name": "SPA.pdf", "contentType": "application/pdf", "size": 13}]
+    assert preview["attachments"] == [{"index": 0, "name": "SPA.pdf", "contentType": "application/pdf", "size": 13, "saved": None}]
     attachment = client.get(f"{BASE}/documents/{doc['id']}/email/0")
     assert attachment.content == b"%PDF-1.4 test"

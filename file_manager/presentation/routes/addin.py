@@ -65,8 +65,10 @@ def _pick(value: str, allowed: frozenset[str]) -> str:
 
 
 def _client_ip(request: Request) -> str:
+    """The edge proxy's X-Real-IP (set by nginx, not by the client), then the forwarded chain, then the socket."""
+    real = (request.headers.get("x-real-ip") or "").strip()
     forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    return (forwarded or (request.client.host if request.client else ""))[:64]
+    return (real or forwarded or (request.client.host if request.client else ""))[:64]
 
 
 @router.post("/addin/heartbeat")
