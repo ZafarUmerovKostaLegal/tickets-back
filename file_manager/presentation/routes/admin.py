@@ -497,6 +497,11 @@ async def monitoring_stats(
     in_trash = int(await session.scalar(
         select(func.count(DocumentModel.id)).where(DocumentModel.deleted_at.is_not(None))
     ) or 0)
+    trash_bytes = int(await session.scalar(
+        select(func.coalesce(func.sum(VersionModel.size_bytes), 0))
+        .join(DocumentModel, DocumentModel.id == VersionModel.document_id)
+        .where(DocumentModel.deleted_at.is_not(None))
+    ) or 0)
     pending = int(await session.scalar(
         select(func.count(AccessRequestModel.id)).where(AccessRequestModel.status == "pending")
     ) or 0)
@@ -539,6 +544,7 @@ async def monitoring_stats(
         "versions": versions,
         "checkedOut": checked_out,
         "inTrash": in_trash,
+        "trashBytes": trash_bytes,
         "pendingRequests": pending,
         "uploadsWeek": uploads_week,
         "downloadsDay": downloads_day,

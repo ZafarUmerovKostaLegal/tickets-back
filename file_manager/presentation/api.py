@@ -41,6 +41,9 @@ async def _ensure_schema(conn) -> None:
     for column in ("until", "suspended_until"):
         if column not in acl_columns:
             await conn.execute(text(f"ALTER TABLE fm_acl ADD COLUMN {column} {stamp_type}"))
+    rule_columns = await conn.run_sync(lambda sync: {col["name"] for col in inspect(sync).get_columns("fm_mail_rules")})
+    if "subject" not in rule_columns:
+        await conn.execute(text("ALTER TABLE fm_mail_rules ADD COLUMN subject VARCHAR(300) NOT NULL DEFAULT ''"))
     if conn.dialect.name == "postgresql":
         # Files over 2 GB: sizes no longer fit into INTEGER.
         for table in ("fm_documents", "fm_versions"):

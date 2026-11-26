@@ -295,3 +295,45 @@ def test_document_access_entries_and_confidential_mode(env):
     data = client.get(f"{base}/matters/m1/security").json()
     assert [d["name"] for d in data["documents"]] == ["SPA.docx"]
     assert client.get(f"{base}/security/overview").json()["matters"]["m1"]["documents"] == 1
+
+
+def test_erase_deletes_for_good_and_frees_unshared_files(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    import infrastructure.blobs as blobs
+
+    folder_id = next(f["id"] for f in client.get(f"{base}/matters/m1/browse").json()["folders"] if f["name"] == "Agreements")
+
+    def upload(name: str, body: bytes) -> dict:
+        res = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id, "allowDuplicate": "true"},
+                          files={"files": (name, body, "application/octet-stream")})
+        assert res.status_code == 201, res.text
+        return res.json()["documents"][0]
+
+    gone = upload("gone.pdf", b"unique bytes to erase")
+    kept = upload("kept.pdf", b"shared bytes")
+    twin = upload("twin.pdf", b"shared bytes")
+    sha_of = lambda content: __import__("hashlib").sha256(content).hexdigest()
+    assert blobs.has_blob(sha_of(b"unique bytes to erase")) and blobs.has_blob(sha_of(b"shared bytes"))
+
+    for doc in (gone, twin):
+        assert client.delete(f"{base}/documents/{doc['id']}").status_code == 200
+    trash = {item["id"]: item for item in client.get(f"{base}/trash").json()["items"]}
+    assert trash[gone["id"]]["storedBytes"] == len(b"unique bytes to erase")
+    assert client.get(f"{base}/stats").json()["trashBytes"] >= len(b"unique bytes to erase")
+
+    state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    assert client.delete(f"{base}/trash/document/{gone['id']}/erase").status_code in (403, 404)
+
+    state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer x")
+    erased = client.delete(f"{base}/trash/document/{gone['id']}/erase").json()
+    assert erased["documents"] == 1 and erased["diskBytes"] == len(b"unique bytes to erase")
+    assert not blobs.has_blob(sha_of(b"unique bytes to erase"))
+    assert client.get(f"{base}/documents/{gone['id']}").status_code == 404
+
+    assert client.delete(f"{base}/trash/document/{twin['id']}/erase").json()["diskBytes"] == 0
+    assert blobs.has_blob(sha_of(b"shared bytes")) 
+    assert client.get(f"{base}/documents/{kept['id']}/content").content == b"shared bytes"
+    assert {item["id"] for item in client.get(f"{base}/trash").json()["items"]} == set()
+    actions = [row["action"] for row in client.get(f"{base}/audit?action=erase").json()["items"]]
+    assert actions == ["erase", "erase"]

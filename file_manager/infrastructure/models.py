@@ -313,6 +313,7 @@ class MailRuleModel(Base):
     owner_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     owner_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     match: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     matter_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     matter_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     matter_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")

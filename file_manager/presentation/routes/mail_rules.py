@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.mail_rules import match_problem, normalize_match
+from application.mail_rules import match_problem, normalize_match, normalize_subject
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
 from infrastructure.models import FolderModel, MailboxModel, MailRuleModel
@@ -23,7 +23,8 @@ SCOPES = frozenset({"personal", "shared"})
 
 
 class RuleIn(BaseModel):
-    match: str = Field(min_length=1, max_length=320)
+    match: str = Field(default="", max_length=320)
+    subject: str = Field(default="", max_length=600)
     matterId: str = Field(min_length=1, max_length=80)
     folderId: str | None = Field(default=None, max_length=36)
     scope: str = Field(default="personal", max_length=10)
@@ -33,6 +34,7 @@ class RuleIn(BaseModel):
 class RulePatch(BaseModel):
     enabled: bool | None = None
     match: str | None = Field(default=None, max_length=320)
+    subject: str | None = Field(default=None, max_length=600)
     matterId: str | None = Field(default=None, max_length=80)
     folderId: str | None = Field(default=None, max_length=36)
     clearFolder: bool = False
@@ -47,6 +49,7 @@ def _rule_out(rule: MailRuleModel, viewer: Viewer) -> dict:
         "id": rule.id,
         "scope": rule.scope,
         "match": rule.match,
+        "subject": rule.subject or "",
         "matterId": rule.matter_id,
         "matterName": rule.matter_name,
         "matterCode": rule.matter_code,
@@ -105,11 +108,17 @@ async def _target(session: AsyncSession, viewer: Viewer, matter_id: str, folder_
     }
 
 
-def _checked_match(raw: str) -> str:
-    problem = match_problem(raw)
+def _checked_conditions(raw_match: str, raw_subject: str) -> tuple[str, str]:
+    """Sender (address / domain) and subject phrases; at least one of them is required."""
+    subject = normalize_subject(raw_subject)
+    if not normalize_match(raw_match):
+        if not subject:
+            raise HTTPException(status_code=400, detail="Укажите отправителя или слова из темы письма")
+        return "", subject
+    problem = match_problem(raw_match)
     if problem:
         raise HTTPException(status_code=400, detail=problem)
-    return normalize_match(raw)
+    return normalize_match(raw_match), subject
 
 
 @router.get("/mail/rules")
@@ -117,7 +126,7 @@ async def list_rules(session: AsyncSession = Depends(get_session), viewer: Viewe
     rows = list(await session.scalars(
         select(MailRuleModel)
         .where(or_(MailRuleModel.scope == "shared", MailRuleModel.owner_user_id == viewer.user_id))
-        .order_by(MailRuleModel.scope.desc(), MailRuleModel.match)
+        .order_by(MailRuleModel.scope.desc(), MailRuleModel.match, MailRuleModel.subject)
     ))
     settings = get_settings()
     return {
@@ -133,16 +142,19 @@ async def create_rule(body: RuleIn, session: AsyncSession = Depends(get_session)
     scope = body.scope if body.scope in SCOPES else "personal"
     if scope == "shared" and not viewer.manager:
         raise HTTPException(status_code=403, detail="Общие правила создают партнёры и администраторы")
-    match = _checked_match(body.match)
+    match, subject = _checked_conditions(body.match, body.subject)
     target = await _target(session, viewer, body.matterId, body.folderId)
-    # One rule per address and owner: saving the same address again moves it to the new target.
-    query = select(MailRuleModel).where(MailRuleModel.scope == scope, MailRuleModel.match == match)
+    # One rule per sender + subject: saving the same conditions again moves the rule to the new target;
+    # other subjects of the same sender are separate rules (each with its own folder).
+    query = select(MailRuleModel).where(
+        MailRuleModel.scope == scope, MailRuleModel.match == match, MailRuleModel.subject == subject,
+    )
     if scope == "personal":
         query = query.where(MailRuleModel.owner_user_id == viewer.user_id)
     rule = await session.scalar(query.limit(1))
     stamp = now()
     if rule is None:
-        rule = MailRuleModel(id=str(uuid4()), scope=scope, owner_user_id=viewer.user_id, match=match, created_at=stamp)
+        rule = MailRuleModel(id=str(uuid4()), scope=scope, owner_user_id=viewer.user_id, match=match, subject=subject, created_at=stamp)
         session.add(rule)
     for key, value in target.items():
         setattr(rule, key, value)
@@ -160,8 +172,11 @@ async def update_rule(rule_id: str, body: RulePatch, session: AsyncSession = Dep
         raise HTTPException(status_code=404, detail="Правило не найдено")
     if not _can_edit(rule, viewer):
         raise HTTPException(status_code=403, detail="Общие правила меняют партнёры и администраторы")
-    if body.match is not None:
-        rule.match = _checked_match(body.match)
+    if body.match is not None or body.subject is not None:
+        rule.match, rule.subject = _checked_conditions(
+            rule.match if body.match is None else body.match,
+            rule.subject if body.subject is None else body.subject,
+        )
     if body.matterId is not None or body.folderId is not None or body.clearFolder:
         folder_id = None if body.clearFolder else (body.folderId if body.folderId is not None else rule.folder_id)
         target = await _target(session, viewer, body.matterId or rule.matter_id, folder_id)

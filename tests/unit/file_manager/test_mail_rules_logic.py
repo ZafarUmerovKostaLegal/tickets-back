@@ -62,3 +62,35 @@ def test_file_name_is_safe():
     name = m.message_file_name('RE: Contract "v2" / final?', "ivan@client.com", datetime(2026, 11, 20, tzinfo=timezone.utc))
     assert name == "2026-11-20 ivan@client.com — RE Contract v2 final.eml"
     assert m.message_file_name("", "", None) == "Без темы.eml"
+
+
+@dataclass
+class SubjectRule:
+    id: str
+    scope: str
+    owner_user_id: int
+    match: str
+    subject: str = ""
+    enabled: bool = True
+
+
+def test_subject_rules_route_one_sender_into_different_folders():
+    m = _mod()
+    rules = [
+        SubjectRule("client-any", "personal", 7, "client.com"),
+        SubjectRule("client-invoices", "personal", 7, "client.com", "Invoice, счёт"),
+        SubjectRule("client-nda", "personal", 7, "ivan@client.com", "NDA"),
+        SubjectRule("any-court", "personal", 7, "", "court hearing"),
+        SubjectRule("broken", "personal", 7, "", ""),
+    ]
+    def pick(sender, subject):
+        hit = m.pick_rule(rules, m.MailFacts("in", sender, (), None, subject), 7)
+        return hit.id if hit else None
+
+    assert pick("anna@client.com", "Re: INVOICE #12") == "client-invoices"
+    assert pick("anna@client.com", "Счёт за ноябрь") == "client-invoices"
+    assert pick("ivan@client.com", "NDA draft") == "client-nda"
+    assert pick("anna@client.com", "Hello") == "client-any"
+    assert pick("judge@court.uz", "Court  Hearing on Monday") == "any-court"
+    assert pick("judge@court.uz", "Hello") is None
+    assert m.normalize_subject(" Invoice ;  Счёт,invoice ") == "invoice, счёт"

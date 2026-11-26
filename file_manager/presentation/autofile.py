@@ -16,7 +16,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.mail_rules import MailFacts, message_file_name, pick_rule
+from application.mail_rules import MailFacts, message_file_name, pick_rule, subject_phrases
 from infrastructure.config import get_settings
 from infrastructure.database import async_session_factory
 from infrastructure.graph_mail import GraphError, GraphMessage, download_mime, mark_saved, read_delta
@@ -31,6 +31,13 @@ from presentation.versioning import backfill_fingerprints, digest, store_content
 _log = logging.getLogger(__name__)
 _run_lock = asyncio.Lock()
 _task: asyncio.Task | None = None
+
+
+def rule_label(rule: MailRuleModel) -> str:
+    parts = [rule.match] if rule.match else []
+    if subject_phrases(rule.subject):
+        parts.append(f"тема: {rule.subject}")
+    return " · ".join(parts) or "—"
 
 
 def _aware(value: datetime) -> datetime:
@@ -109,7 +116,7 @@ async def file_message(
         size=len(content),
         sha=digest(content),
         head=content[:65536],
-        comment=f"Автосохранение по правилу «{rule.match}»",
+        comment=f"Автосохранение по правилу «{rule_label(rule)}»",
         allow_duplicate=False,
         stamp=stamp,
         next_number=next_number,
@@ -155,7 +162,7 @@ async def process_mailbox(
         for message in page.messages:
             if message.received_at is not None and _aware(message.received_at) < _aware(box.since):
                 continue
-            facts = MailFacts(direction, message.sender, message.recipients, message.received_at)
+            facts = MailFacts(direction, message.sender, message.recipients, message.received_at, message.subject)
             rule = pick_rule(rules, facts, box.user_id)
             if rule is None:
                 continue

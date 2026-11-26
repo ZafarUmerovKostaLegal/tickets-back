@@ -25,7 +25,6 @@ router = APIRouter(tags=["file-manager"])
 
 FILING_KINDS = frozenset({"email", "attachment", "thread"})
 
-# Free mail providers and our own domain say nothing about the matter.
 _GENERIC_DOMAINS = frozenset({
     "kostalegal.com",
     "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com",

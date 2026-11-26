@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from application.access import file_kind, has_level
 
 from infrastructure.database import get_session
-from infrastructure.models import AuditModel, DocumentModel, FavoriteModel, FolderModel
+from infrastructure import blobs
+from infrastructure.models import (
+    AuditModel,
+    DocumentAclModel,
+    DocumentFingerprintModel,
+    DocumentModel,
+    DocumentPolicyModel,
+    EmailFilingModel,
+    FavoriteModel,
+    FolderAclModel,
+    FolderModel,
+    FolderPolicyModel,
+    VersionModel,
+)
 from presentation.common import (
     doc_scope,
     document_allowed,
@@ -269,6 +283,13 @@ async def list_trash(
         .where(DocumentModel.trash_root_id.in_([folder.id for folder in folders] or [""]))
         .group_by(DocumentModel.trash_root_id)
     )).all())
+    roots = [folder.id for folder in folders] + [doc.id for doc in docs]
+    stored = dict((await session.execute(
+        select(DocumentModel.trash_root_id, func.coalesce(func.sum(VersionModel.size_bytes), 0))
+        .join(VersionModel, VersionModel.document_id == DocumentModel.id)
+        .where(DocumentModel.trash_root_id.in_(roots or [""]))
+        .group_by(DocumentModel.trash_root_id)
+    )).all())
 
     def base(matter_id: str) -> dict:
         matter = dirx.matters.get(matter_id)
@@ -283,12 +304,12 @@ async def list_trash(
     items = [
         {**base(folder.matter_id), "kind": "folder", "id": folder.id, "name": folder.name,
          "deletedAt": iso(folder.deleted_at), "deletedBy": folder.deleted_by_name, "purgedAt": iso(folder.purged_at),
-         "documents": int(nested.get(folder.id, 0))}
+         "documents": int(nested.get(folder.id, 0)), "storedBytes": int(stored.get(folder.id, 0))}
         for folder in folders
     ] + [
         {**base(doc.matter_id), "kind": "document", "id": doc.id, "name": doc.name,
          "deletedAt": iso(doc.deleted_at), "deletedBy": doc.deleted_by_name, "purgedAt": iso(doc.purged_at),
-         "fileKind": file_kind(doc.name), "sizeBytes": doc.size_bytes}
+         "fileKind": file_kind(doc.name), "sizeBytes": doc.size_bytes, "storedBytes": int(stored.get(doc.id, 0))}
         for doc in docs
     ]
     items.sort(key=lambda item: item["deletedAt"] or "", reverse=True)
@@ -368,3 +389,66 @@ async def purge_trash(
           detail=f"{docs.rowcount or 0} docs hidden, files kept")
     await session.commit()
     return {"ok": True}
+
+
+def _unlink_blobs(shas: list[str]) -> int:
+    freed = 0
+    for sha in shas:
+        try:
+            path = blobs.blob_path(sha)
+            if path.exists():
+                freed += path.stat().st_size
+                path.unlink()
+        except (OSError, ValueError):
+            continue
+    return freed
+
+
+@router.delete("/trash/{kind}/{item_id}/erase")
+async def erase_trash(
+    kind: str,
+    item_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: Viewer = Depends(get_viewer),
+):
+    """
+    Delete for good: the item, everything inside it and every version leave the database, and files on disk
+    that no other document uses are erased. Cannot be undone. Matter managers only (archive: super admins).
+    """
+    root = await _trash_root(session, kind, item_id, allow_purged=True)
+    if root.purged_at is not None and not viewer.super_admin:
+        raise HTTPException(status_code=404, detail="Элемент корзины не найден")
+    _, matter, _ = await require_matter(session, viewer, root.matter_id, "manage")
+    doc_ids = list(await session.scalars(select(DocumentModel.id).where(DocumentModel.trash_root_id == root.id)))
+    folder_ids = list(await session.scalars(select(FolderModel.id).where(FolderModel.trash_root_id == root.id)))
+    shas = sorted({sha for sha in await session.scalars(
+        select(VersionModel.blob_sha).where(VersionModel.document_id.in_(doc_ids or [""]), VersionModel.blob_sha.is_not(None))
+    ) if sha})
+    db_bytes = int(await session.scalar(
+        select(func.coalesce(func.sum(VersionModel.size_bytes), 0)).where(VersionModel.document_id.in_(doc_ids or [""]))
+    ) or 0)
+    if doc_ids:
+        for model, column in (
+            (VersionModel, VersionModel.document_id),
+            (DocumentAclModel, DocumentAclModel.document_id),
+            (DocumentPolicyModel, DocumentPolicyModel.document_id),
+            (DocumentFingerprintModel, DocumentFingerprintModel.document_id),
+            (EmailFilingModel, EmailFilingModel.document_id),
+        ):
+            await session.execute(delete(model).where(column.in_(doc_ids)))
+        await session.execute(delete(FavoriteModel).where(FavoriteModel.target_id.in_(doc_ids)))
+        await session.execute(delete(DocumentModel).where(DocumentModel.id.in_(doc_ids)))
+    if folder_ids:
+        await session.execute(delete(FolderAclModel).where(FolderAclModel.folder_id.in_(folder_ids)))
+        await session.execute(delete(FolderPolicyModel).where(FolderPolicyModel.folder_id.in_(folder_ids)))
+        await session.execute(delete(FavoriteModel).where(FavoriteModel.target_id.in_(folder_ids)))
+        await session.execute(delete(FolderModel).where(FolderModel.id.in_(folder_ids)))
+    still_used = set(await session.scalars(
+        select(VersionModel.blob_sha).where(VersionModel.blob_sha.in_(shas or [""]))
+    ))
+    orphans = [sha for sha in shas if sha not in still_used]
+    audit(session, viewer, "erase", matter=matter, kind=kind, target_id=root.id, target_name=root.name,
+          detail=f"{len(doc_ids)} docs, {db_bytes} bytes erased")
+    await session.commit()
+    freed = await run_in_threadpool(_unlink_blobs, orphans)
+    return {"ok": True, "documents": len(doc_ids), "folders": len(folder_ids), "bytes": db_bytes, "diskBytes": freed}

@@ -102,6 +102,19 @@ def test_rules_api_validates_scope_and_addresses(env):
     assert client.patch(f"{BASE}/mail/rules/{rule['id']}", json={"enabled": False}).json()["rule"]["enabled"] is False
 
 
+def test_one_sender_can_have_several_rules_by_subject(env):
+    client, _, _, _ = env
+    base = client.post(f"{BASE}/mail/rules", json={"match": "client.com", "matterId": "m1"}).json()["rule"]
+    invoices = client.post(f"{BASE}/mail/rules", json={"match": "client.com", "subject": "Invoice; Счёт", "matterId": "m1"}).json()["rule"]
+    assert invoices["id"] != base["id"] and invoices["subject"] == "invoice, счёт"
+    court = client.post(f"{BASE}/mail/rules", json={"match": "", "subject": "Court hearing", "matterId": "m1"})
+    assert court.status_code == 201 and court.json()["rule"]["match"] == ""
+    assert client.post(f"{BASE}/mail/rules", json={"match": "", "subject": " ", "matterId": "m1"}).status_code == 400
+    moved = client.patch(f"{BASE}/mail/rules/{invoices['id']}", json={"subject": "Invoice"}).json()["rule"]
+    assert moved["subject"] == "invoice" and moved["match"] == "client.com"
+    assert len(client.get(f"{BASE}/mail/rules").json()["rules"]) == 3
+
+
 def test_autofile_files_new_mail_once_into_the_person_folder(env):
     client, state, _, autofile = env
     assert client.post(f"{BASE}/mail/rules", json={"match": "client.com", "matterId": "m1"}).status_code == 201
