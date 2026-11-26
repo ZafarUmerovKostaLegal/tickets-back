@@ -14,6 +14,7 @@ source =
     contacts/presentation
 omit =
     */tests/*
+    */scripts/*
     time_tracking/application/invoice_service.py
     time_tracking/application/labor_statistics_service.py
     time_tracking/application/report_builder.py

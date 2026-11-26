@@ -64,6 +64,18 @@ class LegalHubDriveFileModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class LegalHubDriveZipTicketModel(Base):
+    """A ZIP download prepared for the browser: the selection and who asked, valid for a few minutes."""
+
+    __tablename__ = "legal_hub_drive_zip_tickets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user: Mapped[dict] = mapped_column(JSON, nullable=False)
+    folder_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    file_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class LegalHubDriveAclModel(Base):
     """Folder ACL for File Manager → Disk (backend storage, not UNC). Root uses folder_id='__root__'."""
 

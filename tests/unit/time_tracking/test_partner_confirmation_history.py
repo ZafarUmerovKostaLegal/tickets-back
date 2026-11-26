@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import infrastructure.models  # noqa: F401  registers every table the report models point to
 from infrastructure.database import Base
 from infrastructure.repository_partner_report_confirmations import PartnerReportConfirmationRepository
 
@@ -10,6 +11,13 @@ from infrastructure.repository_partner_report_confirmations import PartnerReport
 @pytest.mark.asyncio
 async def test_history_records_submission_priority_signatures_and_reset():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        await _run(engine)
+    finally:
+        await engine.dispose()
+
+
+async def _run(engine):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -43,4 +51,3 @@ async def test_history_records_submission_priority_signatures_and_reset():
         ]
         last = await repo.last_priority_change_by_request_ids([req.id])
         assert last[req.id].kind == "priority" and last[req.id].to_value == "yellow"
-    await engine.dispose()

@@ -45,6 +45,9 @@ def drive():
         def as_user(self, user):
             current["user"] = user
 
+        def run(self, coro):
+            return loop.run_until_complete(coro)
+
         def call(self, method, path, **kwargs):
             async def run():
                 transport = httpx.ASGITransport(app=app)

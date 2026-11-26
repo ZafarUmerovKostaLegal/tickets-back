@@ -144,6 +144,7 @@ async def get_budget_report(
                 TimeEntryModel.work_date,
                 TimeEntryModel.hours,
                 TimeEntryModel.is_billable,
+                TimeEntryModel.voided_at,
             )
         )
         .where(and_(*cond))

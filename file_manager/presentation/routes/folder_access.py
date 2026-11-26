@@ -13,9 +13,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.access import effective_grant, is_partner
+from application.access import effective_grant, file_kind, folder_levels, is_partner
 from infrastructure.database import get_session
-from infrastructure.models import AclModel, FolderAclModel, FolderModel, FolderPolicyModel
+from infrastructure.models import (
+    AclModel,
+    DocumentAclModel,
+    DocumentModel,
+    DocumentPolicyModel,
+    FolderAclModel,
+    FolderModel,
+    FolderPolicyModel,
+)
 from infrastructure.tt_directory import invalidate_access, project_assignees
 from presentation.common import acl_level, audit, iso, matter_folders, now, require_matter
 from presentation.deps import Viewer, get_viewer
@@ -56,6 +64,54 @@ def _entry_out(row: FolderAclModel, stamp: datetime) -> dict:
         "grantedBy": row.granted_by_name,
         "grantedAt": iso(row.granted_at),
     }
+
+
+FILES_LIMIT = 500
+MATRIX_FILES_LIMIT = 3000
+
+
+async def _matter_members(session: AsyncSession, viewer: Viewer, dirx, matter) -> dict[int, dict]:
+    """Project team from time tracking plus everyone with a matter-level rule."""
+    members: dict[int, dict] = {}
+    closed = dirx.matters[matter.id].archived
+    for member in await project_assignees(viewer.authorization, matter.id):
+        members[member["userId"]] = {
+            "userId": member["userId"],
+            "name": member["name"],
+            "position": member.get("position") or "",
+            "matterLevel": "read" if closed else "edit",
+            "source": "timeTracking",
+        }
+    for acl in await session.scalars(select(AclModel).where(AclModel.matter_id == matter.id)):
+        level = acl_level(acl) or "none"
+        entry = members.setdefault(acl.user_id, {
+            "userId": acl.user_id, "name": acl.user_name or f"#{acl.user_id}", "position": "", "source": "acl",
+        })
+        entry["matterLevel"] = level
+        entry["source"] = "both" if entry["source"] == "timeTracking" else "acl"
+    return members
+
+
+def _rule_out(level: str, until: datetime | None, suspended: datetime | None, stamp: datetime) -> dict:
+    return {
+        "level": level,
+        "effective": effective_grant(level, until, suspended, stamp),
+        "until": iso(until),
+        "suspendedUntil": iso(suspended),
+    }
+
+
+def _file_level(doc: DocumentModel, user_id: int, folder_level: str | None, doc_level: str | None, restricted: bool) -> str | None:
+    """What one person can do with one file of the folder: mirrors ``document_allowed``."""
+    if folder_level == "deny":
+        return None
+    if doc.created_by_user_id == user_id:
+        return "edit"
+    if doc_level:
+        return doc_level if doc_level in ("read", "edit") else None
+    if folder_level in ("read", "edit") and not restricted:
+        return folder_level
+    return None
 
 
 def _inherited(
@@ -108,28 +164,29 @@ async def folder_access(
         elif level:
             per_user.setdefault(row.user_id, {})[row.folder_id] = level
 
-    members: dict[int, dict] = {}
-    closed = dirx.matters[matter.id].archived
-    for member in await project_assignees(viewer.authorization, matter.id):
-        members[member["userId"]] = {
-            "userId": member["userId"],
-            "name": member["name"],
-            "position": member.get("position") or "",
-            "matterLevel": "read" if closed else "edit",
-            "source": "timeTracking",
-        }
-    for acl in await session.scalars(select(AclModel).where(AclModel.matter_id == matter.id)):
-        level = acl_level(acl) or "none"
-        entry = members.setdefault(acl.user_id, {
-            "userId": acl.user_id, "name": acl.user_name or f"#{acl.user_id}", "position": "", "source": "acl",
-        })
-        entry["matterLevel"] = level
-        entry["source"] = "both" if entry["source"] == "timeTracking" else "acl"
+    members = await _matter_members(session, viewer, dirx, matter)
     for user_id in {*own, *per_user}:
         members.setdefault(user_id, {
             "userId": user_id, "name": names.get(user_id) or f"#{user_id}", "position": "",
             "matterLevel": "none", "source": "folder",
         })
+
+    docs = list(await session.scalars(
+        select(DocumentModel)
+        .where(DocumentModel.folder_id == folder.id, DocumentModel.deleted_at.is_(None))
+        .order_by(DocumentModel.name)
+        .limit(FILES_LIMIT)
+    ))
+    doc_ids = [doc.id for doc in docs]
+    restricted = set(await session.scalars(select(DocumentPolicyModel.document_id).where(
+        DocumentPolicyModel.document_id.in_(doc_ids), DocumentPolicyModel.restricted.is_(True),
+    ))) if doc_ids else set()
+    doc_entries: dict[int, dict[str, str]] = {}
+    if doc_ids:
+        for row in await session.scalars(select(DocumentAclModel).where(DocumentAclModel.document_id.in_(doc_ids))):
+            level = effective_grant(row.level, row.until, row.suspended_until, stamp)
+            if level:
+                doc_entries.setdefault(row.user_id, {})[row.document_id] = level
 
     out = []
     for user_id, member in members.items():
@@ -139,9 +196,17 @@ async def folder_access(
         effective = (mine or {}).get("effective") or (inherited[0] if inherited else None)
         if inherited and inherited[0] == "deny":
             effective = "deny"
+        partner = is_partner(None, member.get("position"))
+        own_docs = doc_entries.get(user_id, {})
+        files: dict[str, str] = {}
+        for doc in docs:
+            level = "edit" if partner else _file_level(doc, user_id, effective, own_docs.get(doc.id), doc.id in restricted)
+            if level:
+                files[doc.id] = level
         out.append({
             **member,
-            "partner": is_partner(None, member.get("position")),
+            "partner": partner,
+            "files": files,
             "entry": mine,
             "inherited": {"level": inherited[0], "folderId": inherited[1], "folderName": by_id[inherited[1]].name}
             if inherited else None,
@@ -163,6 +228,17 @@ async def folder_access(
         },
         "matter": {"id": matter.id, "name": matter.name, "code": matter.code},
         "members": out,
+        "documents": [
+            {
+                "id": doc.id,
+                "name": doc.name,
+                "kind": file_kind(doc.name),
+                "createdById": doc.created_by_user_id,
+                "createdBy": doc.created_by_name,
+                "restricted": doc.id in restricted,
+            }
+            for doc in docs
+        ],
     }
 
 
@@ -239,3 +315,87 @@ async def set_folder_inherit(
           target_name=folder.name, detail="on" if body.inherit else "off")
     await session.commit()
     return {"inherit": row.inherit}
+
+
+@router.get("/matters/{matter_id}/access-matrix")
+async def matter_access_matrix(
+    matter_id: str,
+    session: AsyncSession = Depends(get_session),
+    viewer: Viewer = Depends(get_viewer),
+):
+    """People × folders and files of one matter: folder rules, file rules and what they add up to."""
+    dirx, matter, _ = await require_matter(session, viewer, matter_id, "manage")
+    folders = await matter_folders(session, matter.id)
+    parents = {folder.id: folder.parent_id for folder in folders}
+    stamp = now()
+    breaks = set(await session.scalars(select(FolderPolicyModel.folder_id).where(
+        FolderPolicyModel.matter_id == matter.id, FolderPolicyModel.inherit.is_(False),
+    )))
+    docs = list(await session.scalars(
+        select(DocumentModel)
+        .where(DocumentModel.matter_id == matter.id, DocumentModel.deleted_at.is_(None))
+        .order_by(DocumentModel.name)
+        .limit(MATRIX_FILES_LIMIT)
+    ))
+    docs = [doc for doc in docs if doc.folder_id is None or doc.folder_id in parents]
+    restricted = set(await session.scalars(select(DocumentPolicyModel.document_id).where(
+        DocumentPolicyModel.matter_id == matter.id, DocumentPolicyModel.restricted.is_(True),
+    )))
+
+    members = await _matter_members(session, viewer, dirx, matter)
+    names: dict[int, str] = {}
+    folder_rules: dict[str, dict] = {}
+    entries: dict[int, dict[str, str]] = {}
+    for row in await session.scalars(select(FolderAclModel).where(FolderAclModel.matter_id == matter.id)):
+        if row.folder_id not in parents:
+            continue
+        names.setdefault(row.user_id, row.user_name)
+        folder_rules[f"{row.user_id}:{row.folder_id}"] = _rule_out(row.level, row.until, row.suspended_until, stamp)
+        level = effective_grant(row.level, row.until, row.suspended_until, stamp)
+        if level:
+            entries.setdefault(row.user_id, {})[row.folder_id] = level
+    doc_ids = {doc.id for doc in docs}
+    file_rules: dict[str, dict] = {}
+    for row in await session.scalars(select(DocumentAclModel).where(DocumentAclModel.matter_id == matter.id)):
+        if row.document_id not in doc_ids:
+            continue
+        names.setdefault(row.user_id, row.user_name)
+        file_rules[f"{row.user_id}:{row.document_id}"] = _rule_out(row.level, row.until, row.suspended_until, stamp)
+    for user_id, name in names.items():
+        members.setdefault(user_id, {
+            "userId": user_id, "name": name or f"#{user_id}", "position": "", "matterLevel": "none", "source": "folder",
+        })
+
+    folder_cells: dict[str, str] = {}
+    for user_id, mine in entries.items():
+        for folder_id, level in folder_levels(parents, mine, breaks).items():
+            folder_cells[f"{user_id}:{folder_id}"] = level
+
+    people = sorted(
+        ({**member, "partner": is_partner(None, member.get("position"))} for member in members.values()),
+        key=lambda item: (not item["partner"], item["name"].lower()),
+    )
+    return {
+        "matter": {"id": matter.id, "name": matter.name, "code": matter.code, "closed": dirx.matters[matter.id].archived},
+        "folders": [
+            {"id": folder.id, "parentId": folder.parent_id, "name": folder.name, "inherit": folder.id not in breaks}
+            for folder in folders
+        ],
+        "documents": [
+            {
+                "id": doc.id,
+                "folderId": doc.folder_id,
+                "name": doc.name,
+                "kind": file_kind(doc.name),
+                "createdById": doc.created_by_user_id,
+                "createdBy": doc.created_by_name,
+                "restricted": doc.id in restricted,
+            }
+            for doc in docs
+        ],
+        "truncated": len(docs) >= MATRIX_FILES_LIMIT,
+        "people": people,
+        "folderRules": folder_rules,
+        "folderCells": folder_cells,
+        "fileRules": file_rules,
+    }

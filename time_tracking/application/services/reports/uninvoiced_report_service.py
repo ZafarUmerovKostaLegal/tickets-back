@@ -102,6 +102,7 @@ async def get_uninvoiced_report(
                 TimeEntryModel.work_date,
                 TimeEntryModel.hours,
                 TimeEntryModel.is_billable,
+                TimeEntryModel.voided_at,
             )
         )
         .where(and_(*uninv_cond))

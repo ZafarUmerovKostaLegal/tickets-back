@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import io
 import time
 import re
-import zipfile
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from starlette.concurrency import run_in_threadpool
@@ -20,13 +18,15 @@ from starlette.concurrency import run_in_threadpool
 from backend_common.blob_store import read_link, sign_link
 
 from infrastructure import blobs
-from infrastructure.database import get_session
+from infrastructure.database import async_session_factory, get_session
 from infrastructure.models import (
     LegalHubDeletedFileModel,
     LegalHubDriveAclModel,
     LegalHubDriveFileModel,
     LegalHubDriveFolderModel,
+    LegalHubDriveZipTicketModel,
 )
+from infrastructure.zip_stream import ZipItem, stream_zip
 from presentation.deps import require_user
 
 router = APIRouter(tags=["legal-hub"])
@@ -34,6 +34,8 @@ router = APIRouter(tags=["legal-hub"])
 MAX_FILE_BYTES = 40 * 1024 * 1024
 LINK_TTL_SECONDS = 300
 MAX_BULK_BYTES = 300 * 1024 * 1024
+# A ZIP is streamed (a few MB of memory), so it can be much bigger than a copy / move.
+MAX_ZIP_BYTES = 4 * 1024 * 1024 * 1024
 MAX_BATCH = 500
 SEARCH_LIMIT = 300
 ROOT_ACL_ID = "__root__"
@@ -61,6 +63,15 @@ class ItemPatchIn(BaseModel):
 class SelectionIn(BaseModel):
     folderIds: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
     fileIds: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+
+
+class ZipIn(SelectionIn):
+    name: str | None = Field(default=None, max_length=200)
+
+
+def _zip_title(raw: str | None, fallback: str) -> str:
+    cleaned = _BAD_NAME.sub("_", (raw or "").strip()).strip(" .")
+    return cleaned[:200] or fallback
 
 
 class TransferIn(SelectionIn):
@@ -804,10 +815,13 @@ async def move_items(
     return {"moved": moved, "targetId": target}
 
 
-def _charge(budget: list[int], size: int) -> None:
+def _charge(budget: list[int], size: int, *, limit: int = MAX_BULK_BYTES) -> None:
     budget[0] += size
-    if budget[0] > MAX_BULK_BYTES:
-        raise HTTPException(status_code=400, detail="Слишком большой объём (больше 300 МБ) — разделите на части")
+    if budget[0] > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Слишком большой объём (больше {limit // (1024 * 1024)} МБ) — разделите на части",
+        )
 
 
 async def _copy_folder(
@@ -982,19 +996,17 @@ async def delete_items(
     return {"deleted": len(folders) + len(files)}
 
 
-@router.post("/drive/zip")
-async def zip_items(
-    body: SelectionIn,
-    session: AsyncSession = Depends(get_session),
-    user: dict = Depends(require_user),
-):
-    """Download several items / whole folders as one ZIP archive (folder structure kept)."""
+async def _zip_plan(session: AsyncSession, user: dict, body: SelectionIn) -> tuple[list[ZipItem], str]:
+    """Everything the archive will hold, checked up front: rights, total size, unique names.
+
+    Nothing is read here, so errors still come back as normal answers before the download starts.
+    """
     tree = await load_tree(session, user)
     folders, files = await _selection(session, tree, body)
-    entries: list[tuple[str, str]] = []
+    wanted: list[tuple[str | None, str]] = []
     for item in files:
         tree.require(item.folder_id, "read")
-        entries.append((item.id, item.name))
+        wanted.append((item.id, item.name))
     for folder in folders:
         tree.require(folder.id, "read")
         skip = len(tree.ancestors(folder.parent_id))
@@ -1005,39 +1017,118 @@ async def zip_items(
                 .where(LegalHubDriveFileModel.folder_id == sub.id)
             )).all()
             if not rows:
-                entries.append(("", f"{rel}/"))
-            entries.extend((file_id, f"{rel}/{name}") for file_id, name in rows)
-    buffer = io.BytesIO()
+                wanted.append((None, f"{rel}/"))
+            wanted.extend((file_id, f"{rel}/{name}") for file_id, name in rows)
+
+    file_ids = [file_id for file_id, _ in wanted if file_id]
+    meta: dict[str, tuple] = {}
+    for start in range(0, len(file_ids), 500):
+        chunk = file_ids[start:start + 500]
+        for row in (await session.execute(
+            select(
+                LegalHubDriveFileModel.id, LegalHubDriveFileModel.size_bytes, LegalHubDriveFileModel.blob_sha,
+                LegalHubDriveFileModel.updated_at, LegalHubDriveFileModel.created_at,
+            ).where(LegalHubDriveFileModel.id.in_(chunk))
+        )).all():
+            meta[row[0]] = row
+
     budget = [0]
     used: set[str] = set()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for file_id, arcname in entries:
-            if not file_id:
-                archive.writestr(arcname, b"")
-                continue
-            row = (await session.execute(
-                select(LegalHubDriveFileModel.size_bytes, LegalHubDriveFileModel.content, LegalHubDriveFileModel.blob_sha)
-                .where(LegalHubDriveFileModel.id == file_id)
-            )).first()
-            if row is None:
-                continue
-            _charge(budget, int(row[0] or 0))
-            name, n = arcname, 2
-            while name.casefold() in used:
-                stem, dot, ext = arcname.rpartition(".")
-                name = f"{stem} ({n}).{ext}" if dot else f"{arcname} ({n})"
-                n += 1
-            used.add(name.casefold())
-            if row[2]:
-                await run_in_threadpool(archive.write, blobs.store.blob_path(row[2]), name)
-            else:
-                archive.writestr(name, row[1])
+    items: list[ZipItem] = []
+    for file_id, arcname in wanted:
+        if not file_id:
+            items.append(ZipItem(name=arcname, is_dir=True))
+            continue
+        row = meta.get(file_id)
+        if row is None:
+            continue
+        size = int(row[1] or 0)
+        _charge(budget, size, limit=MAX_ZIP_BYTES)
+        name, n = arcname, 2
+        while name.casefold() in used:
+            stem, dot, ext = arcname.rpartition(".")
+            name = f"{stem} ({n}).{ext}" if dot and "/" not in ext else f"{arcname} ({n})"
+            n += 1
+        used.add(name.casefold())
+        sha = row[2]
+        items.append(ZipItem(
+            name=name, size=size, stamp=row[3] or row[4],
+            path=blobs.store.blob_path(sha) if sha else None, legacy_id=None if sha else file_id,
+        ))
     title = folders[0].name if len(folders) == 1 and not files else "Диск"
-    return Response(
-        content=buffer.getvalue(),
+    return items, title
+
+
+async def _legacy_bytes(file_id: str) -> bytes | None:
+    """Old files keep their bytes in the database; read one at a time with a session of our own
+    (the request session is already closed while the response streams)."""
+    async with async_session_factory() as own:
+        return await own.scalar(select(LegalHubDriveFileModel.content).where(LegalHubDriveFileModel.id == file_id))
+
+
+def _zip_response(items: list[ZipItem], title: str) -> StreamingResponse:
+    return StreamingResponse(
+        stream_zip(items, _legacy_bytes),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(title)}.zip"},
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(title)}.zip",
+            "Cache-Control": "private, no-store",
+            "X-Accel-Buffering": "no",
+        },
     )
+
+
+@router.post("/drive/zip")
+async def zip_items(
+    body: ZipIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Download several items / whole folders as one ZIP archive (folder structure kept), streamed."""
+    items, title = await _zip_plan(session, user, body)
+    return _zip_response(items, _zip_title(body.name, title))
+
+
+@router.post("/drive/zip/link")
+async def zip_link(
+    body: ZipIn,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(require_user),
+):
+    """Short-lived URL for the same archive: the browser saves it straight to disk with its own progress."""
+    items, title = await _zip_plan(session, user, body)
+    title = _zip_title(body.name, title)
+    now = datetime.now(timezone.utc)
+    await session.execute(delete(LegalHubDriveZipTicketModel).where(LegalHubDriveZipTicketModel.expires_at < now))
+    ticket = LegalHubDriveZipTicketModel(
+        id=str(uuid4()),
+        user={"id": _user_id(user), "role": user.get("role"), "name": _user_name(user), "zipName": title},
+        folder_ids=list(body.folderIds), file_ids=list(body.fileIds),
+        expires_at=now + timedelta(seconds=LINK_TTL_SECONDS),
+    )
+    session.add(ticket)
+    await session.commit()
+    token = sign_link(blobs.link_secret(), {"z": ticket.id, "exp": int(time.time()) + LINK_TTL_SECONDS})
+    return {
+        "url": f"/api/v1/legal-hub/drive/zipdl/{token}",
+        "expiresIn": LINK_TTL_SECONDS,
+        "fileName": f"{title}.zip",
+        "files": sum(1 for item in items if not item.is_dir),
+        "sizeBytes": sum(item.size for item in items),
+    }
+
+
+@router.get("/drive/zipdl/{token}")
+async def zip_signed_download(token: str, session: AsyncSession = Depends(get_session)):
+    payload = read_link(blobs.link_secret(), token)
+    ticket = await session.get(LegalHubDriveZipTicketModel, str(payload.get("z", "")))
+    if ticket is None:
+        raise HTTPException(status_code=410, detail="Ссылка устарела — нажмите «Скачать» ещё раз")
+    body = SelectionIn(folderIds=list(ticket.folder_ids or []), fileIds=list(ticket.file_ids or []))
+    # Rights are checked again: access may have changed since the link was made.
+    asked = dict(ticket.user or {})
+    items, title = await _zip_plan(session, asked, body)
+    return _zip_response(items, _zip_title(asked.get("zipName"), title))
 
 
 @router.delete("/drive/files/{file_id}")
