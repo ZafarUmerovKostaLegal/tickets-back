@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from application.access import has_level, safe_name
+from application.access import file_kind, has_level, safe_name
 from infrastructure import blobs
 from infrastructure.config import get_settings
 from infrastructure.database import get_session
@@ -276,6 +276,8 @@ async def checkout_document(
     doc = await live_document(session, document_id, viewer)
     dirx, matter, _ = await require_matter(session, viewer, doc.matter_id, "edit")
     await require_document_edit(session, viewer, doc)
+    if file_kind(doc.name) == "email" or (doc.content_type or "").lower() in ("message/rfc822", "application/vnd.ms-outlook"):
+        raise HTTPException(status_code=400, detail="Письма не берут на редактирование — только файлы")
     if doc.checked_out_by_user_id not in (None, viewer.user_id):
         raise HTTPException(status_code=409, detail=f"Документ уже взят: {doc.checked_out_by_name}")
     doc.checked_out_by_user_id = viewer.user_id

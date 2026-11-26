@@ -451,3 +451,16 @@ def test_lookup_hides_other_peoples_thread_letters(env):
     found = client.post(f"{base}/mail/lookup", json={"messageIds": ["first@kostalegal.com"], "conversationId": "conv-x"}).json()["filings"]
     assert [row["messageId"] for row in found] == ["first@kostalegal.com"]
     assert found[0]["visible"] is False
+
+
+def test_letters_cannot_be_checked_out(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    folder_id = next(f["id"] for f in client.get(f"{base}/matters/m1/browse").json()["folders"] if f["name"] == "Agreements")
+    letter = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                         files={"files": ("Test.eml", _eml_with_attachment(), "message/rfc822")}).json()["documents"][0]
+    refused = client.post(f"{base}/documents/{letter['id']}/checkout")
+    assert refused.status_code == 400 and "Письма" in refused.json()["detail"]
+    doc = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
+                      files={"files": ("Memo.docx", b"memo", "application/octet-stream")}).json()["documents"][0]
+    assert client.post(f"{base}/documents/{doc['id']}/checkout").status_code == 200
