@@ -476,3 +476,15 @@ def test_letters_cannot_be_checked_out(env):
     doc = client.post(f"{base}/matters/m1/documents", data={"folderId": folder_id},
                       files={"files": ("Memo.docx", b"memo", "application/octet-stream")}).json()["documents"][0]
     assert client.post(f"{base}/documents/{doc['id']}/checkout").status_code == 200
+
+
+def test_directory_totals_are_only_for_managers(env):
+    client, state, Viewer = env
+    base = "/api/v1/files"
+    state["viewer"] = Viewer(1, "Partner P", True, False, "Bearer x")
+    managed = client.get(f"{base}/clients").json()
+    assert managed["stats"]["clients"] >= 1 and managed["stats"]["matters"] >= 1
+    state["viewer"] = Viewer(2, "Lawyer L", False, False, "Bearer y")
+    plain = client.get(f"{base}/clients").json()
+    assert "stats" not in plain
+    assert plain["viewer"]["canManage"] is False
