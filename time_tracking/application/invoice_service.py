@@ -2475,6 +2475,7 @@ async def list_unbilled_time_entries(
                 "currency": cur,
                 "sourceCurrency": (cur or pc),
                 "packageCovered": package_covered,
+                "flatFee": is_flat_fee_task(task),
                 "coveredHours": float(split.covered_hours) if split else None,
                 "overageHours": float(split.overage_hours) if split else None,
             }

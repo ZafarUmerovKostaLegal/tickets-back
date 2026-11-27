@@ -207,6 +207,8 @@ async def test_flat_fee_task_line(tt_db):
         rounded_hours=Decimal("1"), project_id="p1", task_id="t1", is_billable=True, description="", created_at=NOW,
     ))
     await tt_db.commit()
+    unbilled = await svc.list_unbilled_time_entries(tt_db, project_id="p1", date_from=date(2026, 11, 1), date_to=date(2026, 11, 30))
+    assert unbilled[0]["flatFee"] is True and unbilled[0]["billableAmount"] == 500
     inv = await make_invoice(tt_db, lines=None, time_entry_ids=["f1"])
     lines = await svc._invoice_lines_for_totals(tt_db, inv)
     assert lines[0].description.startswith("Registration:")

@@ -104,6 +104,7 @@ async def test_time_entries_are_billed_once(tt_db):
     await session.commit()
     unbilled = await svc.list_unbilled_time_entries(session, project_id="p1", date_from=date(2026, 11, 1), date_to=date(2026, 11, 30))
     assert {row["id"] for row in unbilled} == {"e0", "e1"}
+    assert all(row["flatFee"] is False for row in unbilled)
 
     inv = await _create(session, lines=None, time_entry_ids=["e0", "e1"])
     assert inv.subtotal == Decimal("350")
