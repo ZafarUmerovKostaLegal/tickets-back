@@ -74,3 +74,18 @@ class UserModel(Base):
     active_session_jti: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class OutlookPairingModel(Base):
+    """One-time code that lets a signed-in Hub user approve the Outlook add-in on another device."""
+
+    __tablename__ = "outlook_pairings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), nullable=False, unique=True, index=True)
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    device: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -187,9 +187,12 @@ async def _ensure_task_access(session: AsyncSession, user: dict, row: LegalHubTa
 
 
 async def _ensure_teammate(session: AsyncSession, user: dict, target: int | None, label: str, scope: TeamScope | None = None) -> TeamScope | None:
-    """Anyone may give a task to any colleague; only the id itself is checked."""
-    if target is not None and target <= 0:
-        raise HTTPException(status_code=400, detail=f"Некорректный {label.lower()}")
+    """Tasks are assigned strictly inside the team, whatever the role of the person."""
+    if target is None or target == _user_id(user):
+        return scope
+    scope = scope or await scope_or_503(session, user)
+    if target not in scope.mates:
+        raise HTTPException(status_code=403, detail=f"{label} должен быть из вашей команды")
     return scope
 
 

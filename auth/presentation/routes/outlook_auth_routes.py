@@ -248,3 +248,112 @@ async def outlook_me(
         token_typ="outlook_fm",
         token_scope=str(payload.get("scope") or ""),
     )
+
+
+def _pairing(session: AsyncSession = Depends(get_session)):
+    from application.outlook_pairing import OutlookPairingService
+
+    return OutlookPairingService(session)
+
+
+async def _hub_user(request: Request, authorization: Optional[str], user_repo: UserRepositoryPort):
+    raw = access_token_from_request(request, authorization)
+    user = await GetCurrentUserUseCase(user_repo, JWTService()).execute(raw) if raw else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Войдите в Kosta Hub")
+    return user
+
+
+class PairCodeBody(BaseModel):
+    code: str = Field(min_length=4, max_length=32)
+
+
+class PairPollBody(BaseModel):
+    pairId: str = Field(min_length=8, max_length=64)
+    secret: str = Field(min_length=16, max_length=128)
+
+
+@router.post("/pair/start")
+async def pair_start(request: Request, session: AsyncSession = Depends(get_session), pairing=Depends(_pairing)):
+    """Add-in asks for a one-time code; the user approves it in Kosta Hub on any device."""
+    started = await pairing.start(request.headers.get("user-agent", ""))
+    await session.commit()
+    hub = (get_settings().frontend_url or "").strip().rstrip("/")
+    code = started.code.replace("-", "")
+    return {
+        "pairId": started.pair_id,
+        "secret": started.secret,
+        "code": started.code,
+        "expiresIn": started.expires_in,
+        "interval": 2,
+        "verifyUrl": f"{hub}/outlook-pair?code={code}" if hub else "",
+    }
+
+
+@router.get("/pair/info")
+async def pair_info(
+    code: str,
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    pairing=Depends(_pairing),
+):
+    from application.outlook_pairing import PairingNotFound
+
+    await _hub_user(request, authorization, user_repo)
+    try:
+        info = await pairing.info(code)
+    except PairingNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"code": info.code, "device": info.device, "expiresIn": info.expires_in, "confirmed": info.confirmed}
+
+
+@router.post("/pair/confirm", status_code=204)
+async def pair_confirm(
+    body: PairCodeBody,
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_session),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    pairing=Depends(_pairing),
+):
+    from application.outlook_pairing import PairingNotFound
+
+    user = await _hub_user(request, authorization, user_repo)
+    try:
+        await pairing.confirm(body.code, user.id)
+    except PairingNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return None
+
+
+@router.post("/pair/poll")
+async def pair_poll(
+    body: PairPollBody,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    user_repo: UserRepositoryPort = Depends(get_user_repo),
+    pairing=Depends(_pairing),
+):
+    from application.outlook_pairing import PairingNotFound
+
+    try:
+        user_id = await pairing.poll(body.pairId, body.secret)
+    except PairingNotFound as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    if user_id is None:
+        return {"status": "pending"}
+    user = await user_repo.get_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=410, detail="Пользователь не найден")
+    try:
+        assert_user_can_authenticate(user)
+    except UserAccessDenied as exc:
+        raise HTTPException(status_code=403, detail="User blocked or archived") from exc
+    jti = str(uuid.uuid4())
+    await user_repo.register_session_jti(user.id, jti, max_sessions=get_settings().auth_max_concurrent_sessions)
+    token = JWTService().create_access_token(user.id, user.azure_oid, jti)
+    await _remember_device(request, token, session)
+    await session.commit()
+    return {"status": "ok", "access_token": token, "token_type": "bearer"}

@@ -89,7 +89,7 @@ def hub(monkeypatch):
     loop.close()
 
 
-def test_tasks_are_visible_inside_the_team_and_assignable_to_anyone(hub):
+def test_tasks_are_visible_and_assignable_only_inside_the_team(hub):
     task = hub.as_user(PARTNER).task("SPA review", assigneeUserId=12, reviewerUserId=11, projectLabel="Falcon")
 
     # Any role inside the team can see it and work on it.
@@ -102,11 +102,9 @@ def test_tasks_are_visible_inside_the_team_and_assignable_to_anyone(hub):
     assert hub.call("POST", f"/tasks/{task['id']}/comments", json={"text": "hi"}).status_code == 404
     assert hub.ok("GET", "/tasks?view=team")["items"] == []
 
-    # Anyone may give a task to any colleague, even from another team; the assignee then sees it.
-    given = hub.as_user(LAWYER).call("POST", "/tasks", json={"title": "x", "assigneeUserId": 20, "reviewerUserId": 20})
-    assert given.status_code == 201
-    assert hub.as_user(OUTSIDER).ok("GET", f"/tasks/{given.json()['id']}")["title"] == "x"
-    assert hub.as_user(LAWYER).call("POST", "/tasks", json={"title": "bad", "assigneeUserId": -3}).status_code == 400
+    # Assigning outside the team is refused, in both directions.
+    assert hub.as_user(LAWYER).call("POST", "/tasks", json={"title": "x", "assigneeUserId": 20}).status_code == 403
+    assert hub.call("PATCH", f"/tasks/{task['id']}", json={"assigneeUserId": 20}).status_code == 403
     # A junior may hand work to the partner — role does not matter inside the team.
     assert hub.as_user(JUNIOR).call("POST", "/tasks", json={"title": "y", "assigneeUserId": 10}).status_code == 201
 
@@ -162,8 +160,7 @@ def test_review_workflow_take_submit_return_approve_reassign(hub):
 
     other = hub.as_user(PARTNER).task("Letter", assigneeUserId=11)
     assert hub.as_user(LAWYER).call("POST", f"/tasks/{other['id']}/action",
-                                    json={"action": "reassign", "userId": 20}).status_code == 200
-    hub.as_user(PARTNER)
+                                    json={"action": "reassign", "userId": 20}).status_code == 403
     moved = hub.ok("POST", f"/tasks/{other['id']}/action", json={"action": "reassign", "userId": 12})
     assert (moved["assigneeUserId"], moved["status"]) == (12, "todo")
 
