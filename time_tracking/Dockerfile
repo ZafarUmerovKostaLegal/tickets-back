@@ -4,13 +4,23 @@ WORKDIR /app
 
 RUN useradd -r -u 10001 -g root appuser
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
+    fontconfig \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-liberation \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY time_tracking/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend_common ./backend_common
 COPY time_tracking/ ./

@@ -24,6 +24,7 @@ from presentation.routes import (
     labor_statistics,
     integrity_audit,
     invoices,
+    invoice_html_pdf,
     invoice_pdf_files,
     client_contacts,
     client_expense_categories,
@@ -101,6 +102,7 @@ app.include_router(labor_statistics.router, dependencies=_tt_reports_auth)
 app.include_router(report_partner_confirmations.router, dependencies=_tt_reports_auth)
 app.include_router(report_snapshots.router, dependencies=_tt_reports_auth)
 app.include_router(invoice_pdf_files.router, dependencies=_tt_auth)
+app.include_router(invoice_html_pdf.router, dependencies=_tt_auth)
 app.include_router(invoices.router, dependencies=_tt_auth)
 app.include_router(invoice_registry.router, dependencies=_tt_auth)
 app.include_router(client_projects._global_projects_router, dependencies=_tt_auth)

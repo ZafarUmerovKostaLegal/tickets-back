@@ -1927,6 +1927,33 @@ async def invoices_pdf_file_replace(
     )
 
 
+_INVOICE_HTML_MAX_BYTES = 40 * 1024 * 1024
+
+
+@router.post("/invoice-pdf/render")
+async def invoice_pdf_render(
+    request: Request,
+    _: dict = Depends(require_view_role),
+):
+    body = await request.body()
+    if len(body) > _INVOICE_HTML_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Страница слишком большая для PDF")
+    r = await _tt_request(
+        "POST",
+        "/invoice-pdf/render",
+        content=body,
+        headers={"Content-Type": "text/html; charset=utf-8"},
+        timeout=180.0,
+    )
+    raise_for_upstream_status(r, "Time tracking service error")
+    return Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type="application/pdf",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.get("/invoices/{invoice_id}/audit")
 async def invoices_audit(
     invoice_id: str,
